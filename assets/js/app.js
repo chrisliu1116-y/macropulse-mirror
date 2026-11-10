@@ -452,9 +452,10 @@
     ttl: 25000,
     busy: false,
     queue: new Set(),
-    async refresh(keys) {
+    async refresh(keys, force) {
       keys.forEach(k => { const c = this.cache[k]; if (c) paintQuote(k, c); });
-      const need = keys.filter(k => {
+      /* force：行情页高频轮询用，不等 25 秒 TTL 直接拉最新。 */
+      const need = force ? keys.slice() : keys.filter(k => {
         const c = this.cache[k];
         return !c || c.snapped || Date.now() - c.at > this.ttl;
       });
@@ -485,7 +486,11 @@
     const up = q.pct >= 0;
     $$(`.qp[data-k="${cssq(k)}"]`).forEach(el => {
       el.textContent = U.changeLabel(k, q);
-      el.className = el.className.replace(/\b(up|down)\b/g, '').trim()
+      /* v241【关键 bug】原来只清 up/down，忘了清 snap ——
+       * 实时报价回来后 class 仍是 "qp snap up"，.qp.snap::after 继续显示「上次」，
+       * 要等 120 秒整页 renderMarket() 重建 DOM 才消失（用户：一两分钟才消除）。
+       * 数据其实早就是实时的，只是这个标签赖着不走。 */
+      el.className = el.className.replace(/\b(up|down|snap|snap-old)\b/g, '').trim()
         + ' ' + (up ? 'up' : 'down') + (q.snapped ? ' snap' : '');
     });
     $$(`.qpx[data-k="${cssq(k)}"]`).forEach(el => { el.textContent = U.fmt(k, q.price); });
@@ -7580,6 +7585,14 @@
     window.__event = { eventQuoteKeys, eventMetricBar, eventCardHTML, eventDetailHTML, renderEvent };
 
     setInterval(() => { QuoteHub.refresh(allNewsKeys().slice(0, 12)); }, 60000);
+    /* v241【报价加速】原来行情页的涨跌幅只在 renderMarket() 里刷新，
+     * 而整页重绘是 120 秒一次 —— 盘中价格看着像「两分钟才动一次」。
+     * 这里单独给行情页加一条 15 秒的轻量轮询：只就地改数字（paintQuote），
+     * 不重建 DOM、不重排列表、不重画缩略图；一次批量请求覆盖全部品种。 */
+    setInterval(() => {
+      if (S.tab !== 'market' || document.hidden) return;
+      QuoteHub.refresh(mktCatKeys().filter(k => U.get(k)), true);
+    }, 15000);
     setInterval(() => { if (S.tab === 'market') renderMarket(); }, 120000);
     /* 盘前/盘后价 60 秒刷一次：延展时段成交稀、变化快，
      * 等 120 秒整页重绘太慢；这里只就地改那一行，不重排列表。 */
