@@ -493,18 +493,54 @@
       g.fill();
     }
 
-    /* X 轴日期 */
+    /* X 轴日期（v257：按可见跨度自适应刻度）
+     * 「全部」档已覆盖 1990 至今（8000+ 点），固定 4 个「MM-DD」标签完全读不出年代。
+     * 规则：跨度 >2 年 → 只显示年份；>180 天 → 年-月；否则 → 月-日（点少时带周几）。
+     * 放大到某个年份区间自动变「2008-03」，再放大到月内变「03-15」。 */
     g.font = '9px -apple-system,BlinkMacSystemFont,sans-serif';
     g.fillStyle = T.axis;
     g.textBaseline = 'top';
-    var labs = Math.min(4, cnt);
-    for (var L = 0; L < labs; L++) {
-      var pos = labs === 1 ? 0 : Math.round(L * (cnt - 1) / (labs - 1));
-      var dt = d.dates[from + pos];
-      g.textAlign = L === 0 ? 'left' : (L === labs - 1 ? 'right' : 'center');
-      /* 日期 + 周几：点少（放大后）显示「11-09 一」，点密时退回纯日期免得挤 */
-      var lab = cnt <= 40 ? (dt.slice(5) + ' ' + wkOf(dt)) : dt.slice(5);
-      g.fillText(lab, xOf(pos), P.t + ih + 5);
+    var _d0 = Date.parse(d.dates[from] + 'T00:00:00Z');
+    var _d1 = Date.parse(d.dates[to] + 'T00:00:00Z');
+    var _span = Math.max(0, (_d1 - _d0) / 86400000);
+    var _marks = [];   // [{pos, lab}]：每年/每月的第一个交易日作为锚点
+    var _j, _y, _ly = '';
+    if (_span > 730) {
+      for (_j = from; _j <= to; _j++) {
+        _y = d.dates[_j].slice(0, 4);
+        if (_y !== _ly) { _marks.push({ pos: _j - from, lab: _y }); _ly = _y; }
+      }
+    } else if (_span > 180) {
+      for (_j = from; _j <= to; _j++) {
+        _y = d.dates[_j].slice(0, 7);
+        if (_y !== _ly) { _marks.push({ pos: _j - from, lab: _y }); _ly = _y; }
+      }
+    }
+    var _picked = [];
+    if (_marks.length) {
+      var _n = Math.min(6, _marks.length);
+      for (var _L = 0; _L < _n; _L++) {
+        _picked.push(_marks[Math.round(_L * (_marks.length - 1) / (_n - 1))]);
+      }
+    } else {
+      var _labs = Math.min(4, cnt);
+      for (var _L2 = 0; _L2 < _labs; _L2++) {
+        var _pos = _labs === 1 ? 0 : Math.round(_L2 * (cnt - 1) / (_labs - 1));
+        var _dt = d.dates[from + _pos];
+        _picked.push({
+          pos: _pos,
+          lab: cnt <= 40 ? (_dt.slice(5) + ' ' + wkOf(_dt)) : _dt.slice(5)
+        });
+      }
+    }
+    /* 同标签只留第一个（年/月锚点均匀抽样后可能重复），并让首尾贴边不溢出 */
+    var _seen = {};
+    for (var _k = 0; _k < _picked.length; _k++) {
+      var _m = _picked[_k];
+      if (_seen[_m.lab]) continue;
+      _seen[_m.lab] = 1;
+      g.textAlign = _m.pos <= cnt * 0.06 ? 'left' : (_m.pos >= cnt * 0.94 ? 'right' : 'center');
+      g.fillText(_m.lab, xOf(_m.pos), P.t + ih + 5);
     }
 
     /* 十字游标 */

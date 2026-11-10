@@ -51,7 +51,7 @@
     SPX:   { name: '标普500',    short: '标普',    ord: 1, src: 'em', secid: '100.SPX',  dec: 2, grp: 'us', kind: 'index', unit: '点', tv: 'SP:SPX', extSym: 'ES=F' , hl: 'SP500', yh: '^GSPC'},
     NDX:   { name: '纳斯达克指数', short: '纳指', ord: 2, src: 'em', secid: '100.NDX', dec: 2, grp: 'us', kind: 'index', unit: '点', tv: 'NASDAQ:IXIC', extSym: 'NQ=F', yh: '^NDX'},
     SOX:   { name: '费城半导体指数', short: '费半', ord: 3, src: 'em', secid: '251.SOX',  dec: 2, grp: 'us', kind: 'index', unit: '点', tv: 'TVC:SOX', yh: '^SOX', ndq: { sym: 'SOX', cls: 'index' }},
-    DJI:   { name: '道琼斯',     short: '道指',    ord: 4, src: 'em', secid: '100.DJIA', dec: 2, grp: 'us', kind: 'index', unit: '点', tv: 'DJ:DJI', extSym: 'YM=F' },
+    DJI:   { name: '道琼斯指数', short: '道指',    ord: 4, src: 'em', secid: '100.DJIA', dec: 2, grp: 'us', kind: 'index', unit: '点', tv: 'DJ:DJI', extSym: 'YM=F' },
 
     /* ---------------- VIX 恐慌指数 ----------------
      * 东财没有 VIX 现货，走 Yahoo（^VIX）。CBOE 计算，指数本身是

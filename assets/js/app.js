@@ -2622,6 +2622,11 @@
   function sessionKeyOf(k) {
     const a = U.get(k);
     if (!a) return 'other';
+    /* v257：VIX 的 sess='vix' 是「时段判定口径」（近 24/5），不是「行情分组」。
+     * 直接返回 a.sess 会让它落进 sessionOrder() 里不存在的 'vix' 组，
+     * 被 order.filter 丢掉 → 行情看板里 VIX 直接消失（搜索显示已添加但看不到）。
+     * 分组仍归美股，时段状态用 sessionOf() 走 judge('vix')。 */
+    if (a.sess === 'vix') return 'us';
     if (a.sess) return a.sess;
     const g = U.GROUPS[a.grp];
     return (g && g.session) || a.grp || 'other';
@@ -5746,6 +5751,15 @@
     bkGuard = false;                 // 哨兵已被返回键弹出
     const fn = bkTop();
     if (fn) { try { fn(); } catch (e) {} }
+    /* v257【返回键退出全屏要回竖屏】原生侧 onHideCustomView 已补方向恢复；
+     * 这里再兜一层：任何一层被返回键关掉后，只要当前没有系统全屏元素，
+     * 就把 WebView 方向恢复成竖屏，避免停在横屏要用户手动翻转。 */
+    setTimeout(() => {
+      try {
+        const np = w.NativePulse;
+        if (np && np.setLandscape && !d.fullscreenElement) np.setLandscape(false);
+      } catch (e) {}
+    }, 80);
     /* 关掉一层后重算：还有层 → 再压一条哨兵（下次继续逐层退）；
      * 没有层 → 不补，下一次返回键才轮到原生「再按一次退出 APP」。 */
     setTimeout(() => { try { bkSync(); } catch (e) {} }, 0);
