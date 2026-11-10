@@ -3398,6 +3398,9 @@ body.chart-fs.draw-open .sh-legend,
 body.chart-fs.draw-open .sh-chartbar{right:auto}
 @media (orientation: portrait){ :root{--dp-w:128px} }
 
-/* P2-A：纠错单「复制文本 / 复制 JSON」并排，不挤压左侧说明 */
-.fix-btns{display:inline-flex;gap:6px;flex-shrink:0;align-items:center}
+/* P2-A：纠错单「复制文本 / 复制 JSON」并排，不挤压左侧说明。
+ * 注意：.set-row span{display:block} 的特异性 (0,1,1) 高于 .fix-btns (0,1,0)，
+ * 写成单类会被覆盖成 block、导致 gap 失效、两个按钮贴在一起。
+ * 这里显式带上父级与标签，特异性 (0,2,1) 稳赢。 */
+.set-row span.fix-btns{display:inline-flex;gap:6px;flex-shrink:0;align-items:center}
 .fix-btns .mini-btn{white-space:nowrap}
