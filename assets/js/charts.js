@@ -631,25 +631,21 @@
         this._minBase = base;
         this._minAmp = amp;
 
-        mainSeries = chart.addBaselineSeries({
-          baseValue: { type: 'price', price: base },
-          /* v234：库默认会在 baseValue（昨收）位置画一条**水平基准线**，
-           * 而且只画到「有数据的最后一格」为止。盘中看起来就是
-           * 「一条卡在半路、末端带方块的红色横线」——用户截图里 KOSPI、
-           * 恒生、沪深300 全都出现，因为它对所有品种、所有时段都一样。
-           * 关掉它：零轴继续用 6 等分横格的中线表示（v206 的既定口径）。 */
-          baseLineVisible: false,
-          baseLineColor: 'rgba(0,0,0,0)',
-          baseLineWidth: 1,
-          topLineColor: UP, topFillColor1: 'rgba(246,70,93,0.26)', topFillColor2: 'rgba(246,70,93,0.02)',
-          bottomLineColor: DOWN, bottomFillColor1: 'rgba(14,203,129,0.02)', bottomFillColor2: 'rgba(14,203,129,0.26)',
+        /* v235：分时主图改用普通 LineSeries。
+         * BaselineSeries 会在昨收基准线 / 填充边界处额外画一条水平实线，
+         * 且只画到「有数据的最后一格」——用户截图里 KOSPI、恒生、沪深300
+         * 都出现「一条卡在半路、末端带方块的红色横线」。实测关掉
+         * baseLineVisible、把四个填充色改成透明、改 topLineColor 都去不掉，
+         * 清空主图数据才消失 —— 是库内部的 baseline 渲染，不是行情源问题。
+         * 换成只画一条线的 LineSeries 后彻底消失；零轴仍由 6 等分横格中线表示。 */
+        const lastPx = mainPts.length ? mainPts[mainPts.length - 1].close : base;
+        mainSeries = chart.addLineSeries({
+          color: lastPx >= base ? UP : DOWN,
           lineWidth: 2,
-          /* v201：右轴密集价格刻度用空 formatter 去掉，改由四角小字呈现 */
           priceFormat: { type: 'custom', minMove: Math.pow(10, -dec), formatter: () => '' },
-          /* v201：红色最新价虚线 + 红色价签都不要（用户口径：挡住分时图）。
-           * 最新价在顶部图例里已经有了，图里再画一条是重复信息。 */
           priceLineVisible: false,
-          lastValueVisible: false
+          lastValueVisible: false,
+          crosshairMarkerVisible: false
         });
         mainSeries.setData(mainPts.map(p => ({ time: p.time, value: p.close })));
 
