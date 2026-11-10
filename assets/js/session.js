@@ -117,6 +117,15 @@
       segs: [[0, 1020], [1080, 1440]],
       name: '商品'
     },
+    vix: {
+      /* VIX 恐慌指数（CBOE 现货指数）不是「美股盘前盘后」，而是近 24/5：
+       * 周日 20:15 ET 开 GTH → 连续到周五 16:15 ET，工作日每天只有
+       * 16:15–20:15 ET 维护休市（外加 09:25–09:30 的 5 分钟 RTH 切换缺口）。
+       * 所以不能用 judge('us') 的 pre/post 套它 —— 美东凌晨 3 点美股休市，
+       * 但 VIX 正在 GTH 交易。 */
+      tz: TZ.us, weekdays: [0, 1, 2, 3, 4, 5], vix24: true,
+      name: 'VIX恐慌指数'
+    },
     crypto: { tz: TZ.cn, always: true, name: '加密' }
   };
 
@@ -155,6 +164,21 @@
       return open
         ? { open: true, phase: 'regular', label: m >= 1080 || m < 360 ? '夜盘' : '交易中', hint: '' }
         : { open: false, phase: 'closed', label: '结算中', hint: '每日 17:00–18:00 ET 暂停' };
+    }
+    if (cfg.vix24) {
+      /* CBOE VIX 现货指数（近 24/5）：
+       * 周日 20:15 (1215) ET 开盘；工作日 00:00–09:25 是 GTH 延续、09:30–16:15 (975) 是 RTH、
+       * 20:15–24:00 又是 GTH；每天休市窗口 = 09:25–09:30（5 分钟）与 16:15–20:15（维护）。 */
+      if (wd === 6) return { open: false, phase: 'closed', label: '休市', hint: '周末休市' };
+      if (wd === 0) {
+        if (m >= 1215) return { open: true, phase: 'regular', label: '交易中', hint: 'CBOE GTH 时段' };
+        return { open: false, phase: 'closed', label: '休市', hint: '周日 20:15 ET 开盘' };
+      }
+      if (wd === 5 && m >= 975) return { open: false, phase: 'closed', label: '休市', hint: '周五 16:15 ET 收盘' };
+      const open = !(inR(m, 565, 570) || inR(m, 975, 1215));
+      return open
+        ? { open: true, phase: 'regular', label: '交易中', hint: (m < 570 || m >= 1215) ? 'CBOE GTH 时段' : '' }
+        : { open: false, phase: 'closed', label: '休市', hint: inR(m, 565, 570) ? 'RTH 切换缺口 09:25–09:30 ET' : '每日 16:15–20:15 ET 维护休市' };
     }
 
     if (cfg.weekdays.indexOf(wd) < 0) {

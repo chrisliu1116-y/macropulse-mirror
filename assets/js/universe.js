@@ -57,7 +57,7 @@
      * 东财没有 VIX 现货，走 Yahoo（^VIX）。CBOE 计算，指数本身是
      * 「市场对未来30天预期波动率」的报价，不是可交易标的。
      * 方向特殊：VIX 上涨 = 市场恐慌 = 风险事件 → invert=true。 */
-    VIX:   { name: 'VIX恐慌指数', short: 'VIX',    ord: 5, sess: 'us', src: 'cboe', dec: 2, grp: 'us', kind: 'index', unit: '', tv: 'CBOE:VIX', invert: true , hl: 'VIX',
+    VIX:   { name: 'VIX恐慌指数', short: 'VIX',    ord: 5, sess: 'vix', src: 'cboe', dec: 2, grp: 'us', kind: 'index', unit: '', tv: 'CBOE:VIX', invert: true , hl: 'VIX',
              /* rt:'cnbc' —— CBOE 官方端点（cdn-api/delayed_quotes）是延时 15 分钟的，
               * 实测 Yahoo ^VIX 滞后 912 秒、TradingView CBOE:VIX 是 delayed_streaming_900，
               * 只有 CNBC 的 quote.cnbc.com 是**真实时**（last_time 与当前时刻一致），
