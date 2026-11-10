@@ -92,13 +92,18 @@
    *   jsDelivr CDN           0.78 ~ 0.81s（原本 12h 缓存，跑批后已自动 purge）
    *   Pages 绝对地址          0.76 ~ 1.08s
    * 旧版把同源文件故意延后 800ms、又把 raw 设成第一源，等于放弃了最快的通道。
-   * 现在四源同时发：第一个返回「新鲜」数据的直接上屏；陈旧副本不会顶掉新数据。
+   * 现在三个远端并发、同源延后兜底：第一个返回「新鲜」数据的直接上屏；陈旧副本不会顶掉新数据。
    * 最坏情况（主站冷启动 2.78s）由 CDN / raw 在 0.8s 左右补齐，不再白屏。 */
+  /* v238【正确性优先于毫秒】同源 data/breadth.json 虽然最快（主站热 0.33s），
+   * 但它随「发版」才更新，GitHub Actions 每天 15:20 跑批只更新远端仓库。
+   * 若让同源抢跑，明天起主站宽度页会一直显示发版那天的旧数据。
+   * 所以：三个远端全并发（数据一定是新的），同源延后 700ms 只做全挂兜底。
+   * 加速来自「并发 + jsDelivr 跑批后 purge」，不靠牺牲数据新鲜度。 */
   var DATA_SOURCES = [
-    'data/breadth.json',
     'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
-    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json'
+    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json',
+    'data/breadth.json'
   ];
   function dataSources() {
     var d = new Date();
@@ -126,7 +131,8 @@
         done = true;
         if (stale) resolve(stale); else reject(new Error('全部数据源超时'));
       }, 9000);
-      srcs.forEach(function (u) {
+      srcs.forEach(function (u, i) {
+        var go = function () {
         fetch(u, { cache: 'no-store' })
           .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
           .then(function (d) {
@@ -145,6 +151,8 @@
               if (stale) resolve(stale); else reject(new Error('全部数据源失败'));
             }
           });
+        };
+        if (i === srcs.length - 1) setTimeout(go, 700); else go();
       });
     });
   }
