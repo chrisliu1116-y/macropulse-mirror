@@ -3757,6 +3757,32 @@
    *      （防止「降息25bp」和「降息50bp」被合并）
    *   ③ 前缀重合 / 包含关系 / 二元组相似度 ≥0.82
    * ------------------------------------------------------------ */
+  /* ================= P1 去重单一真源：DEDUP_CONFIG =================
+   * 以前 10 类相似度阈值 + 4 种时间窗散在 20+ 处，同一个 0.72
+   * 在 sameClaim 引用常量、在 sameNewsBody 却硬编码一遍（§7.4）。
+   * 现在全文件只引用 DEDUP_CONFIG.xxx；改阈值只改这里。 */
+  const DEDUP_CONFIG = Object.freeze({
+    // 相似度 / 幅度阈值
+    SIM_NORM: 0.82,          // sameNorm 字面兜底
+    SIM_CLAIM: 0.72,         // 跨源同事件陈述（227 条语料标定）
+    SIM_CLAIM_LOOSE: 0.52,   // 强骨架宽容通道
+    SIM_SHORT: 0.86,         // 陈述过短退回整标题时的更严门槛
+    SIM_TAIL: 0.8,           // 冒号后尾句
+    SIM_SYNC: 0.35,          // 同主体同议题（机构）
+    SIM_PERSON: 0.4,         // 同主体同议题（人物表态）
+    SIM_BODY: 0.72,          // 正文交叉判重（原硬编码）
+    RATIO_COVER: 2.6,        // 摘要包含：长句 / 短句最大倍率
+    DIFF_PCT_MAX: 1.5,       // 同一波行情幅度差（百分点）
+    // 时间窗
+    WIN_ROUND: 3 * 86400000,   // 同轮 dedupe 字面比较窗
+    WIN_SYNC: 6 * 3600000,     // 跨轮 / 同主体同议题 / 地缘 / 人事
+    WIN_BURST: 2 * 3600000,    // 同一波行情
+    WIN_BODY: 12 * 3600000,    // 正文交叉判重
+    // 长度预筛
+    LEN_RATIO_MIN: 0.4,
+    LEN_RATIO_MAX: 2.4,
+  });
+
   function cjkCount(s) {
     return (String(s || '').match(/[\u4e00-\u9fa5]/g) || []).length;
   }
@@ -3779,14 +3805,46 @@
     return out;
   }
 
-  /** 两条标题的数字是否冲突（都有数字且零重合 → 两个不同事件） */
+  /* ---------------- P0-2 数字槽位维度 ----------------
+   * 元数据维度（date/year）与核心数值维度（bp/pct/amt/px/ppt/level）
+   * 是**互补信息**、不是互斥信息：
+   *   「11 月会议降息」vs「降息 25 个基点」→ 同一件事的两种写法，不该一票否决；
+   *   「2028 年 GDP」vs「2027 年 GDP」→ 两边同属元数据且互不包含，仍是两件事；
+   *   「升破 81000」vs「升破 80000」→ 同属核心数值且互不包含，仍是两件事。
+   * 只有「同属核心数值槽位且互不包含」才判冲突。 */
+  const NUM_DIM_META = /^(date|year)$/;
+  const NUM_DIM_CORE = /^(bp|ppt|amt|px|pct|level)$/;
+  /** 复用 DEDUP_NUM_RULES 给每个数字打角色；补一条「N月」（原规则只认 N月N日） */
+  function numSlotsOf(s) {
+    const str = String(s || '');
+    const out = [];
+    for (const [kind, re, pick] of DEDUP_NUM_RULES) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(str))) out.push({ slot: kind, val: pick(m) });
+    }
+    const monthRe = /(\d{1,2})月(?!\d)/g;
+    let mm;
+    while ((mm = monthRe.exec(str))) out.push({ slot: 'date', val: 'M' + mm[1] });
+    return out;
+  }
+  function coreNumsOf(s) {
+    return numSlotsOf(s).filter(x => NUM_DIM_CORE.test(x.slot)).map(x => x.val);
+  }
+  /** 两条标题的数字是否冲突 */
   function numConflict(a, b) {
     const na = numsOf(a), nb = numsOf(b);
     if (!na.length || !nb.length) return false;
     const sb = new Set(nb);
     let hit = 0;
     na.forEach(x => { if (sb.has(x)) hit++; });
-    return hit === 0;
+    if (hit > 0) return false;                 // 有重合 → 不冲突（原逻辑）
+    const sa = numSlotsOf(a), sc = numSlotsOf(b);
+    const metaOnly = (arr) => arr.length > 0 && arr.every(x => NUM_DIM_META.test(x.slot));
+    const hasCore = (arr) => arr.some(x => NUM_DIM_CORE.test(x.slot));
+    /* 一边只有日期/年份、另一边有核心数值 → 互补维度，放行 */
+    if ((metaOnly(sa) && hasCore(sc)) || (metaOnly(sc) && hasCore(sa))) return false;
+    return true;
   }
 
   function similarity(a, b) {
@@ -3851,9 +3909,30 @@
     if (!ind) return '';
     const per = relPeriod(t);
     if (!per) return '';
-    // 初值 / 终值 不参与 key —— 它们本来就是同一份公报的不同阶段，
-    // 但「初值」和「终值」确实会给出不同数字，用 kind 兜一层，隔太久不合并。
+    /* P0-3（§7.2）：注释承诺多年的「kind 兜一层」在这里落地。
+     * 初值 / 修正值 / 终值 / 预览值是同一份公报的不同阶段，
+     * 两边口径都明确且不同、数字又对不上 → 不是同一件事。 */
     return geo + '|' + ind + '|' + per;
+  }
+
+  const REL_KINDS = [
+    [/初值|首次预估|首次公布|initial/i, 'INITIAL'],
+    [/修正值|修正后|修订值|修订后|revised/i, 'REVISED'],
+    [/终值|最终值|最终数据|final/i, 'FINAL'],
+    [/预览值|预估值|快报值|预告值|flash|preview/i, 'PREVIEW'],
+  ];
+  function relKindOf(s) {
+    const t = String(s || '');
+    for (const [re, k] of REL_KINDS) if (re.test(t)) return k;
+    return '';
+  }
+  /** 两条标题的数字是否完全不重合（不过滤 1 位数，供 kind 口径闸用） */
+  function relNumsDiffer(a, b) {
+    const all = (x) => (String(x || '').match(/\d+(?:\.\d+)?/g) || []);
+    const na = all(a), nb = all(b);
+    if (!na.length || !nb.length) return false;
+    const setB = new Set(nb);
+    return !na.some(x => setB.has(x));
   }
 
   /* ---------------- 价格关口突破：同一件事的不同写法 ----------------
@@ -3960,6 +4039,15 @@
     [/俄罗斯|俄方|俄国|俄联邦|俄军/g, '俄'],
     /* 主体后缀纯属修辞：「俄罗斯当局表示」与「俄方称」讲的是同一个人 */
     [/当局|政府|官方|方面/g, ''],
+    /* ---- P0-2：外媒常见同义改写（长词在前，顺序敏感） ----
+     * 跨源改写最容易换的就是「消息源 / 预期语气 / 时间动作 / 方向动词」，
+     * 这些词不归一，canonClaim 的骨架永远差一截。 */
+    [/欧佩克\+|OPEC\+|欧佩克|OPEC/gi, 'OPEC'],
+    [/知情人士|消息人士|知情者|消息源|据知情|据消息/g, '讯源'],
+    [/有望|正在讨论|正讨论|考虑|拟|或将|可能将|据悉将/g, '拟'],
+    [/推迟|延后|暂缓|延期|延宕|押后/g, '延'],
+    [/下调|削减|降低|调降|减码/g, '降'],
+    [/上调|提高|调升|抬升|加码/g, '升'],
   ];
   const DEDUP_PUNCT = /[，。、；：“”‘’（）()《》…—\-\s]+/g;
 
@@ -4061,13 +4149,19 @@
     if (ta && tb) return ta === tb;
     // 同一份统计公报的不同口径（同比 / 环比 / 初值）→ 直接算同一件事
     const ka = releaseKey(a), kb = releaseKey(b);
-    if (ka && kb) return ka === kb;   // 主体/指标/期别 不同 → 一定是两件事，别再按字面相似度硬凑
+    if (ka && kb) {
+      if (ka !== kb) return false;    // 主体/指标/期别 不同 → 一定是两件事
+      /* P0-3：初值 2% 与 终值 2.5% 不能因为共用「美国|GDP|Q3」就合并。 */
+      const kdA = relKindOf(a), kdB = relKindOf(b);
+      if (kdA && kdB && kdA !== kdB && relNumsDiffer(a, b)) return false;
+      return true;
+    }
     if (numConflict(a, b)) return false;
     const head = Math.min(12, Math.min(a.length, b.length));
     if (a.slice(0, head) === b.slice(0, head)) return true;
     if (a.length >= 10 && b.length >= 10 &&
         (a.indexOf(b) >= 0 || b.indexOf(a) >= 0)) return true;
-    return similarity(a, b) >= 0.82;
+    return similarity(a, b) >= DEDUP_CONFIG.SIM_NORM;
   }
 
   /** 「某某：真正的结论」——冒号后的部分才是事件本身 */
@@ -4077,7 +4171,9 @@
   }
 
   /* 【跨源同事件判定】三道闸：槽位不冲突 → 陈述够长 → 陈述相似 */
-  const DEDUP_THR = 0.72;
+  /* P0-2 强骨架宽容通道阈值：同主体 + 同议题/动作簇 + 核心数字一致时，
+   * 允许把 canonClaim 的骨架相似度门槛从 0.72 放宽到 0.52。
+   * 三个条件缺一不可，防止把「同机构不同事件」误并。 */
 
   /* 【摘要式重复】一句是另一句的浓缩版：短句的每个字都在长句里出现过。
    *
@@ -4095,10 +4191,27 @@
   function coveredBy(short, long) {
     if (!short || !long) return false;
     if (short.length < 7) return false;
-    if (long.length > short.length * 2.6) return false;
+    if (long.length > short.length * DEDUP_CONFIG.RATIO_COVER) return false;
     const set = new Set(long);
     for (const ch of short) if (!set.has(ch)) return false;
     return true;
+  }
+
+  /** P0-2 强骨架判定：三条同时成立才允许放宽相似度阈值。
+   *  ① 共享核心主体（国家/机构/公司/人物）
+   *  ② 同议题域（SYNC_TOPIC）或同地缘动作簇（GEO_ACTS 交集）
+   *  ③ 至少 1 个相同核心数字，或两条都完全没有核心数字 */
+  function strongSkeleton(t1, t2) {
+    if (!sharedCore(t1, t2)) return false;
+    const ta = syncTopicOf(normTitle(t1)), tb = syncTopicOf(normTitle(t2));
+    const a1 = geoSet(t1, GEO_ACTS), a2 = geoSet(t2, GEO_ACTS);
+    let actHit = false;
+    a1.forEach(k => { if (a2.has(k)) actHit = true; });
+    if (!(ta && ta === tb) && !actHit) return false;
+    const na = coreNumsOf(t1), nb = coreNumsOf(t2);
+    if (!na.length && !nb.length) return true;
+    const setB = new Set(nb);
+    return na.some(x => setB.has(x));
   }
 
   function sameClaim(t1, t2) {
@@ -4118,12 +4231,15 @@
       // 摘要式重复：短句的信息全被长句包含（见 coveredBy 的注释）
       if (coveredBy(ga, gb) || coveredBy(gb, ga)) return true;
       const s = ratio(ga, gb);
-      return s >= DEDUP_THR;
+      /* 强骨架宽容通道：同主体 + 同议题/动作簇 + 核心数字一致时放宽到 0.52，
+       * 其余仍按 0.72 严格判定。 */
+      const thr = strongSkeleton(t1, t2) ? DEDUP_CONFIG.SIM_CLAIM_LOOSE : DEDUP_CONFIG.SIM_CLAIM;
+      return s >= thr;
     }
     // 陈述过短 → 退回整标题，要求更严
     const fa = canonClaim(t1), fb = canonClaim(t2);
     if (fa.length < 6 || fb.length < 6) return false;
-    return ratio(fa, fb) >= 0.86;
+    return ratio(fa, fb) >= DEDUP_CONFIG.SIM_SHORT;
   }
 
   /* 【递进式播报】同一波行情被反复播报，只差幅度数字。
@@ -4181,7 +4297,6 @@
    * 例外：标题在讲「升破 / 跌破 + 整数关口」时不算 ——
    *   81000 和 80000 是两个关口，是两个事件，不能合。
    */
-  const PROG_WIN = 2 * 3600 * 1000;
 
   function pctDir(t) {
     const m = String(t || '').match(/(\d+(?:\.\d+)?)\s*%/);
@@ -4195,10 +4310,10 @@
 
   function sameMoveBurst(x, y) {
     if (!x || !y) return false;
-    if (Math.abs((x.ts || 0) - (y.ts || 0)) > PROG_WIN) return false;
+    if (Math.abs((x.ts || 0) - (y.ts || 0)) > DEDUP_CONFIG.WIN_BURST) return false;
     const a = pctDir(x.title), b = pctDir(y.title);
     if (!a || !b || a.dir !== b.dir) return false;
-    if (Math.abs(a.pct - b.pct) > 1.5) return false;
+    if (Math.abs(a.pct - b.pct) > DEDUP_CONFIG.DIFF_PCT_MAX) return false;
     // 关口突破是独立事件，不参与「同一波」合并
     if (/(升破|跌破|突破|失守|站上|涨破)\s*[\d,]{3,}/.test(x.title || '')
       || /(升破|跌破|突破|失守|站上|涨破)\s*[\d,]{3,}/.test(y.title || '')) return false;
@@ -4232,17 +4347,45 @@
     return m ? m[1] : '';
   }
 
+  /* P0-3（§7.3）：FIRM_ACT 原先是一个大或，只校验「两边各命中任意动作词」，
+   * 结果「丰田回购」与「丰田减持」被判为同一件事。现在拆成 7 个互斥动作类别，
+   * 必须同公司 + 同动作类别 + 同槽金额不冲突才合并。 */
+  const FIRM_ACT_CLASSES = Object.freeze([
+    ['buyback', /回购(?!操作)/],
+    ['inc', /增持/],
+    ['dec', /减持/],
+    ['ma', /并购|收购/],
+    ['contract', /中标|签约/],
+    ['debt', /发债|定增/],
+    ['div', /分红/],
+  ]);
+  function firmActClasses(s) {
+    const t = String(s || '');
+    const out = [];
+    for (const [k, re] of FIRM_ACT_CLASSES) if (re.test(t)) out.push(k);
+    return out;
+  }
+  /** 只看金额/幅度类槽位是否互不包含（date/geo/org 不参与公司动作判定） */
+  function firmAmtConflict(a, b) {
+    const sa = dedupSlots(a), sb = dedupSlots(b);
+    for (const kind of ['amt', 'px', 'pct', 'bp', 'ppt', 'level']) {
+      const x = sa[kind], y = sb[kind];
+      if (!x || !y) continue;
+      if (!(subsetOf(x, y) || subsetOf(y, x))) return true;
+    }
+    return false;
+  }
   function sameFirmAction(a, b) {
-    const ACT = FIRM_ACT;
-    if (!ACT.test(a) || !ACT.test(b)) return false;
-    const nameOf = firmNameOf;
-    const na = nameOf(a), nb = nameOf(b);
+    if (!FIRM_ACT.test(a) || !FIRM_ACT.test(b)) return false;
+    const na = firmNameOf(a), nb = firmNameOf(b);
     if (!na || na !== nb) return false;   // 主体不同（丰田 vs 本田）绝不合
-    /* 主体和动作都相同就够了 —— 不再比整体相似度。
-     * 实跑三条：82亿美元 / 1.3万亿日元 / 「丰田：扩大…，将…扩大至1.3万亿日元」，
-     * 第三种多了一截「扩大股票回购计划」，字面相似度只有 0.6，卡在阈值外面。
-     * 同一天、同一家公司、同一个动作词，就是同一份公告的三种写法。 */
-    return ACT.test(a) && ACT.test(b);
+    const ca = firmActClasses(a), cb = firmActClasses(b);
+    if (!ca.length || !cb.length) return false;
+    if (!ca.some(k => cb.indexOf(k) >= 0)) return false;   // ★ 不同动作类别绝不合
+    /* 同槽金额冲突时，只有「去数字后骨架完全一致」才放行 ——
+     * 保留「82 亿美元 ≈ 1.3 万亿日元」这类单位换算，又不放宽到不同公告。 */
+    if (firmAmtConflict(a, b) && canonClaim(a) !== canonClaim(b)) return false;
+    return true;
   }
 
   /** 最长公共子串长度（O(n·m)，标题都很短，开销可忽略） */
@@ -4279,7 +4422,7 @@
      * 就因为主体前缀不同被拆成两张卡，这里补一道尾句判重。 */
     const a = tailOf(t1), b = tailOf(t2);
     if (a && b && a.length >= 8 && b.length >= 8 && !numConflict(a, b)) {
-      if (similarity(a, b) >= 0.8) return true;
+      if (similarity(a, b) >= DEDUP_CONFIG.SIM_TAIL) return true;
     }
     /* 一条标题把另一条**完整包含**（去掉标点后）→ 同一件事。
      * 实跑样本（同一份文件的两条播报）：
@@ -4371,7 +4514,6 @@
    *
    * 所以标题三道闸全挂之后，再用「正文首句 × 对方标题 / 正文」交叉比一次。
    * 只在 12 小时内比（同一事件的重复传播是分钟级的，隔太久多半是新进展）。 */
-  const BODY_DUP_WIN = 12 * 3600 * 1000;
 
   function leadOf(s) {
     const t = String(s || '').replace(/^[【\[]([^】\]]{0,16})[】\]]\s*/, '').trim();
@@ -4451,8 +4593,6 @@
     return (DIR_HIKE.test(a) && DIR_CUT.test(b)) || (DIR_CUT.test(a) && DIR_HIKE.test(b));
   }
 
-  const SYNC_THR = 0.35;
-  const SYNC_WIN = 6 * 3600 * 1000;       // 同主体同议题的判定窗口
 
   /* 同一人物的「表态型」新闻（特朗普支持 AI / 反对关税）跨源改写，
    * 主题句是同一句话的两种译法，字面相似度天然腰斩，机构那套主体闸兜不住
@@ -4529,7 +4669,7 @@
     /* 人物主体用概念归一后比：人工智能/超级智能、100%/百分之百 认成同一词 */
     const ga = isPerson ? claimNorm(a) : a;
     const gb = isPerson ? claimNorm(b) : b;
-    return similarity(ga, gb) >= (isPerson ? 0.4 : SYNC_THR);
+    return similarity(ga, gb) >= (isPerson ? DEDUP_CONFIG.SIM_PERSON : DEDUP_CONFIG.SIM_SYNC);
   }
 
   /* 【地缘冲突同事件】v56（2026-11-07 用户第 N 次报重复）
@@ -4644,7 +4784,7 @@
 
   function sameNewsBody(x, y) {
     if (!x || !y) return false;
-    if (Math.abs((x.ts || 0) - (y.ts || 0)) > BODY_DUP_WIN) return false;
+    if (Math.abs((x.ts || 0) - (y.ts || 0)) > DEDUP_CONFIG.WIN_BODY) return false;
     const xl = leadOf(x.brief), yl = leadOf(y.brief);
     const pairs = [];
     if (xl && y.title) pairs.push([xl, y.title]);
@@ -4655,7 +4795,7 @@
       if (slotConflict(p, q)) continue;
       const gp = canonClaim(p), gq = canonClaim(q);
       if (gp.length < 8 || gq.length < 8) continue;
-      if (ratio(gp, gq) >= 0.72) return true;
+      if (ratio(gp, gq) >= DEDUP_CONFIG.SIM_BODY) return true;
     }
     return false;
   }
@@ -4753,7 +4893,6 @@
    * 但那是**原始出处 vs 二手报道**，两边都该各自可见。
    * 同一帖子的重复抓取由 id（liveIds）兜住，不需要靠标题判重。
    * 原来只在同轮 dedupe() 里豁免，跨轮 findDup 没有 —— 推文会被新闻稿吸走。 */
-  const NO_MERGE_SRC = /川普言论|口罩哥KZG/;
 
   /** 轻归一：只去空白与标点，不剥媒体前缀 / 介词（用于字面包含判定） */
   function looseNorm(s) {
@@ -4769,109 +4908,161 @@
     return l.indexOf(s) >= 0;
   }
 
+  /* ================= P0 统一判重内核（三条链路共用） =================
+   * 起因（docs/去重规则全览.md §7.1）：注释声称 dedupe() 与 findDup()
+   * 「共用一套内核」，实际 findDup 体内 sameNewsBody 出现 0 次 ——
+   * 标题写法不同、正文首句相同的重复，同轮能合、跨轮漏判。
+   *
+   * 现在把全部判据收敛进 dupVerdict(a, b, ctx)，返回 { dup, rule }：
+   *   dedupe()      → ctx.win = 3 天（同轮字面判据窗口）
+   *   findDup()     → ctx.win = 6 小时（跨轮）
+   *   mergeGeoDup() → ctx.mode = 'geoOnly'（存量只跑窄判据，保持既有妥协）
+   * rule 同时供 _explainDup() 诊断，报重复时能一眼看出命中/被拦在哪。
+   * 各专项判据仍自带窗口，统一取 DEDUP_CONFIG.WIN_*。 */
+
+  /** 共享核心主体：国家 / 机构 / 公司 / 人物。
+   *  用于长度预筛的「放行凭证」与 P0-2 的强骨架宽容通道。 */
+  function sharedCore(a, b) {
+    const A = String(a || ''), B = String(b || '');
+    const na = normTitle(A), nb = normTitle(B);
+    const oa = syncOrgOf(na), ob = syncOrgOf(nb);
+    if (oa && oa === ob) return true;
+    const fa = firmNameOf(A), fb = firmNameOf(B);
+    if (fa && fa === fb) return true;
+    const pa = personHead(A), pb = personHead(B);
+    if (pa && pa === pb) return true;
+    for (const g of DEDUP_GEO) if (A.indexOf(g) >= 0 && B.indexOf(g) >= 0) return true;
+    return false;
+  }
+
+  /** 长度差过大时的放行条件：有共享主体 / 命中任一专项判据 / 摘要包含，
+   *  一律放行进入 dupVerdict，不再因长度比直接丢弃候选。 */
+  function dupRelax(k, it) {
+    const A = String(k.title || ''), B = String(it.title || '');
+    /* 保留 v126 的纯子串豁免：短标题被长标题整句包含是最常见的改写形态，
+     * 不能因为长度比超范围就丢掉（test_dedupe 第七组两条用例守着）。 */
+    if (containsOther(A, B)) return true;
+    if (sharedCore(A, B)) return true;
+    if (sameSyncEvent(A, B) || sameGeoEvent(A, B) || sameCorpPersonnel(A, B)) return true;
+    if (sameNewsBody(k, it)) return true;
+    const na = normTitle(A), nb = normTitle(B);
+    if (coveredBy(na, nb) || coveredBy(nb, na)) return true;
+    return false;
+  }
+
+  /** 单一判重内核。a / b 为条目对象（title / brief / ts / src）。 */
+  function dupVerdict(a, b, ctx) {
+    if (!a || !b) return { dup: false, rule: 'empty' };
+    if (SUBSCRIBED_SRC.test(String(a.src || '')) || SUBSCRIBED_SRC.test(String(b.src || '')))
+      return { dup: false, rule: 'exempt' };
+    const A = String(a.title || ''), B = String(b.title || '');
+    const dt = Math.abs((a.ts || 0) - (b.ts || 0));
+    const win = (ctx && ctx.win) || DEDUP_CONFIG.WIN_SYNC;
+    const mode = (ctx && ctx.mode) || 'full';
+
+    /* 存量窄合并：只跑地缘 + 人事，避免全局 dedupe 把池子从 73 误合到 40 */
+    if (mode === 'geoOnly') {
+      if (dt > DEDUP_CONFIG.WIN_SYNC) return { dup: false, rule: 'window' };
+      if (sameGeoEvent(A, B)) return { dup: true, rule: 'sameGeoEvent' };
+      if (sameCorpPersonnel(A, B)) return { dup: true, rule: 'sameCorpPersonnel' };
+      return { dup: false, rule: 'none' };
+    }
+
+    /* ① 标题类判据（字面 + 跨源改写 + 地缘 + 人事 + 整句包含） */
+    if (dt <= win) {
+      if (sameNews(A, B)) return { dup: true, rule: 'sameNews' };
+      if (dt <= DEDUP_CONFIG.WIN_SYNC) {
+        if (sameSyncEvent(A, B)) return { dup: true, rule: 'sameSyncEvent' };
+        if (sameGeoEvent(A, B)) return { dup: true, rule: 'sameGeoEvent' };
+        if (sameCorpPersonnel(A, B)) return { dup: true, rule: 'sameCorpPersonnel' };
+      }
+      if (containsOther(A, B)) return { dup: true, rule: 'containsOther' };
+    }
+    /* ② 正文交叉判重（12h）—— ★ 跨轮 findDup 从这里开始也生效 */
+    if (dt <= DEDUP_CONFIG.WIN_BODY && sameNewsBody(a, b)) return { dup: true, rule: 'sameNewsBody' };
+    /* ③ 同一波行情（窗口在 sameMoveBurst 内部） */
+    if (sameMoveBurst(a, b)) return { dup: true, rule: 'sameMoveBurst' };
+    return { dup: false, rule: 'none' };
+  }
+
   /** 跨轮判重：在已有列表里找 6 小时内的同事件条目（app.js 的 pollFlash 用）
    *  性能：每轮新增可能上百条、库里几百条，先把「长度差太多」的候选剔掉，
    *  再对剩下的做归一化，避免每轮几百次正则。 */
+  /* ================= P2 去重诊断器 =================
+   * 用户报「这两条明明是同一件事却没合并」时，不用再逐条复现猜规则：
+   * 跑一下 _explainDup(a, b) 就知道是数字冲突、槽位冲突、骨架相似度差一点，
+   * 还是订阅源豁免 / 超出时间窗。 */
+  function explainDup(a, b) {
+    const A = String((a && a.title) || ''), B = String((b && b.title) || '');
+    const na = normTitle(A), nb = normTitle(B);
+    const ga = canonClaim(A), gb = canonClaim(B);
+    const claimRatio = ratio(ga, gb);
+    const nc = numConflict(na, nb);
+    const sc = slotConflict(A, B);
+    const xa = { title: A, brief: (a && a.brief) || '', ts: (a && a.ts) || 0, src: (a && a.src) || '' };
+    const xb = { title: B, brief: (b && b.brief) || '', ts: (b && b.ts) || 0, src: (b && b.src) || '' };
+    const v = dupVerdict(xa, xb, { win: DEDUP_CONFIG.WIN_SYNC });
+    let blockedBy = '';
+    if (!v.dup) {
+      if (SUBSCRIBED_SRC.test(xa.src) || SUBSCRIBED_SRC.test(xb.src)) blockedBy = 'exempt:subscribed';
+      else if (nc) blockedBy = 'numConflict';
+      else if (sc) blockedBy = 'slotConflict:' + sc;
+      else if (claimRatio < DEDUP_CONFIG.SIM_CLAIM) blockedBy = 'claimRatio';
+      else if (v.rule === 'window') blockedBy = 'window';
+      else blockedBy = 'noRuleMatched';
+    }
+    return {
+      isDup: v.dup,
+      hitRule: v.rule,
+      blockedBy: blockedBy,
+      normA: na,
+      normB: nb,
+      claimRatio: Math.round(claimRatio * 1000) / 1000,
+      numConflict: nc,
+      slotConflict: sc
+    };
+  }
+
+  /** 跨轮判重：在已有列表里找同事件条目（app.js 的 pollFlash / collect 回溯用）。
+   *  判据全部交给 dupVerdict()，本函数只负责候选遍历与时间窗。 */
   function findDup(list, it, winMs) {
     if (!list || !list.length || !it || !it.title) return null;
-    /* 订阅源（推文 / 个人博主）永不走跨轮合并：新来的推文不被合，也不去合并别人 */
-    if (NO_MERGE_SRC.test(String(it.src || ''))) return null;
+    if (SUBSCRIBED_SRC.test(String(it.src || ''))) return null;
     const t = it.ts || Date.now();
-    const win = winMs || 6 * 3600 * 1000;
-    const a = normTitle(it.title);
-    if (a.length < 8) return null;
-    const len = a.length;
+    const win = winMs || DEDUP_CONFIG.WIN_SYNC;
+    const len = normTitle(it.title).length;
+    if (len < 8) return null;
     for (let i = 0; i < list.length; i++) {
       const k = list[i];
       if (!k || !k.title) continue;
-      if (NO_MERGE_SRC.test(String(k.src || ''))) continue;   // 别把推文吸进新闻卡
+      if (SUBSCRIBED_SRC.test(String(k.src || ''))) continue;
       if (Math.abs((k.ts || 0) - t) > win) continue;
-      // 长度预筛：0.82 的相似度不可能出现在长度差 60% 以上的两条标题里
+      /* 长度差过大：不再一刀切跳过。只要共享核心主体 / 命中专项判据 /
+       * 正文同一件事 / 摘要包含，一律放行进入统一内核。 */
       const kl = String(k.title).length;
-      if (kl < len * 0.4 || kl > len * 2.4) {
-        /* 【长度预筛的豁免（v126）】长度差很大时「相似度」确实不可能够，
-         * 但「短标题被长标题整句包含」正是同一件事最常见的改写形态：
-         *   格隆汇：「格隆汇11月6日｜特朗普称，100%支持人工智能，将与那些希望…合作。」
-         *   同花顺：「特朗普称，100%支持人工智能」
-         * 只按长度先剔掉，这两条就永远合不上 —— 同轮抓到时能合（dedupe 无此预筛），
-         * 分两轮抓到就漏（走这里），用户看到的是并排两张卡。
-         * 这里用字面包含兜一次，命中即判同一事件。 */
-        if (containsOther(k.title, it.title)) return k;
-        continue;
+      if (kl < len * DEDUP_CONFIG.LEN_RATIO_MIN || kl > len * DEDUP_CONFIG.LEN_RATIO_MAX) {
+        if (!dupRelax(k, it)) continue;
       }
-      if (sameNorm(a, normTitle(k.title))) return k;
-      /* 跨源改写同一事件（同主体 + 同议题 + 字面 0.35 底） */
-      if (sameSyncEvent(k.title, it.title)) return k;
-      /* 跨轮也要认「同一波行情」：日经跌 2% 在 13:31 被三家源先后推出来，
-       * 每一轮 collect 只跟自己那批比，所以永远碰不到面 ——
-       * 用户看到的才是同一个数字刷三张卡。这里补上同标的+同向+同幅度的判定。 */
-      if (sameMoveBurst(k, it)) return k;
-      /* 最后兜一道完整判据：同轮 dedupe 用的所有规则（同一公司的同一动作、
-       * 递进式播报、资金流刷新…）在跨轮合并时也必须生效。
-       * 少了这行，同一件事只要分两轮抓到就会绕过全部规则重复入库 ——
-       * 用户反复报的「同一个新闻出现好几次」，根子在这里。 */
-      if (sameNews(k.title, it.title)) return k;
-      /* v58：地缘同事件判据此前**只挂在同轮 dedupe 和启动时的存量合并上**，
-       * 运行时轮询走的是 findDup，这条完全没生效。实测样本：
-       *   18:01「伊朗海军称一艘油轮在霍尔木兹海峡东部触碰水雷后起火」
-       *   19:57「伊朗称一艘油轮在霍尔木兹海峡起火停航」
-       * 同一件事分两轮到达 → 各占一张卡，直到下次重载才被存量合并清掉。
-       * 窗口跟同主体同议题一致（6 小时），判据本身已含「公共串≥4 或 ≥2 动作簇」。 */
-      if (Math.abs((k.ts || 0) - t) <= SYNC_WIN && sameGeoEvent(k.title, it.title)) return k;
-      /* v59：公司人事谈资也要走跨轮合并 —— 两条金十「阿联酋航空推迟退休/离任」
-       * 相隔 25 秒分两轮到达，不同轮就永远碰不到面。 */
-      if (Math.abs((k.ts || 0) - t) <= SYNC_WIN && sameCorpPersonnel(k.title, it.title)) return k;
+      if (dupVerdict(k, it, { win: win }).dup) return k;
     }
     return null;
   }
 
+  /** 同轮去重：倒序逐条与已保留条目交给统一内核判定。 */
   function dedupe(items) {
     items = items.slice().sort((a, b) => b.ts - a.ts);
     const kept = [];
-
-    /* 「人物 / 博主」订阅源不参与跨条合并（NO_MERGE_SRC 见 findDup 上方）——
-     * 川普一天十条发言，归一后标题骨架高度相似，被当成同一件事合并到只剩 1 条。
-     * 但这些是十次不同的发言，每条都该独立可见。 */
     for (const it of items) {
-      let dup = null;
-      let byBody = false;
-      const solo = NO_MERGE_SRC.test(String(it.src || ''));
-      /* 订阅源直接入队，不参与任何合并（标题/正文/同波行情三道都不走）。
-       * 之前只在第一道加了豁免，结果被第二道 sameNewsBody 合成了 1 条。
-       * 同一帖子的重复抓取由 liveIds（按 id）挡住，不需要靠标题判重。 */
-      if (solo) { kept.push(it); continue; }
+      /* 订阅源（推文 / 个人博主）直接入队，不参与任何合并。
+       * 同一帖子的重复抓取由 liveIds 按 id 挡住。 */
+      if (SUBSCRIBED_SRC.test(String(it.src || ''))) { kept.push(it); continue; }
+      let dup = null, byBody = false;
       for (const k of kept) {
-        if (NO_MERGE_SRC.test(String(k.src || ''))) continue;
-        // 只跟 3 天内的比：跨天同标题（「每日晨报」之类）不该合并成一条
-        if (Math.abs((k.ts || 0) - (it.ts || 0)) > 3 * 86400000) continue;
-        if (sameNews(k.title, it.title)) { dup = k; break; }
-        /* 跨源改写：同一件事、换了人名/动词/句式的，靠「同主体同议题」兜住。
-         * 只给 6 小时窗口 —— 这类判定比字面宽松，窗口一放宽就会把
-         * 「同机构不同天的两件事」并掉。 */
-        if (Math.abs((k.ts || 0) - (it.ts || 0)) <= SYNC_WIN
-            && sameSyncEvent(k.title, it.title)) { dup = k; break; }
-        /* 地缘冲突类：同实体 + 同动作类别（v56 —— 也门空袭 / 霍尔木兹油轮起火 那几对） */
-        if (Math.abs((k.ts || 0) - (it.ts || 0)) <= SYNC_WIN
-            && sameGeoEvent(k.title, it.title)) { dup = k; break; }
-        /* v59 公司人事谈资：同公司 + 同人事动作（退休/离任、辞职、任命各算一簇）——
-         * 「阿联酋航空推迟退休」与「阿联酋航空总裁推迟离任」是同一件事的两种写法。 */
-        if (Math.abs((k.ts || 0) - (it.ts || 0)) <= SYNC_WIN
-            && sameCorpPersonnel(k.title, it.title)) { dup = k; break; }
-      }
-      /* 标题对不上，再用正文导语交叉比一次 —— 专治「同一件事两套标题」：
-       * 一条标题写错地点/只写结果，另一条写得完整，标题字面差得远但正文说的是同一件事。 */
-      if (!dup) {
-        for (const k of kept) {
-          if (NO_MERGE_SRC.test(String(k.src || ''))) continue;
-          if (sameNewsBody(k, it)) { dup = k; byBody = true; break; }
-        }
-      }
-      /* 同一波行情的多源播报（跌5.28% / 5.5% / 跌超6%）→ 合并成一条 */
-      if (!dup) {
-        for (const k of kept) {
-          if (NO_MERGE_SRC.test(String(k.src || ''))) continue;
-          if (sameMoveBurst(k, it)) { dup = k; byBody = true; break; }
-        }
+        const v = dupVerdict(k, it, { win: DEDUP_CONFIG.WIN_ROUND });
+        if (!v.dup) continue;
+        dup = k;
+        byBody = (v.rule === 'sameNewsBody' || v.rule === 'sameMoveBurst');
+        break;
       }
       if (!dup) { kept.push(it); continue; }
       mergeNews(dup, it, byBody ? true : undefined);
@@ -4891,16 +5082,16 @@
    * 所以这里只放开 sameGeoEvent 这一条窄判据：
    *   同地缘实体 + 同动作类别 + 6 小时内 + 数字槽位不冲突。
    * 判据足够严（三对样本全中、三个守门全拒），对存量池跑一次是安全的。 */
+  /** 存量窄合并：只跑地缘 + 人事两条判据（dupVerdict 的 geoOnly 模式）。
+   *  不能跑全局 dedupe —— 曾把「中际旭创回购 ≠ 联讯仪器回购」误合，条数 73→40。 */
   function mergeGeoDup(items) {
     const kept = [];
     const list = (items || []).slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
     for (const it of list) {
-      if (NO_MERGE_SRC.test(String(it.src || ''))) { kept.push(it); continue; }
+      if (SUBSCRIBED_SRC.test(String(it.src || ''))) { kept.push(it); continue; }
       let dup = null;
       for (const k of kept) {
-        if (NO_MERGE_SRC.test(String(k.src || ''))) continue;
-        if (Math.abs((k.ts || 0) - (it.ts || 0)) > SYNC_WIN) continue;
-        if (sameGeoEvent(k.title, it.title) || sameCorpPersonnel(k.title, it.title)) { dup = k; break; }
+        if (dupVerdict(k, it, { mode: 'geoOnly' }).dup) { dup = k; break; }
       }
       if (dup) mergeNews(dup, it, true); else kept.push(it);
     }
@@ -6733,6 +6924,7 @@
     normTitle: normTitle,
     /* 去重内窥：报「同一件事出现两条」时用来定位是哪一道闸放过了它 */
     _dedupe: dedupe,
+    _explainDup: explainDup,   // P2：去重决策追溯
     _sameClaim: sameClaim,
     _slotConflict: slotConflict,
     _canonClaim: canonClaim,
