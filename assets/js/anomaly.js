@@ -20,6 +20,22 @@
  *
  * 【日内阶梯】当日累计幅度跨 1.0x / 1.8x / 2.6x / 3.5x 当日阈值时，
  *   每跨一档立即升级报警并豁免常规窗口冷却，专门抓「1% → 3% → 5%」的主升浪。
+ *   注意：阶梯跨档在「已预警态」下同样要过下面的瞬时脉冲硬门槛。
+ *
+ * 【重复提醒状态机 v2】首次暴跌/暴涨之后只认「瞬时脉冲」，分三种演变：
+ *   ① 在 -3% 附近横盘磨洋工 10~30 分钟 → 短窗没在加速，一律静音；
+ *      15/30 分钟长窗与当日伪命中(win=0)里残留的历史大阴线不许「吃老本」重报，
+ *      冷却到期、日内阶梯跨档也都不例外。
+ *      唯一例外「长程新波」：距上次报警 >15 分钟，且最近 5 分钟与 15/30 分钟
+ *      窗口都走出一波全新的同向推进（上午冲高回落、下午再 20 分钟慢拉），
+ *      仍允许再提醒一次；chg5 不达标的横盘残留被挡在外面。
+ *   ② 快速 V 反拉回平盘 → 反向短窗脉冲越线且 5 分钟窗口也反向在推，
+ *      立即破锁报警（豁免旧方向 alertedAmp 峰值对比与常规冷却），
+ *      账本方向翻转为新方向、幅度重置为本次反向脉冲幅度，文案「快速反弹 +X%」。
+ *   ③ 再下一台阶（-3% → -5%）→ 短窗正在加速且当日幅度比上次报警再扩大
+ *      ≥ 1 个 5 分钟阈值（或距上次 >15 分钟短窗独立再越线），立即升级报警，
+ *      文案「跌幅已扩大至 X%」。
+ *   预警账本因此记四个维度：at / amp / dir / dayPct，全部按交易日分桶落盘。
  *
  * 【动态波动率】
  *   阈值不是死值。每次扫描把「今天到目前为止的窗口极值」写进
@@ -57,6 +73,27 @@
    * 每跨一档立即升级报警，豁免常规窗口冷却 —— 用户口径：「从涨 1% 一路爆拉
    * 到 3%、5%」不该被 10 分钟冷却静音在主升浪里。 */
   const DAY_STAGES = [1.0, 1.8, 2.6, 3.5];
+
+  /* ============================================================
+   * 重复提醒状态机 v2（2026-11-11）：首次暴跌后的三种演变
+   * ------------------------------------------------------------
+   * 用户口径（科创50 平时波动 1%、突然暴跌到 -3%）：
+   *   ① 在 -3% 附近横盘磨洋工 10~30 分钟 → 绝不重报；
+   *   ② 快速 V 反拉回 0% → 反向脉冲必须立刻预警；
+   *   ③ 再下一台阶跌到 -5% → 加速下杀瞬间必须再报。
+   * 核心：只认「1/2/3/5 分钟瞬时脉冲」，15/30 分钟长窗与当日伪命中
+   * （win=0）里残留的历史大阴线一律不许「吃老本」重报。
+   * ============================================================ */
+  /* 横盘否决线：最近 5 分钟净变动不足「5 分钟阈值 × 0.75」就算磨洋工 */
+  const SIDEWAYS_RATIO = 0.75;
+  /* 新鲜度门槛：最近 1~2 分钟的即时净变动不足「5 分钟阈值 × 0.35」，
+   * 说明这一刻并没有新的脉冲在推进。暴跌刚结束的头 5 分钟里，
+   * 5 分钟窗口首尾仍含那根大阴线，只看 chg5 会把「吃老本」当成「还在加速」。 */
+  const FRESH_RATIO = 0.35;
+  /* 同向「再下一台阶」：当日累计幅度比上次报警再扩大 1 个 5 分钟阈值 */
+  const STEP_RATIO = 1.0;
+  /* 条件 b)：距上次报警超过 15 分钟，前一波脉冲早已结束，短窗可独立再报 */
+  const REARM_MS = 15 * 60 * 1000;
 
   /** 窗口 → 尺度名 */
   function scaleOf(win) {
@@ -189,6 +226,12 @@
       /* 上次弹出预警时的「幅度」（当日/累计/窗口取最大）。用于「重复提醒」判据：
        * 同一品种弹过一次后，只有幅度较上次明显扩大才再报，否则不再打扰。 */
       this.alertedAmp = {};
+      /* v2：上次报警的「脉冲方向」（+1 急涨 / -1 急跌 / 0 未知）。
+       * V 反破锁要靠它：反向短窗脉冲不受旧方向的 alertedAmp 峰值锁死。 */
+      this.alertedDir = {};
+      /* v2：上次报警时的当日累计涨跌幅（带符号）。
+       * 「再下一台阶」判据 a) = abs(dayPct) - abs(alertedDayPct) >= hv5.thr。 */
+      this.alertedDayPct = {};
       this.thrScale = 1;
       this.cooldown = 10 * 60 * 1000;
       this.busy = false;
@@ -304,15 +347,26 @@
           this.alertState[k] = v;
           this.alertedAt[k] = v.at;
           this.alertedAmp[k] = Number(v.amp) || 0;
+          /* v2：方向 / 当日位置也一起恢复，否则重启后 V 反与台阶判据会失效 */
+          this.alertedDir[k] = (v.dir === 1 || v.dir === -1) ? v.dir : 0;
+          this.alertedDayPct[k] = Number(v.dayPct) || 0;
         }
       } catch (e) { /* 隐私模式/配额满：静默降级为纯内存 */ }
     }
 
-    /** 记录一次预警并落盘（节流 3 秒，避免每轮扫描都写） */
-    markAlerted(k, amp) {
-      this.alertState[k] = { at: Date.now(), amp: Number(amp) || 0 };
+    /** 记录一次预警并落盘（强制写，不吃节流，否则关 app 就丢）。
+     *  v2：一次写入 at / amp / dir / dayPct 四个维度，内存账本与落盘账本
+     *  由同一个入口维护，避免 scan 与 ingestNews 两条路径各写一半。 */
+    markAlerted(k, amp, dir, dayPct) {
+      const at = Date.now();
+      const rec = { at: at, amp: Number(amp) || 0, dir: dir || 0, dayPct: Number(dayPct) || 0 };
+      this.alertedAt[k] = at;
+      this.alertedAmp[k] = rec.amp;
+      this.alertedDir[k] = rec.dir;
+      this.alertedDayPct[k] = rec.dayPct;
+      this.alertState[k] = rec;
       this.alertStateDay = this.alertDay();
-      this.saveAlertState(true);   // 强制落盘，不吃节流（否则关 app 就丢）
+      this.saveAlertState(true);
     }
 
     /** 一波行情走完：把「幅度基准」清零，但保留时间戳让冷却继续走。
@@ -649,6 +703,8 @@
         this.alertStateDay = today;
         this.alertedAt = {};
         this.alertedAmp = {};
+        this.alertedDir = {};          // v2：方向账也按交易日清空
+        this.alertedDayPct = {};       // v2：当日位置账同理
         try { this.saveAlertState(); } catch (e) {}
       } else if (!this.alertStateDay) {
         this.alertStateDay = today;
@@ -867,6 +923,45 @@
           const stale = a.grp !== 'crypto'
             && ageMin > Math.max((best && best.win ? best.win : 30) * 3 + 8, 25) + delayMin;
 
+          /* ---------------- 瞬时脉冲判据（重复提醒状态机 v2 的核心） ----------------
+           * 只看 1/2/3/5 分钟短窗。15/30 分钟长窗与当日伪命中（win=0）里
+           * 残留的历史大阴线，不能成为「现在又异动了」的证据 —— 那是「吃老本」。 */
+          const fastThr = (hv5 ? hv5.thr : h5thr) || 1;
+          const chg5 = h5 ? h5.chg : 0;            // 最近 5 分钟净变动（带符号）
+          let pulseDir = 0, shortRatioMax = 0, shortCross = false;
+          for (const h of hits) {
+            if (h.win < 1 || h.win > 5 || h.gated) continue;   // 只认短窗瞬时脉冲
+            if (h.ratio > shortRatioMax) { shortRatioMax = h.ratio; pulseDir = Math.sign(h.chg) || 0; }
+            if (h.ratio >= 1) shortCross = true;
+          }
+          /* 短窗没走出方向时（首次靠当日伪命中），退回当日/最长窗方向兜底 */
+          const curDir = pulseDir || Math.sign(dayPct) || Math.sign(best ? best.chg : 0) || 0;
+          /* 横盘否决：最近 5 分钟只是小涨小跌磨洋工 → moving=false，一律静音 */
+          const moving = Math.abs(chg5) >= fastThr * SIDEWAYS_RATIO;
+          const h1 = hits.find(x => x.win === 1);
+          const h2 = hits.find(x => x.win === 2);
+          const chg1 = h1 ? h1.chg : 0;
+          const chg2 = h2 ? h2.chg : 0;
+          /* 新鲜度：暴跌刚结束的头 5 分钟，5 分钟窗口首尾还含那根大阴线，
+           * 单看 chg5 仍是 -3% 会误判成「还在加速」。所以要求最近 1~2 分钟的
+           * **即时净变动**确实在推进、且方向与本轮脉冲一致，才算新脉冲。 */
+          const recentPush = (curDir && Math.sign(chg1) === curDir) ? Math.abs(chg1)
+            : ((curDir && Math.sign(chg2) === curDir) ? Math.abs(chg2) : 0);
+          const freshPulse = recentPush >= fastThr * FRESH_RATIO;
+          /* 「短窗正在加速」硬门槛 = 5 分钟净变动达标 且 这一刻确有新的
+           * 1~2 分钟推进 且 短窗越线。用户给的判据是「短窗 ratio≥1 或
+           * abs(chg5)≥0.75·thr」二选一，这里收紧为「且」并补新鲜度：
+           * 才能彻底杜绝情况一「-3% 附近横盘 25 分钟 / 冷却到期 / 长窗残留」重报。 */
+          const accel = moving && freshPulse && shortCross;
+          const lastDir = this.alertedDir[t.k] || 0;
+          /* V 反破锁前提：反向短窗脉冲越过自身阈值，且 5 分钟窗口也是反向在推
+           * （同向防插针闸门 CROSS_GATE），避免一根反向毛刺就误判成 V 反。 */
+          const reverseShort = lastDir !== 0 && hits.some(h =>
+            h.win >= 1 && h.win <= 5 && h.ratio >= 1 && !h.gated
+            && Math.sign(h.chg) === -lastDir);
+          const reverseGate5 = lastDir !== 0 && Math.sign(chg5) === -lastDir
+            && Math.abs(chg5) >= fastThr * CROSS_GATE;
+
           // ---- 触发判定 ----
           // 1/2/3 分钟：FAST_MULT=1.3 倍直接报，不等下一轮（等 20 秒，行情可能已经走完）
           // 5 分钟：FAST_MULT=1.5 倍直接报，否则连续两轮
@@ -1026,6 +1121,7 @@
             const prevAt = this.alertedAt[t.k] || 0;
             const curAmp = this.ampOf(r);
             const lastAmp = this.alertedAmp[t.k] || 0;
+            const lastDayPct = this.alertedDayPct[t.k] || 0;
             /* 判「这次扩大得明不明显」用的尺子 = 该品种自己的波动尺度。 */
             const sigma = this.sigmaOf(r);
             // 冷却：闪崩尺度最激进但最容易重复（同一段行情 1/2/3 分钟会连着越线），
@@ -1034,14 +1130,70 @@
             const cool = r.scale === 'flash' ? this.cooldown * 0.4
               : r.scale === 'fast' ? this.cooldown * 0.6
                 : this.cooldown;
-            // 首次必报；之后必须「冷却期已过」且「按自身波动率算确实在明显扩大」才再报。
-            // 例外：日内阶梯跨档 = 主升浪升级，豁免常规冷却与幅度扩大判据，立即报。
-            if (stageUp || ampGate(curAmp, lastAmp, sigma, cool, prevAt, Date.now())) {
-              this.alertedAt[t.k] = Date.now();
-              this.alertedAmp[t.k] = Math.max(lastAmp, curAmp);
-              /* 落盘 —— 否则关掉 app 再打开，alertedAt 清零，
-               * ampGate 走「首次必报」分支，所有异动全部重弹一遍。 */
-              this.markAlerted(t.k, this.alertedAmp[t.k]);
+            const isRepeat = prevAt > 0;             // 已预警态
+            const nowMs = Date.now();
+
+            /* 兼容旁路「长程新波」：距上次报警 >15 分钟，且最近 5 分钟与
+             * 15/30 分钟窗口都走出一波**全新的同向推进** —— 专治「上午冲高
+             * 回落、下午再冲高」这类 20 分钟慢拉（1~2 分钟即时脉冲不显著、
+             * 短窗没越线，但确实是新一波，用户明确要求再提醒一次）。
+             * 仍强制 chg5 达标且与新方向一致：暴跌刚结束时 30 分钟窗口起点
+             * 还落在暴跌前的价格上，那种「残留」不满足 chg5，不会被当成新波。 */
+            const longWave = isRepeat && (nowMs - prevAt > REARM_MS)
+              && Math.sign(chg5) === curDir
+              && Math.abs(chg5) >= fastThr * 0.5
+              && ((hv15 && hv15.ratio >= 1 && Math.sign(hv15.chg) === curDir)
+                || (hv30 && hv30.ratio >= 1 && Math.sign(hv30.chg) === curDir));
+            /* 「真的有新行情」= 瞬时脉冲 或 长程新波；两者都不成立就是横盘磨洋工 */
+            const hasNewWave = accel || longWave;
+
+            /* ① V 反破锁：反向短窗脉冲越线 + 5 分钟同向防插针闸门成立，
+             * 完全豁免旧方向的 alertedAmp 幅度对比与常规冷却，立即报警。
+             * 哪怕 abs(dayPct) 很小甚至回到 0% 平盘，也照报不误。 */
+            const vReverse = isRepeat && reverseShort && reverseGate5 && !stale;
+
+            /* ③ 同向「再下一台阶」（-3% → -5%）：
+             *   a) 当日累计幅度比上次报警再扩大 ≥ 1 个 5 分钟阈值；
+             *   b) 或距上次报警 > 15 分钟（前一波早已归零）且短窗独立再越线。
+             * 两者都必须先过需求 ② 的「短窗正在加速」硬门槛。 */
+            const sameDir = lastDir === 0 || curDir === lastDir;
+            const stepA = isRepeat && sameDir
+              && (Math.abs(dayPct) - Math.abs(lastDayPct)) >= fastThr * STEP_RATIO;
+            const stepB = isRepeat && sameDir && (nowMs - prevAt > REARM_MS)
+              && shortRatioMax >= 1;
+            const sameStep = (stepA || stepB) && hasNewWave;
+
+            /* ② 放行判定：已预警态下，横盘（hasNewWave=false）一律静音 ——
+             * 不管是 ampGate 突破、15/30 长窗残留、还是 DAY_STAGES 跨档。 */
+            let allow;
+            if (vReverse) allow = true;
+            else if (isRepeat) {
+              allow = hasNewWave && (sameStep || (stageUp && !stale)
+                || ampGate(curAmp, lastAmp, sigma, cool, prevAt, nowMs));
+            } else {
+              /* 首次：ampGate 走 prevAt=0 分支必报 */
+              allow = stageUp || ampGate(curAmp, lastAmp, sigma, cool, prevAt, nowMs);
+            }
+
+            if (allow) {
+              /* 文案标签：严格按用户口径格式化，不套用通用「近 N 分钟持续下跌」。 */
+              let label = '';
+              if (vReverse) {
+                label = (pulseDir > 0 ? '快速反弹 +' : '高台跳水 -')
+                  + Math.abs(chg5).toFixed(2) + '%';
+              } else if (isRepeat && (sameStep || stageUp)) {
+                label = (dayPct >= 0 ? '涨幅已扩大至 ' : '跌幅已扩大至 ')
+                  + Math.abs(dayPct).toFixed(2) + '%';
+              }
+              r.alertLabel = label;
+              r.alertKind = vReverse ? 'reverse'
+                : (isRepeat && (sameStep || stageUp) ? 'expand' : '');
+
+              /* 账本：V 反把方向翻成新方向、幅度重置为本次反向脉冲幅度；
+               * 其余沿用「只增不减」的幅度基准。四维度一次落盘。 */
+              const recAmp = vReverse ? Math.abs(chg5) : Math.max(lastAmp, curAmp);
+              const recDir = vReverse ? pulseDir : (curDir || lastDir || 0);
+              this.markAlerted(t.k, recAmp, recDir, dayPct);
               if (r.status === 'unattributed') this.hits++;
               this.log.unshift(Object.assign({ kind: r.status }, r));
               this.log = this.log.slice(0, 60);
@@ -1177,9 +1329,10 @@
           this.newsLog.unshift(r);
           this.newsLog = this.newsLog.slice(0, 20);
           this.hits++;
-          this.alertedAt[k] = Date.now();
-          /* 新闻驱动的异动也要落盘，否则重启后同一条新闻会再次触发轻提示 */
-          this.markAlerted(k, this.alertedAmp[k] || Math.abs(r.chg || 0));
+          /* 新闻驱动的异动也要落盘（at/amp/dir/dayPct 四维度），
+           * 否则重启后同一条新闻会再次触发轻提示，且 V 反/台阶判据缺方向。 */
+          this.markAlerted(k, this.alertedAmp[k] || Math.abs(r.chg || 0),
+            (r.dir || Math.sign(r.chg) || 0), Math.abs(r.chg || 0));
           this.onAlert(r);
         }
       }

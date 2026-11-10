@@ -1848,6 +1848,9 @@
     : Math.abs(v).toFixed(1) + 'bp');
 
   const alarmWords = (r) => {
+    /* v260：重复提醒状态机给出的精确标签（V 反 / 再下一台阶）优先，
+     * 否则会被「近 N 分钟持续下跌」这类通用文案盖掉，用户看不出是升级报警。 */
+    if (r.alertLabel) return r.alertLabel;
     const day = (r.dayPct != null && Math.abs(r.dayPct) >= 0.05) ? r.dayPct : null;
     const dayAbs = day == null ? null : Math.abs(day);
     const R = r.run;
