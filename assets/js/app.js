@@ -77,6 +77,16 @@
 
   function fixRecord(n, to, reason) {
     if (!n || !n.id || n.level === to) return false;
+    /* P2-A：把「当时命中了哪条规则」一并存进纠错单。
+     * 以前导出单只有标题+级别，AI 必须靠复现去猜是哪道闸；现在带上
+     * ruleId / stage，直接按四桶归因定位病根，不用再猜。 */
+    let tr = null;
+    try {
+      if (w.LiveNews && typeof w.LiveNews._explain === 'function') {
+        tr = w.LiveNews._explain(n.title, n.brief || '', !!n.important,
+          n.stocks || [], n.src || '');
+      }
+    } catch (e) { tr = null; }
     const row = {
       id: n.id,
       title: String(n.title || '').slice(0, 120),
@@ -86,8 +96,10 @@
       to: to,
       at: Date.now(),
       cat: n.cat || '',
+      ruleId: tr ? tr.ruleId : '',
+      stage: tr ? tr.stage : '',
       reason: String(reason || ''),
-      gv: (w.LiveNews && w.LiveNews.GRADE_VER) || 0
+      gv: tr ? tr.gv : ((w.LiveNews && w.LiveNews.GRADE_VER) || 0)
     };
     fixStore.list = fixStore.list.filter(x => x.id !== n.id);   // 同一条只留最后一次
     fixStore.list.unshift(row);
@@ -103,8 +115,27 @@
     if (!fixStore.list.length) return '';
     const t = (x) => { try { return new Date(x).toLocaleString('zh-CN', { hour12: false }); } catch (e) { return ''; } };
     return `【标级纠错单】${fixStore.list.length} 条 · 规则 v${(w.LiveNews && w.LiveNews.GRADE_VER) || '?'} · 导出 ${t(Date.now())}\n`
-      + '格式：新级←原级 | 原因 | 标题 | 来源 | 时间 | 原分类\n'
-      + fixStore.list.map(x => `${x.to}←${x.from} | ${x.reason || '未填'} | ${x.title} | ${x.src} | ${t(x.ts)} | ${x.cat || ''}`).join('\n');
+      + '格式：新级←原级 | 原因 | 标题 | 来源 | 时间 | 原分类 | 命中规则(ruleId@stage)\n'
+      + fixStore.list.map(x => `${x.to}←${x.from} | ${x.reason || '未填'} | ${x.title} | ${x.src} | ${t(x.ts)} | ${x.cat || ''}`
+          + ` | ${x.ruleId ? x.ruleId + '@' + (x.stage || '?') : '未追溯'}`).join('\n');
+  }
+  /** 结构化 JSON 导出：AI 可直接按 ruleId 定位病根，不用解析文本 */
+  function fixJson() {
+    if (!fixStore.list.length) return '';
+    return JSON.stringify({
+      type: 'macro-pulse/grade-corrections',
+      version: 1,
+      gradeVer: (w.LiveNews && w.LiveNews.GRADE_VER) || 0,
+      exportedAt: new Date().toISOString(),
+      count: fixStore.list.length,
+      buckets: ['A.词表缺漏→ENTITIES', 'B.数值语境误读→提取器',
+        'C.支柱守门边界→croVeto/croPillar/aCap', 'D.纯个例→仅本机映射，不改规则'],
+      items: fixStore.list.map(x => ({
+        id: x.id, from: x.from || '', to: x.to, cat: x.cat || '',
+        ruleId: x.ruleId || '', stage: x.stage || '', gv: x.gv || 0,
+        reason: x.reason || '', title: x.title, src: x.src || '', ts: x.ts, at: x.at
+      }))
+    }, null, 2);
   }
 
   /* 改判面板：长按卡片弹出。走独立遮罩，不复用 #sheet ——
@@ -3641,7 +3672,7 @@
         <div class="set-row"><div><b>纠错单</b><span>${fixStore.list.length
           ? '攒够一批再点「复制」，一次性粘给 AI —— 它会按这批样本改规则、记台账、补回归用例。'
           : '还没有改判记录。遇到判错的长按卡片改一次，就会出现在这里；攒一批再一起复制。'}</span></div>
-          <button class="mini-btn" id="fixCopy"${fixStore.list.length ? '' : ' disabled'}>复制</button></div>
+          <span class="fix-btns"><button class="mini-btn" id="fixCopy"${fixStore.list.length ? '' : ' disabled'}>复制文本</button><button class="mini-btn" id="fixJson"${fixStore.list.length ? '' : ' disabled'}>复制 JSON</button></span></div>
         ${fixStore.list.length ? `<div class="set-row col"><div class="fix-prev">${fixStore.list.slice(0, 8).map(x =>
           `<div class="fix-prev-i"><b>${esc(x.to)}←${esc(x.from)}</b><span>${esc(String(x.title || '').slice(0, 44))}</span>`
           + `<i>${esc(x.reason || '未填原因')}</i></div>`
@@ -7110,10 +7141,12 @@
         }
         return;
       }
-      if (e.target.id === 'fixCopy') {
-        const txt = fixText();
+      if (e.target.id === 'fixCopy' || e.target.id === 'fixJson') {
+        const isJson = e.target.id === 'fixJson';
+        const label = isJson ? '复制 JSON' : '复制文本';
+        const txt = isJson ? fixJson() : fixText();
         if (!txt) return;
-        const done = () => { e.target.textContent = '已复制'; setTimeout(() => { e.target.textContent = '复制'; }, 1600); };
+        const done = () => { e.target.textContent = '已复制'; setTimeout(() => { e.target.textContent = label; }, 1600); };
         const fallback = () => {
           /* 非安全上下文 / 老 WebView 没有 clipboard API：塞进一个只读文本域让用户长按复制 */
           const ta = d.createElement('textarea');

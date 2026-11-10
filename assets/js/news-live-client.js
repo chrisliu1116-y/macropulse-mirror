@@ -46,6 +46,92 @@
   /* ---------------- 级别权重 ---------------- */
   const LV = { S: 4, A: 3, B: 2, C: 1 };
 
+  /* ---------------- P1 单一真源：数值阈值 ----------------
+   * 以前 9 组阈值（回购分档 / 指数·商品·龙头涨跌幅 / 增减持比例与金额 /
+   * 社融偏差 / 原油价位 / 标题长度）散在 croPillar、0.25、0.3、1.37 各处，
+   * 同一个数改一处忘一处就口径漂移（审查报告 §6.5：文档写 2%/7%，
+   * 代码却是 3%/8%）。现在全文件只引用 THRESHOLDS.xxx。
+   * 【改阈值只改这里；禁止在业务代码里再手写数字】 */
+  const THRESHOLDS = Object.freeze({
+    // ① 回购金额分档（亿元）
+    BUYBACK_A_CANCEL: 10,   // 回购 + 注销 → A
+    BUYBACK_A: 50,          // 只回购 → A
+    BUYBACK_C: 1,           // 低于此 → C 出清
+    // ② 价格幅度 A 档（%）
+    PCT_INDEX_A: 3,         // 核心指数 → A
+    PCT_SEMI_A: 5,          // 半导体六巨头 → A
+    PCT_COMMOD_A: 5,        // 商品主力合约 → A
+    PCT_GOLD_OIL_A: 5,      // 黄金 / 原油 → A
+    PCT_JPY_A: 2,           // 日元日内异动 → A
+    PCT_LEADER_A: 8,        // 龙头个股 → A
+    PCT_PRICE_UP_A: 15,     // 涨价函 → A
+    // ③ 价格幅度 B 档（%）
+    PCT_INDEX_B: 1,         // 核心指数 → B 市场行情
+    PCT_INDEX_B2: 2,        // 泛「指数」→ B 市场行情
+    PCT_OIL_B: 3,           // 原油 → B 重要快讯
+    PCT_LEADER_B: 5,        // 龙头个股 → B
+    PCT_GOLD_B: 2,          // 贵金属 → B
+    // ④ 大股东增减持
+    PCT_HOLDER_MIN: 1,      // 比例全局硬门槛（%）
+    AMT_HOLDER_B: 1,        // 金额 → B 留档（亿元）
+    AMT_HOLDER_A: 100,      // 交易额 → A（亿元）
+    AMT_DEAL_A: 100,        // 并购对价 → A 链（亿元）
+    // ⑤ 社融与预期偏差（亿元）
+    AMT_SOCIAL_DEV: 5000,
+    // ⑥ 原油绝对价位（美元）
+    OIL_PRICE_A: 90,
+    // ⑦ 匹配 / 标题
+    HEAD_MIN_LEN: 6,        // 短于此才允许正文兜底（scope 契约）
+    HOLLOW_TITLE_MAX: 40,   // 纯设问空壳标题长度上限
+    MEGA_HITS: 2            // 美股巨头标题命中次数（区分蹭名）
+  });
+  /* ---------------- P1 单一真源：主体词表 ----------------
+   * 以前 13 张龙头 / 央行 / 半导体名单散在 croPillar、0.11、1.37、1.38 各处，
+   * 同一个「龙头」在不同闸门里名单不同步（v97 才补上 US_MEGA，v100 又补
+   * GLOBAL_LEADER）。现在所有名单集中到 ENTITIES，正则统一由 ENTITY_RE 生成，
+   * 衍生组合（ALL_LEADERS / HOLDER_LEADERS）也只在这里拼一次。
+   * 【新增龙头只改 ENTITIES，禁止在闸门里另写一份名单】 */
+  const ENTITIES = Object.freeze({
+    CRO_CORE_INDEX: '韩国综合指数|KOSPI|日经225|日经指数|N225|斯托克50|STOXX50|SX5E|纳斯达克100|纳指期货',
+    CRO_SEMI6: '台积电|TSMC|英伟达|NVIDIA|NVDA|SK海力士|海力士|三星电子|ASML|阿斯麦|美光|MICRON',
+    LEADER_ACTION: '发行|发债|融资|募资|定增|配股|可转债|收购|并购|分拆|上市|退市|破产|重整|裁员|反垄断|罚款|获批|中标|签约|投资|建厂|扩产|产能|停产|事故|调查|订单|出货|诉讼',
+    LEADER_NOT: '净利|营收|业绩|财报|同比|环比|毛利|每股收益|回购|增持|减持|质押|解禁|股权激励|分红|派息|总股本',
+    LEADER: '宁德时代|比亚迪|中芯国际|长江存储|长鑫存储|隆基|阳光电源|华为|小米|腾讯|阿里|茅台|海天|美的|格力|三一|中车|中国神华|紫金矿业|赣锋|天齐|亿纬|国轩|海辰',
+    ELEPHANT: '阿里巴巴|腾讯|宁德时代|比亚迪|中芯国际|长江存储|长鑫存储|贵州茅台|紫金矿业|中国神华|美团|京东|拼多多|小米|海康威视|隆基|工业富联|中国平安|招商银行|工商银行|建设银行',
+    AI_LEADER: 'OpenAI|Anthropic|xAI|Grok|DeepSeek|英伟达|NVIDIA|台积电|ASML|博通|CoreWeave|Perplexity|Mistral|Scale\\s*AI|月之暗面|智谱|MiniMax',
+    TOP_CB: '鲍威尔|拉加德|植田和男|贝利|潘功胜|美联储主席|欧洲央行行长|日本央行行长|英国央行行长|中国人民银行行长',
+    TOP4_CB: '美联储|FOMC|鲍威尔|欧洲央行|拉加德|日本央行|植田和男|英国央行|贝利|中国人民银行|中国央行|潘功胜',
+    US_MEGA: '英伟达|NVIDIA|NVDA|高通|Qualcomm|QCOM|苹果|Apple|AAPL|微软|Microsoft|MSFT|谷歌|Alphabet|GOOGL|亚马逊|Amazon|AMZN|Meta|脸书|特斯拉|Tesla|TSLA|台积电|TSMC|AMD|超威|英特尔|Intel|博通|Broadcom|美光|Micron|阿斯麦|ASML|三星电子|奈飞|Netflix|甲骨文|Oracle|Palantir|超微电脑|戴尔|思科|德州仪器|应用材料|拉姆研究|科磊',
+    A_LEADER: '贵州茅台|宁德时代|比亚迪|中芯国际|寒武纪|东方财富|中国平安|招商银行|工商银行|建设银行|农业银行|中国银行|中国移动|长江电力|五粮液|美的集团|隆基绿能|中信证券|紫金矿业|洛阳钼业|北方稀土|中际旭创|工业富联|海光信息|立讯精密|万科|腾讯|阿里巴巴|美团|小米|京东|网易|快手|百度|汇丰|友邦',
+    GLOBAL_LEADER: '斯泰兰蒂斯|Stellantis|STLA|福特|Ford|通用汽车|General Motors|大众汽车|Volkswagen|丰田|Toyota|本田|Honda|日产|Nissan|宝马|BMW|奔驰|Mercedes|现代汽车|波音|Boeing|空客|Airbus|卡特彼勒|Caterpillar|西门子|Siemens|霍尼韦尔|Honeywell|强生|辉瑞|默克|诺华|罗氏|阿斯利康',
+    HUANG_SUBJ: '黄仁勋|英伟达|黄乐|Alice\\s*Huang|Jensen\\s*Huang|NVDA',
+  });
+  const ENTITY_RE = (function (E) {
+    const R = {};
+    R.CRO_CORE_INDEX = new RegExp(E.CRO_CORE_INDEX, '');
+    R.CRO_SEMI6 = new RegExp(E.CRO_SEMI6, '');
+    R.LEADER_ACTION = new RegExp(E.LEADER_ACTION, '');
+    R.LEADER_NOT = new RegExp(E.LEADER_NOT, '');
+    R.LEADER = new RegExp(E.LEADER, '');
+    R.ELEPHANT = new RegExp(E.ELEPHANT, '');
+    R.AI_LEADER = new RegExp(E.AI_LEADER, 'i');
+    R.TOP_CB = new RegExp(E.TOP_CB, '');
+    R.TOP4_CB = new RegExp(E.TOP4_CB, '');
+    R.US_MEGA = new RegExp(E.US_MEGA, '');
+    R.A_LEADER = new RegExp(E.A_LEADER, '');
+    R.GLOBAL_LEADER = new RegExp(E.GLOBAL_LEADER, '');
+    R.HUANG_SUBJ = new RegExp(E.HUANG_SUBJ, '');
+    /* 衍生 1：全部龙头并集 —— 1.38 留档闸原先手写了 4 个 .test() OR，
+     * 每次补名单都要同步改；现在一处生成、全闸共用。 */
+    R.ALL_LEADERS = new RegExp([E.US_MEGA, E.A_LEADER, E.GLOBAL_LEADER, E.CRO_SEMI6].join('|'));
+    /* 衍生 2：增减持闸的龙头口径（A股港股 + 美股科技），与 1.38 同源。 */
+    R.HOLDER_LEADERS = new RegExp([E.A_LEADER, E.US_MEGA].join('|'));
+    /* 衍生 3：AI 龙头 ∪ 美股科技龙头（AI 资本动作 / 行情异动共用）。 */
+    R.AI_OR_MEGA = new RegExp([E.AI_LEADER, E.US_MEGA].join('|'), 'i');
+    return R;
+  })(ENTITIES);
+
+
   /* ---------------- S 级规则 ---------------- */
   const S_PAT = [
     // 地缘：必须是「已经打出去了」的动作
@@ -551,8 +637,8 @@
    *   「宁德时代：第三季度净利同比增长23%」必须仍是 C；
    * 不收回购/增减持/质押/解禁/分红 —— v73 有独立的金额分档（<1亿出清），
    *   不能因为主体是龙头就绕过那套分档。这两类继续走原有公司事项链。 */
-  const LEADER_ACTION = /发行|发债|融资|募资|定增|配股|可转债|收购|并购|分拆|上市|退市|破产|重整|裁员|反垄断|罚款|获批|中标|签约|投资|建厂|扩产|产能|停产|事故|调查|订单|出货|诉讼/;
-  const LEADER_NOT = /净利|营收|业绩|财报|同比|环比|毛利|每股收益|回购|增持|减持|质押|解禁|股权激励|分红|派息|总股本/;
+  const LEADER_ACTION = ENTITY_RE.LEADER_ACTION;
+  const LEADER_NOT = ENTITY_RE.LEADER_NOT;
 
   const US_STOCK = [
     [/苹果|iPhone|\bAAPL\b/i, 'AAPL'],
@@ -1021,6 +1107,7 @@
      * 所以只匹配词组，不用裸「统计」。 */
     if (/研选|次数统计|历史统计|走势统计|数据统计|复盘[:：]|盘点[:：]|历次回顾/.test(t)
       && !/统计局|统计公报|统计法/.test(t)) {
+      _mark('croVeto#1', 'croVeto');
       return VCAT['统计栏目'];
     }
     // ① 小国常规数据（除非政权颠覆 / 主权违约 / 汇率崩盘）
@@ -1030,33 +1117,37 @@
     if (CRO_SMALL_ECO.test(t) && CRO_MACRO_DATA.test(t)
       && !/政权|政变|颠覆|主权违约|债务违约|重组|崩盘|贬值\s*[5-9]|贬值\s*1\d/.test(t)
       && !(/(行长|主席|官员|委员|理事|执委)/.test(t) && /[：:]/.test(t))) {
+      _mark('croVeto#2', 'croVeto');
       return VCAT['小国常规数据'];
     }
     // ② 零售终端价格
     if (CRO_RETAIL_CHAIN.test(t)
       && !/回购|财报|业绩|净利|营收|公告|中标|签约|并购|重组|立案/.test(t)) {
+      _mark('croVeto#3', 'croVeto');
       return VCAT['零售终端价格'];
     }
     // ③ 边缘板块异动
-    if (CRO_EDGE_SECTOR.test(t) && CRO_MOVE_WORD.test(t)) return VCAT['边缘板块异动'];
+    if (CRO_EDGE_SECTOR.test(t) && CRO_MOVE_WORD.test(t)) { _mark('croVeto#4', 'croVeto'); return VCAT['边缘板块异动']; }
     /* ④ 规划 / 蓝图：没有落地文件、没有资金、没有时间表的远期设想。
      * 用户点名：「印尼2028粮食规划」这种连 B 级都不配，纯粹占屏幕。
      * 例外：带明确资金额或「正式印发/落地」的才算真政策。 */
     if (/\d{4}\s*年[^。]{0,10}(规划|蓝图|愿景|目标|设想|路线图)/.test(t)
       && !/(正式|印发|落地|下达|拨款|亿元|亿美元)/.test(t)) {
+      _mark('croVeto#5', 'croVeto');
       return VCAT['远期规划'];
     }
     /* ⑤ 行业协会 / 学会 / 研究会开会与领导发言 —— 不是市场事件。
      * 用户点名：「中钢协某领导开会发言」。 */
     if (/(协会|学会|研究会|联合会|商会)/.test(t)
       && /(领导|会长|副会长|秘书长|理事长|某|负责人|专家).{0,12}(表示|称|指出|发言|讲话|开会|研讨|论坛|峰会)/.test(t)) {
+      _mark('croVeto#6', 'croVeto');
       return VCAT['协会发言'];
     }
-    if (/某(领导|负责人|专家|官员|人士)/.test(t)) return VCAT['无主体发言'];
+    if (/某(领导|负责人|专家|官员|人士)/.test(t)) { _mark('croVeto#7', 'croVeto'); return VCAT['无主体发言']; }
     /* ⑥ 体育 / 娱乐 —— 与宏观定价无关。
      * 例外：含救市语境（「国家队资金入场护盘」）的放行，
      * 因为这里的「国家队」是证金汇金，不是球队。 */
-    if (CRO_SPORT.test(t) && !CRO_SPORT_OK.test(t)) return VCAT['体育娱乐'];
+    if (CRO_SPORT.test(t) && !CRO_SPORT_OK.test(t)) { _mark('croVeto#8', 'croVeto'); return VCAT['体育娱乐']; }
     /* ⑦ 公司高管「回顾式表态」—— 讲的是自家过去的事，不是新事件。
      * 纠错单（11-05 23:56）：「安赛乐米塔尔首席财务官：在停产前，乌克兰的产能
      * 已受到显著影响，我们当时并未向欧洲出口」被支柱5「停产+产能」抬成 A。
@@ -1064,6 +1155,7 @@
     if (/^[^，。；]{2,26}(首席执行官|首席财务官|首席运营官|CEO|CFO|COO|董事长|总裁|总经理|财务总监|发言人)[：:]/.test(t)
       && /当时|此前|之前|并未|我们|回顾|在.{0,10}前/.test(t)
       && !/宣布|决定|拟|计划|将|签署|发布|获批|投产|扩产|裁减|上调|下调/.test(t)) {
+      _mark('croVeto#9', 'croVeto');
       return VCAT['公司高管表态'];
     }
     /* ⑧ 小国货币对日常波动 —— 用户口径「小国汇率不管」。
@@ -1072,6 +1164,7 @@
     const MINOR_FX = /兹罗提|福林|克朗|列伊|列弗|库纳|第纳尔|格里夫纳|兰特|比索|雷亚尔|林吉特|泰铢|印尼盾|卢比|里拉|谢克尔/;
     if (MINOR_FX.test(t) && /兑|汇率|贬值|升值|跌|涨/.test(t)
       && !/崩盘|危机|管制|违约|脱钩|暴跌|大幅贬值|贬值\s*[5-9]|贬值\s*1\d/.test(t)) {
+      _mark('croVeto#10', 'croVeto');
       return VCAT['小国汇率波动'];
     }
     /* ⑨ 小国政局人事变动 —— 用户口径（11-06 01:04）：
@@ -1088,6 +1181,7 @@
     if (MINOR_COUNTRY.test(t) && POLITY_PERSONNEL.test(t) && POLITY_ACTION.test(t)
       && !/美国|中国|俄罗斯|欧盟|北约|日本|英国|德国|法国|印度|沙特|伊朗|以色列|乌克兰|韩国|G7|G20|联合国|美联储|OPEC/.test(t)
       && !/主权违约|债务违约|金融危机|银行体系|系统性风险|全面战争|开战|制裁|封锁|政变|军事/.test(t)) {
+      _mark('croVeto#11', 'croVeto');
       return VCAT['小国政局人事'];
     }
     /* ⑩ 公司高管「退休 / 离任」类人事谈资 —— 用户口径（11-09 21:34）：
@@ -1101,6 +1195,7 @@
     if (EXEC_LEAVE.test(t)
       && (EXEC_TITLE.test(t) || CORP_SUFFIX_RE.test(t))
       && !/辞职|被罢免|接受调查|被捕|去世|逝世|病逝/.test(t)) {
+      _mark('croVeto#12', 'croVeto');
       return VCAT['公司人事谈资'];
     }
     /* ⑪ 广告 / 营销活动 —— 不是新闻。
@@ -1108,6 +1203,7 @@
      * 撞上「非农」两个字就一路进了 A。含宏观关键词不算豁免理由，
      * 只要同时是广告话术就出清。 */
     if (/竞猜|赢大奖|有奖|抽奖|扫码|下载\s*APP|注册领|开户领|领取福利|红包|优惠券|限时特惠|活动报名|福利放送/i.test(t)) {
+      _mark('croVeto#13', 'croVeto');
       return VCAT['广告活动'];
     }
     return '';
@@ -1162,8 +1258,8 @@
   }
 
   /* 支柱 2 名单：只认这 4 个指数、这 6 家半导体龙头 */
-  const CRO_CORE_INDEX = /韩国综合指数|KOSPI|日经225|日经指数|N225|斯托克50|STOXX50|SX5E|纳斯达克100|纳指期货/;
-  const CRO_SEMI6 = /台积电|TSMC|英伟达|NVIDIA|NVDA|SK海力士|海力士|三星电子|ASML|阿斯麦|美光|MICRON/;
+  const CRO_CORE_INDEX = ENTITY_RE.CRO_CORE_INDEX;
+  const CRO_SEMI6 = ENTITY_RE.CRO_SEMI6;
 
   /**
    * 能不能进 A：必须精确命中 6 大支柱之一，且满足硬门槛。
@@ -1218,8 +1314,8 @@
      * 所以这里**不区分**单家公告还是行业汇总 —— 一批龙头同时回购
      * 本身就是行业资金面的信号，比单家 50 亿更值得看。
      * （曾经加过 aggregate 闸把这类挡成 B，已按用户口径撤掉。） */
-    if (bbAmt >= 10 && /注销/.test(t)) return true;
-    if (bbAmt >= 50) return true;
+    if (bbAmt >= THRESHOLDS.BUYBACK_A_CANCEL && /注销/.test(t)) return true;
+    if (bbAmt >= THRESHOLDS.BUYBACK_A) return true;
     /* 没写具体金额、但明确在说「回购潮」的市场统计也算 A。
      * 实跑漏判：「A股回购金额创历史新高」被当成无金额公司公告 → C 出清。
      * 它和「科创板半导体新增回购上限突破100亿」是同一件事的两种写法：
@@ -1242,7 +1338,7 @@
     if (/实体清单|断供|禁令|出口管制/.test(t)
       && /华为|中芯|寒武纪|台积电|海力士|三星|ASML|先进制程|HBM|EDA/.test(t)) return true;
     /* 行业总龙头（前三大）的重大动作 —— 用户口径 v50 新增 */
-    const LEADER = /宁德时代|比亚迪|中芯国际|长江存储|长鑫存储|隆基|阳光电源|华为|小米|腾讯|阿里|茅台|海天|美的|格力|三一|中车|中国神华|紫金矿业|赣锋|天齐|亿纬|国轩|海辰/;
+    const LEADER = ENTITY_RE.LEADER;
     /* 注意：这里**不含**「并购/收购/合并」。
      * 用户口径（18:47）：「收购一般都放在公司新闻，不够 A；50 亿是**回购**的门槛。」
      * 「紫金矿业拟 320 亿元收购某锂矿」曾经靠这条进 A —— 买方买资产不是宏观事件。 */
@@ -1254,7 +1350,7 @@
      * 所以这里删掉了原来的「并购对价 ≥100 亿 → A」：买方买矿、买子公司都是公司新闻。
      * 唯一例外是**大象被吞并** —— 被吃掉的那一方本身是巨头/千亿级，
      * 才会改变行业格局和指数权重。 */
-    const ELEPHANT = /阿里巴巴|腾讯|宁德时代|比亚迪|中芯国际|长江存储|长鑫存储|贵州茅台|紫金矿业|中国神华|美团|京东|拼多多|小米|海康威视|隆基|工业富联|中国平安|招商银行|工商银行|建设银行/;
+    const ELEPHANT = ENTITY_RE.ELEPHANT;
     if (/(被收购|被并购|被私有化|被要约|收购.{0,8}(控制权|控股权)|(控制权|控股权).{0,6}(变更|转让))/.test(t)
       && (ELEPHANT.test(t) || /龙头|巨头|千亿|万亿|行业第一|前三|五百强|央企|国资/.test(t))) return true;
     /* 国家部委针对重点行业的专项扶持 / 补贴落地文件 */
@@ -1263,16 +1359,16 @@
     if (/(低空经济|固态电池|商业航天|人形机器人).{0,12}(专项|补贴|试点|扶持|政策).{0,8}(落地|出台|印发|发布)/.test(t)) return true;
 
     /* ---- 支柱 2：全球关键链条龙头 / 亚太核心指数 ---- */
-    if (CRO_CORE_INDEX.test(t) && mx >= 3) return true;
-    if (CRO_SEMI6.test(t) && mx >= 5) return true;
+    if (CRO_CORE_INDEX.test(t) && mx >= THRESHOLDS.PCT_INDEX_A) return true;
+    if (CRO_SEMI6.test(t) && mx >= THRESHOLDS.PCT_SEMI_A) return true;
     if (CRO_SEMI6.test(t) && /火灾|停产|停工|缺陷|推迟出货|断供|爆炸/.test(t)) return true;
 
     /* ---- 支柱 3：战略大宗、汇率攻防、供给源头 ---- */
     /* 只认期货与现货源头（COMEX / 伦敦金 / 布伦特 / WTI / 上期所原油）。
      * 黄金股、贵金属 ETF、板块高开都属于「股票」，不是大宗资产本身。 */
-    if (/黄金|金价|XAU|COMEX/.test(t) && (mxP >= 5 || /历史新高|创历史/.test(t))
+    if (/黄金|金价|XAU|COMEX/.test(t) && (mxP >= THRESHOLDS.PCT_GOLD_OIL_A || /历史新高|创历史/.test(t))
       && !/板块|ETF|黄金股|概念|个股|赤峰|山东黄金|紫金|晓程|中金黄金/.test(t)) return true;
-    if (/布伦特|布油|WTI|美油|原油|油价/.test(t) && mxP >= 5
+    if (/布伦特|布油|WTI|美油|原油|油价/.test(t) && mxP >= THRESHOLDS.PCT_GOLD_OIL_A
       && !/燃料油|沥青|液化气|PX|PTA|乙二醇|塑料|甲醇/.test(t)) return true;
     if (/OPEC|欧佩克/.test(t) && /紧急|非例行|减产|增产/.test(t)) return true;
     /* 天然气也是关键能源定价 —— 用户点名：
@@ -1293,7 +1389,7 @@
     const JPY_MOVE = /振幅|日内|波动|大涨|大跌|暴涨|暴跌|升值|贬值|走高|走低|拉升|跳水/;
     if (JPY_OFFICIAL.test(t) && /宣布|实施|进行|启动|执行|开展/.test(t)
       && /外汇干预|汇市干预|干预汇市|入市干预|买入日元|抛售美元|卖出美元|干预/.test(t)) return true;
-    if (JPY_PAIR.test(t) && JPY_MOVE.test(t) && mxP >= 2) return true;
+    if (JPY_PAIR.test(t) && JPY_MOVE.test(t) && mxP >= THRESHOLDS.PCT_JPY_A) return true;
     if (/离岸人民币|USDCNH|CNH/.test(t) && /\d{3,4}\s*点/.test(t)) return true;
     if (/美元指数|DXY/.test(t)) return false;
     if (/外汇存款准备金|离岸央票|稳汇率/.test(t)) return true;
@@ -1341,7 +1437,7 @@
         const near = t.slice(Math.max(0, am.index - 20), am.index);
         if (/预期|偏差|多增|少增|高于|低于|差额|缺口/.test(near) && v > dev) dev = v;
       }
-      if (dev >= 5000) return true;
+      if (dev >= THRESHOLDS.AMT_SOCIAL_DEV) return true;
     }
     /* ---- 以下按用户口径（v50）拓宽 A 级非行情类 ----
      * 原话：「适度拓宽 A 级非行情类新闻的包容度」+ 列举了六类。 */
@@ -1386,7 +1482,7 @@
     /* ---- 支柱 5：核心工业产能出清与涨价 ---- */
     if (/自律|控产|限产|限价|产能出清/.test(t) && /公约|协议|机制|核查/.test(t)) return true;
     if (/涨价函|提价|上调报价/.test(t)
-      && /存储|DRAM|NAND|闪存|硅片|组件|面板|稀土/.test(t) && mx >= 15) return true;
+      && /存储|DRAM|NAND|闪存|硅片|组件|面板|稀土/.test(t) && mx >= THRESHOLDS.PCT_PRICE_UP_A) return true;
 
     /* ---- 支柱 1 扩展：行业龙头重大动作（用户明确要求纳入 A） ---- */
     /* 行业前三 / 总龙头的并购、反垄断、停产大修。
@@ -1626,8 +1722,9 @@
    *   ② CRO 6 大支柱（真实资本定价权与硬门槛）
    * 任一不过 → B。这是「百亿组合会不会因此调仓」的最终裁决。 */
   function asA(cat, head, text) {
-    if (aCap(head, cat, text)) return ['B', cat];
-    if (!croPillar(head, cat, text)) return ['B', cat];
+    if (aCap(head, cat, text)) { _mark('aCap:down', 'aCap'); return ['B', cat]; }
+    if (!croPillar(head, cat, text)) { _mark('croPillar:miss', 'croPillar'); return ['B', cat]; }
+    _mark('croPillar:hit', 'croPillar');
     return ['A', cat];
   }
 
@@ -2001,9 +2098,31 @@
     return gradeCore(title, brief, important, stocks, src);
   }
 
+  /* ---------------- P2-A 决策追溯（Decision Trace） ----------------
+   * 返回 { level, cat, ruleId, stage, gv }。ruleId 精确到：
+   *   · croVeto#N        —— 一票否决第 N 条
+   *   · croPillar:hit/miss —— 支柱命中或未过门槛
+   *   · aCap:down        —— 旧闸把 A 压回 B
+   *   · S_RE[i] / A_RE[i] / B_RE[i] —— 命中第 i 条科目正则
+   *   · 0.13f / 0.12-3 … —— 命中哪条历史纠错前置闸（含 stage 桶）
+   *   · pipeline:S / fallback:C —— 四步流水线自身的出口
+   * 长按卡片写纠错单时自动带上，导出后可直接定位病根，不用再复现猜规则。 */
+  function explain(title, brief, important, stocks, src) {
+    const r = grade(title, brief, important, stocks, src);
+    const tr = _gateTrace;
+    return {
+      level: r ? r[0] : 'C',
+      cat: r ? r[1] : '',
+      ruleId: tr ? tr.ruleId : ('pipeline:' + (r ? r[0] : 'C')),
+      stage: tr ? tr.stage : 'pipeline',
+      gv: GRADE_VER
+    };
+  }
+
   /* P0-3 单一出口：把原来散在 enrich() 里的 4 处来源改级 + grade() 里的
    * 标红兜底，全部内聚到这里。gradeCoreRules() 只产出「规则判定的原始级别」。 */
   function gradeCore(title, brief, important, stocks, src) {
+    _gateTrace = null;   // P2-A：每次判级重置决策追溯
     let r = gradeCoreRules(title, brief, important, stocks);
     const t = String(title || '');
     const s = String(src || '');
@@ -2030,30 +2149,25 @@
     return r;
   }
 
-  /* 纯规则判定主体（138 个早退出口），不碰来源、不碰标红。 */
-  function gradeCoreRules(title, brief, important, stocks) {
-    title = desig(title); brief = desig(brief);
-    const text = title + ' ' + brief;
-    const head = title;
-    /* ---------------- P0 统一 head / text 匹配契约 ----------------
-     * 起因：S_RE / A_RE / B_RE 三张表原本用 r.test(text)（标题+正文）匹配，
-     * 于是正文里一句背景词（「其中包括油轮」「附近有油田」）就能绕过所有
-     * 只看 head 的守门闸，把例行战报顶成 S。见 docs/分级规则全览.md §6.2。
-     *
-     * 契约：**定级一律以 head 为准**。唯一例外是 head 为空或极短
-     * （< 6 字符，如「快讯」「【独家】」）时，允许正文作为标题的延伸参与匹配 ——
-     * 这是用户明确认可的「标题为空或极短快讯」必要兜底。
-     *
-     * 【正文白名单登记】以下 3 处仍看 text/brief，但都不可能抬到 S/A，
-     * 且必须在此登记；任何新增项想看正文，先在这里写理由：
-     *   W1 空壳标题出清（AD_TEXT.test(text)）——仅降 C，且前置 HOLLOW_TITLE(head)
-     *   W2 海外财政稳市场动作词（MK_STAB_ACT.test(text)）——用户 v74 口径：
-     *      标题常是「首句截断」，动作词落在第二句；主体与议题仍必须 head 命中
-     *   W3 美债/中国政策分类矫正（US_RATE.test(text)）——只改分类，不改级别；
-     *      刻意看全文，防止正文出现「财政部」就误判成中国政策
-     * 其余一律不许 .test(text)。修改时用 `grep -n '\.test(text)'` 复核。 */
-    const scope = String(head || '').trim().length >= 6 ? head : text;
+  /* ---------------- P1-C 历史纠错插队闸归位 + P2-A 决策追溯 ----------------
+   * 以前每张标级纠错单都往 gradeCoreRules 头部插一个 `if (...) return [...]`
+   * 早退闸（0.13f / 0.13d / 0.13e / 0.11 / 0.12 / 0.18* / 0.13*），
+   * 共 29 个特例短路分支，顺序即语义、新闸会截断旧规则（审查报告 §6.1）。
+   *
+   * 现在按语义归位成三个声明式前置阶段，gradeCoreRules 里只留 3 次调用：
+   *   stage=croVeto   → C 出清（一票否决桶）
+   *   stage=croPillar → A 提级（支柱桶）
+   *   stage=aCap      → S→A / A→B 压制（降档守门桶）
+   *   stage=pipeline  → 四步流水线本身的分流
+   * **执行顺序、判据、返回值 100% 保持原样**（整段照搬，只加 trace）。
+   *
+   * 【契约】未来收到纠错单，禁止再往 gradeCoreRules 里新增 `return [`；
+   * 按四桶归因改 ENTITIES / THRESHOLDS / croVeto / croPillar / aCap，
+   * 或往这里的 gate 段加一条（tools/test_grade.js 的棘轮锁会拦截新增早退）。 */
+  let _gateTrace = null;
+  function _mark(ruleId, stage) { _gateTrace = { ruleId: ruleId, stage: stage }; }
 
+  function runPreGates(head, brief, text) {
     /* 0.13f) 规则 v61「标级纠错单」1 条（规则 v60 导出 2026/11/10 13:39:49）
      * 「俄罗斯国防部表示，俄罗斯军队袭击了一批货物」原判 S/地缘 → 用户改判 A。
      * 用户给的原因（原话）：「不属于能引起市场巨震 开战（包括热战争和贸易战）
@@ -2084,6 +2198,7 @@
     if (WAR_BULLETIN_SUBJ.test(head) && WAR_BULLETIN_SAY.test(head)
       && WAR_BULLETIN_VAGUE.test(head) && WAR_BULLETIN_ACT.test(head)
       && !WAR_BULLETIN_ESC.test(head)) {
+      _mark('0.13f', 'aCap');
       return ['A', '地缘'];
     }
 
@@ -2101,6 +2216,7 @@
     const HAS_RESULT = /(?:\d+(?:\.\d+)?\s*%|同比\s*(?:上涨|下降|增长|回落|持平|录得|为)\s*[+-]?\d|录得\s*[+-]?\d|[+-]?\d+(?:\.\d+)?\s*(?:万人|万亿|亿元|基点|bp))/;
     if (SCHEDULE_ONLY.test(head) && !HAS_RESULT.test(head)
         && !HAS_RESULT.test(String(brief || '').slice(0, 120))) {
+      _mark('0.13d', 'croVeto');
       return ['C', VCAT['空壳预告']];
     }
 
@@ -2116,9 +2232,9 @@
      * 【必须放在所有规则最前面】标题里的「出轨 / 道歉」原本会被 CRO_SPORT 判
      *   「体育娱乐」或被「公司高管表态」判 C（都在 VETO_CATS，源标红也抬不回 B），
      *   这正是用户「A 里没有、B 里也看不到」的原因。 */
-    const HUANG_SUBJ = /黄仁勋|英伟达|黄乐|Alice\s*Huang|Jensen\s*Huang|NVDA/;
+    const HUANG_SUBJ = ENTITY_RE.HUANG_SUBJ;
     const HUANG_EVT = /出轨|不忠|婚外情|道歉|致歉|公开信|独立调查|间谍|情报机构|国家安全|国安疑虑/;
-    if (HUANG_SUBJ.test(head) && HUANG_EVT.test(head)) return ['A', '特殊事件'];
+    if (HUANG_SUBJ.test(head) && HUANG_EVT.test(head)) { _mark('0.13e-1', 'croPillar'); return ['A', '特殊事件']; }
 
     /* ② 特朗普涉「美伊 / 美以」局势的实质进展 → A/政治事件（4 条纠错单 A←B）。
      * 这 4 条原本都落在川普推文分支末尾的 `return ['B','政治事件']` ——
@@ -2134,19 +2250,20 @@
     const ME_GEO = /美伊|美以|伊朗|以色列|内塔尼亚胡|加沙|中东|战争费用|战事/;
     const ME_PROGRESS = /偿还|追款|费用|专访|访谈|和平计划|推进|洗牌|调整|不.{0,3}升级|谈判|协议|撤军|停火|驱逐政策/;
     if (TRUMP_ME_SUBJ.test(head) && ME_GEO.test(head) && ME_PROGRESS.test(head)) {
+      _mark('0.13e-2', 'croPillar');
       return ['A', '政治事件'];
     }
 
     /* 0) CRO 一票否决 —— 流水线第 1 步，先于一切分级规则。
      *    小国常规数据 / 零售终端价格 / 边缘板块异动：有信息量，但没有定价权。 */
     const veto = croVeto(head);
-    if (veto) return ['C', veto];
+    if (veto) { if (!_gateTrace) _mark('0-croVeto', 'croVeto'); return ['C', veto]; }
 
     /* 0.05) 民间调查数据：ADP / 挑战者 / 密歇根 / Markit → B。
      *  用户口径：「挑战者裁员那几条也不够 A 级，民间数据」。
      *  放在最前面，是因为「挑战者：美国10月企业裁员人数升至15.3万人」
      *  会被公司动作规则误判成 C 公司事项 —— 分类都不对。 */
-    if (CRO_PRIVATE_DATA.test(head)) return ['B', '宏观数据'];
+    if (CRO_PRIVATE_DATA.test(head)) { _mark('0.05', 'pipeline'); return ['B', '宏观数据']; }
 
     /* 0.055) 外围经济体的「量」类统计 → B。
      * 用户点名（11-05）：「CORES数据：西班牙9月原油进口同比下降7.4%，至480万吨」
@@ -2156,7 +2273,7 @@
      * 注意不含美国 —— EIA 原油库存仍是正经 A 级事件（A_RE 里有独立规则）。 */
     const CRO_SECOND_ECO = /西班牙|意大利|葡萄牙|希腊|爱尔兰|荷兰|比利时|奥地利|芬兰|丹麦|瑞典|挪威|波兰|捷克|匈牙利|土耳其|巴西|墨西哥|阿根廷|南非|印尼|马来|泰国|越南|菲律宾|新西兰|瑞士|加拿大|澳大利亚|德国|法国|英国|日本|韩国|印度/;
     const CRO_QTY_STAT = /(进口|出口|产量|库存|消费量|需求量|加工量|装船|到港|开工率|钻井数|订单量|交付量)(量|额|数)?[^。；]{0,16}?(同比|环比|增长|下降|上升|减少|增加|升至|降至|录得)/;
-    if (CRO_SECOND_ECO.test(head) && CRO_QTY_STAT.test(head)) return ['B', '宏观数据'];
+    if (CRO_SECOND_ECO.test(head) && CRO_QTY_STAT.test(head)) { _mark('0.055', 'aCap'); return ['B', '宏观数据']; }
 
     /* 0.1) 国务院 / 政治局级别的正式文件：优先级高于所有噪音规则。
      *      实跑里「《国务院关于金融工作情况的报告》全文发布」曾被 isNoise
@@ -2168,8 +2285,10 @@
        * 这是常规法规清理，对资本市场没有定价影响 → B。
        * 只有落在金融 / 经济 / 资本市场上的，才是真政策。 */
       if (!/金融|资本|经济|财政|货币|税收|产业|市场|投资|消费|就业|房地产|外贸|汇率|银行|保险|证券|内需|稳增长|民营|融资|信贷/.test(head)) {
+        _mark('0.1-B', 'aCap');
         return ['B', '中国政策'];
       }
+      _mark('0.1-A', 'croPillar');
       return ['A', '中国政策'];
     }
 
@@ -2197,15 +2316,16 @@
        * 改判为 C，不能因为带「国务院 + 加快」就抬 A。 */
       if (NAT_MEET.test(head) && NAT_ACT.test(head) && NAT_STRATEGY.test(head)
         && !/(现场会议|工作专班|协调机制|座谈会|研讨会|专题会|交流会|论坛)/.test(head)) {
+        _mark('0.11-1', 'croPillar');
         return ['A', '中国政策'];
       }
 
       /* ②③ AI 龙头的融资 / 注资 / 估值 / IPO / 股权变动 → A。
        * 用户口径：「ai龙头」「ai龙头相关」。这类公司的资本动作对整条
        * AI 链（算力 / 半导体 / 云）有定价权，比一家普通公司的公告重得多。 */
-      const AI_LEADER = /OpenAI|Anthropic|xAI|Grok|DeepSeek|英伟达|NVIDIA|台积电|ASML|博通|CoreWeave|Perplexity|Mistral|Scale\s*AI|月之暗面|智谱|MiniMax/i;
+      const AI_LEADER = ENTITY_RE.AI_LEADER;
       const AI_CAP = /融资|注资|投资方|估值|IPO|上市|股权|收购|战略投资|资本开支|轮融资|市值/;
-      if (AI_LEADER.test(head) && AI_CAP.test(head)) return ['A', '公司事项'];
+      if (AI_LEADER.test(head) && AI_CAP.test(head)) { _mark('0.11-2', 'croPillar'); return ['A', '公司事项']; }
 
       /* ④ 龙头个股盘前 / 盘后闪崩 ≥15% → A。
        * 用户口径「龙头股价闪崩20％」。阈值取 15% 是为了不误伤
@@ -2217,6 +2337,7 @@
       if (/(盘前|盘后|盘中|闪崩|重挫|暴跌)/.test(head)
         && /(扩大至|扩大到|跌幅|闪崩|重挫|暴跌|跳水|下挫|大跌|跌超|涨超|飙升)/.test(head)
         && /(?:^|[^\d])(2[0-9]|[3-9]\d)(?:\.\d+)?\s*%/.test(head)) {
+        _mark('0.11-4', 'croPillar');
         return ['A', '美股'];
       }
 
@@ -2225,6 +2346,7 @@
        * 之后，小非农 / ADP 等民间口径仍保持 B。 */
       if (/非农|NFP|nonfarm/i.test(head)
         && /(股市|美股|市场|反应|定价|降息预期|加息预期|美元|美债|黄金|指数|资产)/.test(head)) {
+        _mark('0.11-5', 'croPillar');
         return ['A', '宏观数据'];
       }
 
@@ -2238,6 +2360,7 @@
       const AD_TEXT = /竞猜|赢大奖|有奖|抽奖|扫码|下载\s*APP|注册领|开户领|领取福利|红包|优惠券|限时特惠|活动报名|福利放送|直播间|点击阅读|点击查看|立即查看|详情见|敬请关注|戳这里|专属福利|免费领取/i;
       if (HOLLOW_TITLE.test(head) && !/\d/.test(head)
         && (AD_TEXT.test(text) || !/\d/.test(String(brief || '').slice(0, 200)))) {
+        _mark('0.11-6', 'croVeto');
         return ['C', VCAT['空壳预告']];
       }
     }
@@ -2266,6 +2389,7 @@
         /* 但一旦连带油价/大宗异动，就不是「小事故」了（如「胡塞袭击红海油轮，布伦特暴涨5%」） */
         && !/(暴涨|暴跌|大涨|大跌|飙升|重挫|涨停|跌停|油价|原油|布伦特|WTI|成品油)/.test(head)
         && !/\d\s*%/.test(head)) {
+        _mark('0.12-1', 'aCap');
         return ['B', '地缘'];
       }
 
@@ -2275,6 +2399,7 @@
       if (/(计划|打算|考虑|准备|拟|或将|据悉将|有意)/.test(head)
         && /(解雇|撤职|罢免|解职|免职|开除)/.test(head)
         && !/(已解雇|已撤职|已罢免|已宣布解雇|正式解雇|已经解雇)/.test(head)) {
+        _mark('0.12-2', 'aCap');
         return ['B', '政治事件'];
       }
 
@@ -2298,6 +2423,7 @@
           && /(伊朗|格什姆|霍尔木兹|波斯湾|中东|以色列|美军|叙利亚|黎巴嫩|也门|胡塞)/.test(head)
           && !WAR_ESCALATE.test(head)
           && !/(核设施|核电站|宣战|战争状态|全面战争|政权更迭)/.test(head)) {
+          _mark('0.12-3', 'aCap');
           return ['A', '地缘'];
         }
       }
@@ -2309,6 +2435,7 @@
         && /(修复|扩建|重建|建设|加固|恢复)/.test(head)
         && /(设施|基地|导弹|核|机场|港口)/.test(head)
         && !WAR_ESCALATE.test(head)) {
+        _mark('0.12-4', 'aCap');
         return ['A', '地缘'];
       }
 
@@ -2320,6 +2447,7 @@
         && /(算力|芯片|数据中心|租约|订单|产能|大模型|GPU|AI)/.test(head)
         && /(终止|取消|暂停|中止|减产|停产|涨价|降价|断供|禁售|限制出口|砍单|撤单|裁员|追加订单|收购)/.test(head)
         && !/(机构|分析师|研报|评级|目标价|认为|预计)/.test(head)) {
+        _mark('0.12-5', 'croPillar');
         return ['A', '公司事项'];
       }
 
@@ -2329,6 +2457,7 @@
       if (/(特朗普|美方|美国)/.test(head) && /伊朗|中东|胡塞|委内瑞拉|墨西哥|朝鲜/.test(head)
         && /(打击|空袭|轰炸|军事行动|出兵|袭击)/.test(head)
         && !NEG_MIL.test(head)) {
+        _mark('0.12-6', 'croPillar');
         return ['A', '政治事件'];
       }
 
@@ -2337,6 +2466,7 @@
        * 只认中国央行/人民银行；世界黄金协会等协会口径不动。 */
       if (/中国央行|人民银行/.test(head) && /黄金|金价/.test(head)
         && /(储备|增持|扩大|增储|购金|买入|增加)/.test(head)) {
+        _mark('0.12-7', 'croPillar');
         return ['A', '海外央行'];
       }
 
@@ -2344,19 +2474,162 @@
        * 纠错样例「期货盯盘神器专属文章」（原 B/重要快讯）。 */
       if (/(期货盯盘神器|盯盘神器|专属文章|专属福利|开户专属)/.test(head)
         && /(文章|福利|活动|广告|推送|服务)/.test(head)) {
+        _mark('0.12-8', 'croVeto');
         return ['C', VCAT['广告活动']];
       }
 
       /* ⑨ C←B 纯设问标题（无数字、无实质动作）→ C/无实质内容。
        * 纠错样例「特朗普选举失利，能解开供油死结吗？」（原 B/政治事件）；
        * 同类「中期选举落幕，油市庆功太早？」一并压 C。源标红也不抬 B。 */
-      if (/[？?]\s*$/.test(head) && !/\d/.test(head) && head.length <= 40
+      if (/[？?]\s*$/.test(head) && !/\d/.test(head) && head.length <= THRESHOLDS.HOLLOW_TITLE_MAX
         && /(能|会|是否|吗|如何|为何|谁|何时|会不会|是不是|太早)/.test(head)
         && !/(宣布|签署|通过|批准|实施|开战|空袭|降息|加息|上调|下调|公布|发布|生效)/.test(head)) {
+        _mark('0.12-9', 'croVeto');
         return ['C', VCAT['无实质内容']];
       }
     }
+    return null;
+  }
 
+  function runPolicyGates(head, brief, text) {
+    /* 0.18) 美国 AI 产业重大监管 → A（用户 11-06 点名，两条漏网样本）
+     *  「中期选举后民主党高层呼吁限制人工智能产业扩张：立即暂停全国数据中心建设」
+     *  「量刑堪比非法研发核武！美国民主党提出超级AI禁令：20年监禁、企业强制解散」
+     * 以前：第一条只到 B/政治事件；第二条 _grade 判 B 但没有挂上任何标的，
+     * 被 _enrich 的 noAsset 闸整条出清 —— 用户在外部平台看到，看板里完全没有。
+     * 为什么够 A：全国性强制限制 AI 基建 / 把 AI 研发刑事化，直接改变科技股
+     * 资本开支与盈利预期，是可交易的产业政策，不是政治口水。
+     * 三道门槛叠加，避免把「某议员随口建议」「AI 风险评论」也抬成 A：
+     *   ① 主题是 AI / 算力 / 数据中心  ② 美国联邦级主体  ③ 强制动作或罚则
+     * 提案 / 呼吁也算 —— 用户明确说这两条都该是 A。 */
+    const AI_TOPIC = /人工智能|AI(?![A-Za-z])|算力|数据中心|大模型|GPU/;
+    const AI_ACTOR = /民主党|共和党|国会|参议院|众议院|白宫|美国政府|美国总统|联邦政府|两党|美国商务部|美国|总统/;
+    /* v104：补「开刀 / 收紧 / 封杀 / 叫停」—— 财联社深度稿的标题
+     * 「立马就拿数据中心"开刀"？"蓝潮"席卷美国，民主党高层接连发声！」
+     * 讲的就是同一件事（民主党要限制 AI 基建），但原词表里一个都没命中，
+     * 于是和用户点名的第一条一样掉到 B。 */
+    const AI_HARD = /禁令|禁止|暂停[^，。；]{0,12}(?:建设|扩张|项目|数据中心)|出口管制|实体清单|强制解散|解散|监禁|判刑|刑事|处罚|法案|行政令|立法|限制[^，。；]{0,10}(?:扩张|建设|研发|出口)|开刀|封杀|叫停|收紧[^，。；]{0,8}(?:监管|审批|政策)/;
+    const AI_NOISE = /股价|收跌|收涨|ETF|基金|目标价|评级|研报|观点|解读|分析称|担忧冲击|市值蒸发/;
+    if (AI_TOPIC.test(head) && AI_ACTOR.test(head) && AI_HARD.test(head)
+      && !AI_NOISE.test(head)) {
+      _mark('0.18', 'croPillar');
+      return ['A', '科技政策'];
+    }
+
+    /* 0.181) 中国高层定调科技/产业政策 → A（用户 11-06 点名漏网）
+     * 「何立峰：强化科技创新与产业创新深度融合，推动经济持续向新向优向好发展」
+     * 以前：冒号前是「何立峰」这个短主体，isFirmEvent 把它当成某公司公告
+     * → C / 公司事项，看板里整条消失。副总理级对科技创新方向的定调，
+     * 直接影响科创板 / 创业板与科技股风险偏好，是可交易的政策信号。
+     * 三道门槛避免把「某某：看好科技股」这类卖方观点抬成 A：
+     *   ① 高层 / 部委主体 ② 科技创新类主题 ③ 部署推动类动作。
+     * 「何立峰：中美经贸磋商取得积极进展」无科技主题，仍按原链。 */
+    const CN_TECH_ACTOR = /何立峰|李强|习近平|丁薛祥|张国清|刘国中|中共中央|国务院|政治局|中央经济工作会议|中央科技委|科技部|工信部|发改委/;
+    const CN_TECH_TOPIC = /科技创新|产业创新|新质生产力|科技自立自强|人工智能产业|数字经济|集成电路产业|半导体产业|科技强国|创新驱动/;
+    const CN_TECH_ACT = /强化|推动|加快|部署|支持|促进|深度融合|提出|强调|发布|规划|意见|会议|决定|要求/;
+    if (CN_TECH_ACTOR.test(head) && CN_TECH_TOPIC.test(head)
+      && CN_TECH_ACT.test(head)
+      && !/[?？]|股价|收涨|收跌|目标价|评级|研报|观点|解读/.test(head)) {
+      _mark('0.181', 'croPillar');
+      return ['A', '中国政策'];
+    }
+
+    /* 0.182) 海外财政部门针对股市波动的稳市场表态 → A（用户 11-06 点名漏网）
+     * 「韩国财政部：不排除美股下跌对全球市场产生外溢效应，将采取必要措施，
+     *  避免股市脱离基本面过度波动」以前 _grade 只判 B / 重要快讯，
+     * 又挂不上任何标的 → 被 noAsset 闸整条出清。财政部级「将采取必要措施」
+     * 是明确的稳市场预案，对全球风险资产定价有直接影响。
+     * 只认「财政部门 + 股市/外溢语境 + 实质动作」，纯「密切关注」不抬 A。 */
+    /* v104：补「财长」这个称谓 + 「采取（主动/应对）措施」这种说法。
+     * 实跑：财联社原稿「韩国财政部称，不排除美股下跌对全球市场产生外溢效应。
+     *   将采取必要措施，避免股市脱离基本面过度波动。」
+     * 级次判对了（A/海外政策），但标题是「首句截断」出来的，动作词落在第二句，
+     * 而 head 只含标题 → 掉回 B。见闻改写版「韩国财长：股市对外部因素反应过度」
+     * 同理（动作词在正文）。所以：主体+议题仍只在标题判，**动作词允许看全文**。 */
+    const MK_STAB_ACTOR = /财政部|财政部长|财长|企划财政部|财务省|金融委员会|金融监督院|证监会|证券期货委员会|金融监管机构/;
+    const MK_STAB_TOPIC = /股市|美股|全球市场|外溢效应|过度波动|市场波动|资本市场|脱离基本面|股价暴跌|股灾/;
+    const MK_STAB_ACT = /采取必要措施|采取[^，。；]{0,6}措施|采取措施|应对措施|必要时.{0,8}采取措施|将采取行动|稳定措施|稳定市场|稳定股市|干预|救市|托市|限制做空|禁止卖空|平准基金|避免.{0,12}过度波动/;
+    if (MK_STAB_ACTOR.test(head) && MK_STAB_TOPIC.test(head)
+      && (MK_STAB_ACT.test(head) || MK_STAB_ACT.test(text))
+      && !/[?？]|目标价|评级|研报|个股/.test(head)) {
+      _mark('0.182', 'croPillar');
+      return ['A', '海外政策'];
+    }
+    return null;
+  }
+
+  function runGeoCapGates(head, brief, text) {
+    // 0.13) v54「标级纠错单」1 条（规则 v53 导出 2026/11/7 15:10:40）
+    /* 用户纠错：「香港证监会收紧误导性称衔，降低投资者误判风险」原被判 S/中国政策。
+     * 「收紧误导性称衔」只是对金融从业人士头衔/称谓的规范（打击夸大宣传），
+     * 不是什么重大政策，不该触发 S。下调到 B/中国政策。
+     * 判据必须很窄：同时命中「证监会」+「称衔/误导性称衔/头衔」，
+     * 避免误伤真正的重磅监管（如证监会收紧融券、收紧IPO这类市场级动作）。 */
+    if (/证监会/.test(head) && /称衔|误导性称衔|头衔/.test(head)) {
+      _mark('0.13', 'aCap');
+      return ['B', '中国政策'];
+    }
+
+    // 0.13b) v55「标级纠错单」1 条（规则 v54 导出 2026/11/7 17:50:31）
+    /* 用户纠错：「胡塞武装称也门遭沙特主导的联军空袭致多人伤亡」原被判 S/地缘。
+     * 口径：区域冲突（代理人互射、遭空袭致伤亡）S 级只放能引发市场巨震的
+     * 超重磅政策 / 贸易战 / 战争爆发；单次区域空袭致伤亡属 A/地缘。
+     * 根因：PROXY_WAR→A 那条被 STRATEGIC_HIT（正文带红海/资产词）绕过，直落 S。
+     * 判据要窄：代理人/区域主体 + 空袭类动作，且**不含**真正的战略升级
+     * （封锁海峡 / 正式开战 / 全面战争 / 打击石油设施 / 美军航母基地 / 使馆 / 核）。
+     * 有战略升级的仍走下面 S_PAT 全流程，不被这条截走。 */
+    if (/胡塞|也门|加沙|黎巴嫩|真主党|哈马斯|叙利亚|伊拉克/.test(head)
+      && /空袭|袭击|遭袭|遇袭|炮击|打击|交火|冲突|爆炸/.test(head)
+      && !/封锁.{0,6}(海峡|航道)|霍尔木兹|曼德海峡|正式开战|宣布开战|进入战争状态|全面战争|地面(进攻|战)|石油设施|油田|炼油厂|输油|美军(基地|航母|军舰)|使馆|核(打击|试验|武器)/.test(head)) {
+      _mark('0.13b', 'aCap');
+      return ['A', '地缘'];
+    }
+
+    // 0.13c) 规则 v56「标级纠错单」1 条（规则 v55 导出 2026/11/9 00:18:46）
+    /* 用户纠错：「美国宣布将黎巴嫩驻底特律领事列为“不受欢迎人物”」原判 S/地缘 → A/地缘。
+     * 原因（用户原话）：「这种消息算不上 S 级，S 级只有能引爆市场剧烈震动的，
+     *   重磅政策如 924 或者战争开战（如美伊刚爆发冲突的时候），
+     *   或者 2000 年互联网泡沫、08 年金融海啸」。
+     * 外交礼节性反制（不受欢迎人物 / 驱逐或召见外交官 / 抗议照会 / 降低外交级别）
+     * 只是双边关系表态，不产生全球风险资产重定价，绝不能顶格 S。
+     * 判据刻意收窄：必须命中外交身份+动作词，且**不含**真正的升级信号
+     * （断交 / 宣战 / 空袭 / 封锁 / 制裁 / 关税 / 禁运 / 冻结资产 / 大规模撤侨），
+     * 那些仍走下面 S_PAT 全流程，不被这条截走。 */
+    const DIPLO_COURTESY = /(不受欢迎人物|驱逐.{0,8}(外交官|大使|领事|代办|武官)|召见.{0,8}(大使|代办|外交官)|外交抗议|抗议照会|降低外交(关系|级别)|撤回.{0,6}(大使|代办)|宣布.{0,6}(领事|外交官).{0,8}(离境|限期)|吊销.{0,6}(领事|外交).{0,4}(证件|签证))/;
+    const DIPLO_ESCALATE = /(断交|宣战|开战|全面战争|军事(打击|行动|进攻)|空袭|封锁|制裁|关税|禁运|冻结资产|核(打击|试验)|大规模(撤侨|撤离)|驱逐.{0,6}(全部|所有|数百))/;
+    if (DIPLO_COURTESY.test(head) && !DIPLO_ESCALATE.test(head)) {
+      _mark('0.13c', 'aCap');
+      return ['A', '地缘'];
+    }
+    return null;
+  }
+
+  /* 纯规则判定主体：四步流水线，前置特例闸已归位到上面 3 个 gate 阶段。 */
+  function gradeCoreRules(title, brief, important, stocks) {
+    title = desig(title); brief = desig(brief);
+    const text = title + ' ' + brief;
+    const head = title;
+    /* ---------------- P0 统一 head / text 匹配契约 ----------------
+     * 起因：S_RE / A_RE / B_RE 三张表原本用 r.test(text)（标题+正文）匹配，
+     * 于是正文里一句背景词（「其中包括油轮」「附近有油田」）就能绕过所有
+     * 只看 head 的守门闸，把例行战报顶成 S。见 docs/分级规则全览.md §6.2。
+     *
+     * 契约：**定级一律以 head 为准**。唯一例外是 head 为空或极短
+     * （< 6 字符，如「快讯」「【独家】」）时，允许正文作为标题的延伸参与匹配 ——
+     * 这是用户明确认可的「标题为空或极短快讯」必要兜底。
+     *
+     * 【正文白名单登记】以下 3 处仍看 text/brief，但都不可能抬到 S/A，
+     * 且必须在此登记；任何新增项想看正文，先在这里写理由：
+     *   W1 空壳标题出清（AD_TEXT.test(text)）——仅降 C，且前置 HOLLOW_TITLE(head)
+     *   W2 海外财政稳市场动作词（MK_STAB_ACT.test(text)）——用户 v74 口径：
+     *      标题常是「首句截断」，动作词落在第二句；主体与议题仍必须 head 命中
+     *   W3 美债/中国政策分类矫正（US_RATE.test(text)）——只改分类，不改级别；
+     *      刻意看全文，防止正文出现「财政部」就误判成中国政策
+     * 其余一律不许 .test(text)。修改时用 `grep -n '\.test(text)'` 复核。 */
+    const scope = String(head || '').trim().length >= THRESHOLDS.HEAD_MIN_LEN ? head : text;
+
+    const preHit = runPreGates(head, brief, text);
+    if (preHit) return preHit;
     /* ---------------- 川普 Truth Social 推文 ----------------
      * 用户口径（原话）：
      *   「川普的言论有时候会涉及『现在是买入股票的最好时间』或者『他要打击伊朗』，
@@ -2370,16 +2643,19 @@
     if (/川普|特朗普|Trump/.test(head)) {
       // S：对中国（或其他大国）宣布全面加征关税
       if (/(全面|全部|所有).{0,8}关税|关税.{0,8}(全面|升至|提高至|提高到|上调至|提至).{0,6}[2-9]\d\s*%|对(中国|华).{0,12}(加征|征收|上调|提高).{0,10}关税/.test(head)) {
+        _mark('trump:tariff-S', 'pipeline');
         return ['S', '关税'];
       }
       /* 川普亲口宣布「结束」也算 S —— 和 3-pre 的 S_END 同一条口径，
        * 但川普推文在这个分支就被拦下了，走不到那里。
        * 用户口径（11-05）：「重大战争的结束也是 S，包括贸易战的结束。」 */
       if (/贸易战.{0,8}(结束|休战|终止)|(结束|终止|取消).{0,8}(贸易战|关税战)/.test(head)) {
+        _mark('trump:tariff-S', 'pipeline');
         return ['S', '关税'];
       }
       if (/(签署|达成).{0,14}?(停战|停火|和平)(协议|协定|条约)|正式(停战|停火)|宣布.{0,6}(战争|冲突|战事).{0,4}(结束|终止)/.test(head)
         && !/即将|将于|将\s*(签署|达成)|拟|计划|有望|预计|准备|考虑|或将|可能/.test(head)) {
+        _mark('trump:geo-S', 'pipeline');
         return ['S', '地缘'];
       }
       /* A：明确的行动指令 / 威胁 / 重大外交安排。
@@ -2434,7 +2710,7 @@
      * 值得知道，但仍然不是事件本身，所以不给 A。
      * 真讲话落地（有原话、有数据、有决定）不含「将于」，走后面的规则。
      */
-    const TOP_CB = /鲍威尔|拉加德|植田和男|贝利|潘功胜|美联储主席|欧洲央行行长|日本央行行长|英国央行行长|中国人民银行行长/;
+    const TOP_CB = ENTITY_RE.TOP_CB;
     const SPEECH_NOTICE = /(将于|即将|稍后|今天|今日|今晚|明日|明日|北京时间|当地时间)[^。；]{0,30}?(发表讲话|发表演讲|发表声明|发布讲话|讲话|演讲|发言|出席|参加|召开发布会|举行发布会|召开新闻发布会|接受采访|接受专访)/;
     if (SPEECH_NOTICE.test(head) || /(将于|即将)[。，,；;]?\s*$/.test(head)) {
       return TOP_CB.test(head) ? ['B', '海外央行'] : ['C', '日程预告'];
@@ -2454,7 +2730,7 @@
      *   「波兰央行行长格拉平斯基：10月核心通胀率可能有所下降」
      * 判据：非四大央行 + 冒号式表态 + 没有数字/决议动作 → B。
      * 有「25个基点 / 决议 / 宣布 / 维持利率」这种落地动作的仍走后面的规则。 */
-    const TOP4_CB = /美联储|FOMC|鲍威尔|欧洲央行|拉加德|日本央行|植田和男|英国央行|贝利|中国人民银行|中国央行|潘功胜/;
+    const TOP4_CB = ENTITY_RE.TOP4_CB;
     if (/央行行长|央行主席|央行总裁/.test(head) && /[：:]/.test(head) && !TOP4_CB.test(head)
       && !/\d+(?:\.\d+)?\s*%|\d+\s*个基点|决议|宣布|维持利率|加息|降息|降准/.test(head)) {
       return ['B', '海外央行'];
@@ -2613,65 +2889,8 @@
       return ['B', '中国政策'];
     }
 
-    /* 0.18) 美国 AI 产业重大监管 → A（用户 11-06 点名，两条漏网样本）
-     *  「中期选举后民主党高层呼吁限制人工智能产业扩张：立即暂停全国数据中心建设」
-     *  「量刑堪比非法研发核武！美国民主党提出超级AI禁令：20年监禁、企业强制解散」
-     * 以前：第一条只到 B/政治事件；第二条 _grade 判 B 但没有挂上任何标的，
-     * 被 _enrich 的 noAsset 闸整条出清 —— 用户在外部平台看到，看板里完全没有。
-     * 为什么够 A：全国性强制限制 AI 基建 / 把 AI 研发刑事化，直接改变科技股
-     * 资本开支与盈利预期，是可交易的产业政策，不是政治口水。
-     * 三道门槛叠加，避免把「某议员随口建议」「AI 风险评论」也抬成 A：
-     *   ① 主题是 AI / 算力 / 数据中心  ② 美国联邦级主体  ③ 强制动作或罚则
-     * 提案 / 呼吁也算 —— 用户明确说这两条都该是 A。 */
-    const AI_TOPIC = /人工智能|AI(?![A-Za-z])|算力|数据中心|大模型|GPU/;
-    const AI_ACTOR = /民主党|共和党|国会|参议院|众议院|白宫|美国政府|美国总统|联邦政府|两党|美国商务部|美国|总统/;
-    /* v104：补「开刀 / 收紧 / 封杀 / 叫停」—— 财联社深度稿的标题
-     * 「立马就拿数据中心"开刀"？"蓝潮"席卷美国，民主党高层接连发声！」
-     * 讲的就是同一件事（民主党要限制 AI 基建），但原词表里一个都没命中，
-     * 于是和用户点名的第一条一样掉到 B。 */
-    const AI_HARD = /禁令|禁止|暂停[^，。；]{0,12}(?:建设|扩张|项目|数据中心)|出口管制|实体清单|强制解散|解散|监禁|判刑|刑事|处罚|法案|行政令|立法|限制[^，。；]{0,10}(?:扩张|建设|研发|出口)|开刀|封杀|叫停|收紧[^，。；]{0,8}(?:监管|审批|政策)/;
-    const AI_NOISE = /股价|收跌|收涨|ETF|基金|目标价|评级|研报|观点|解读|分析称|担忧冲击|市值蒸发/;
-    if (AI_TOPIC.test(head) && AI_ACTOR.test(head) && AI_HARD.test(head)
-      && !AI_NOISE.test(head)) return ['A', '科技政策'];
-
-    /* 0.181) 中国高层定调科技/产业政策 → A（用户 11-06 点名漏网）
-     * 「何立峰：强化科技创新与产业创新深度融合，推动经济持续向新向优向好发展」
-     * 以前：冒号前是「何立峰」这个短主体，isFirmEvent 把它当成某公司公告
-     * → C / 公司事项，看板里整条消失。副总理级对科技创新方向的定调，
-     * 直接影响科创板 / 创业板与科技股风险偏好，是可交易的政策信号。
-     * 三道门槛避免把「某某：看好科技股」这类卖方观点抬成 A：
-     *   ① 高层 / 部委主体 ② 科技创新类主题 ③ 部署推动类动作。
-     * 「何立峰：中美经贸磋商取得积极进展」无科技主题，仍按原链。 */
-    const CN_TECH_ACTOR = /何立峰|李强|习近平|丁薛祥|张国清|刘国中|中共中央|国务院|政治局|中央经济工作会议|中央科技委|科技部|工信部|发改委/;
-    const CN_TECH_TOPIC = /科技创新|产业创新|新质生产力|科技自立自强|人工智能产业|数字经济|集成电路产业|半导体产业|科技强国|创新驱动/;
-    const CN_TECH_ACT = /强化|推动|加快|部署|支持|促进|深度融合|提出|强调|发布|规划|意见|会议|决定|要求/;
-    if (CN_TECH_ACTOR.test(head) && CN_TECH_TOPIC.test(head)
-      && CN_TECH_ACT.test(head)
-      && !/[?？]|股价|收涨|收跌|目标价|评级|研报|观点|解读/.test(head)) {
-      return ['A', '中国政策'];
-    }
-
-    /* 0.182) 海外财政部门针对股市波动的稳市场表态 → A（用户 11-06 点名漏网）
-     * 「韩国财政部：不排除美股下跌对全球市场产生外溢效应，将采取必要措施，
-     *  避免股市脱离基本面过度波动」以前 _grade 只判 B / 重要快讯，
-     * 又挂不上任何标的 → 被 noAsset 闸整条出清。财政部级「将采取必要措施」
-     * 是明确的稳市场预案，对全球风险资产定价有直接影响。
-     * 只认「财政部门 + 股市/外溢语境 + 实质动作」，纯「密切关注」不抬 A。 */
-    /* v104：补「财长」这个称谓 + 「采取（主动/应对）措施」这种说法。
-     * 实跑：财联社原稿「韩国财政部称，不排除美股下跌对全球市场产生外溢效应。
-     *   将采取必要措施，避免股市脱离基本面过度波动。」
-     * 级次判对了（A/海外政策），但标题是「首句截断」出来的，动作词落在第二句，
-     * 而 head 只含标题 → 掉回 B。见闻改写版「韩国财长：股市对外部因素反应过度」
-     * 同理（动作词在正文）。所以：主体+议题仍只在标题判，**动作词允许看全文**。 */
-    const MK_STAB_ACTOR = /财政部|财政部长|财长|企划财政部|财务省|金融委员会|金融监督院|证监会|证券期货委员会|金融监管机构/;
-    const MK_STAB_TOPIC = /股市|美股|全球市场|外溢效应|过度波动|市场波动|资本市场|脱离基本面|股价暴跌|股灾/;
-    const MK_STAB_ACT = /采取必要措施|采取[^，。；]{0,6}措施|采取措施|应对措施|必要时.{0,8}采取措施|将采取行动|稳定措施|稳定市场|稳定股市|干预|救市|托市|限制做空|禁止卖空|平准基金|避免.{0,12}过度波动/;
-    if (MK_STAB_ACTOR.test(head) && MK_STAB_TOPIC.test(head)
-      && (MK_STAB_ACT.test(head) || MK_STAB_ACT.test(text))
-      && !/[?？]|目标价|评级|研报|个股/.test(head)) {
-      return ['A', '海外政策'];
-    }
-
+    const policyHit = runPolicyGates(head, brief, text);
+    if (policyHit) return policyHit;
     /* 设问句不是事实（「英国央行会紧急加息？」），哪怕命中了央行关键词也不能直接 A。
      * 观点栏目同理 —— 这两类在后面的 1.1 节会被判观点分析，这里提前挡掉，
      * 否则 croPillar 前置会把它们直接捞成 A。 */
@@ -2730,27 +2949,27 @@
     const INDEX_NOT_SELF = /ETF|成交额|成交|份额|规模|净流入|净流出|基金|成分股|概念股|板块|行业指数|建筑商/;
     const INDEX_MOVE = /大涨|大跌|暴涨|暴跌|重挫|飙升|跳水|涨超|跌超|涨逾|跌逾|收涨|收跌|上涨|下跌|涨幅|跌幅|[涨跌]\s*\d|创.{0,4}(新高|新低)/;
     /* 美股科技龙头：单日/盘前 ≥7% 是「巨头出事」，不是普通盘面波动。 */
-    const US_MEGA = /英伟达|NVIDIA|NVDA|高通|Qualcomm|QCOM|苹果|Apple|AAPL|微软|Microsoft|MSFT|谷歌|Alphabet|GOOGL|亚马逊|Amazon|AMZN|Meta|脸书|特斯拉|Tesla|TSLA|台积电|TSMC|AMD|超威|英特尔|Intel|博通|Broadcom|美光|Micron|阿斯麦|ASML|三星电子|奈飞|Netflix|甲骨文|Oracle|Palantir|超微电脑|戴尔|思科|德州仪器|应用材料|拉姆研究|科磊/;
+    const US_MEGA = ENTITY_RE.US_MEGA;
     /* A 股 / 港股龙头：这些票跌 7% 会直接带指数，也在权重 ETF 里 */
-    const A_LEADER = /贵州茅台|宁德时代|比亚迪|中芯国际|寒武纪|东方财富|中国平安|招商银行|工商银行|建设银行|农业银行|中国银行|中国移动|长江电力|五粮液|美的集团|隆基绿能|中信证券|紫金矿业|洛阳钼业|北方稀土|中际旭创|工业富联|海光信息|立讯精密|万科|腾讯|阿里巴巴|美团|小米|京东|网易|快手|百度|汇丰|友邦/;
+    const A_LEADER = ENTITY_RE.A_LEADER;
     /* v100：非科技类的全球龙头（车企 / 工业 / 航空 / 医药）。
      * 纠错单：「斯泰兰蒂斯 Stellantis NV 延长安大略省温莎工厂停产期…」被判 A，
      * 用户改 B「龙头公司新闻」。它不在 US_MEGA（美股科技）与 A_LEADER（A股/港股）
      * 名单里，停产又不再由 croPillar 兜底，所以单列一份，只用于 1.38 的 B 留档闸。 */
-    const GLOBAL_LEADER = /斯泰兰蒂斯|Stellantis|STLA|福特|Ford|通用汽车|General Motors|大众汽车|Volkswagen|丰田|Toyota|本田|Honda|日产|Nissan|宝马|BMW|奔驰|Mercedes|现代汽车|波音|Boeing|空客|Airbus|卡特彼勒|Caterpillar|西门子|Siemens|霍尼韦尔|Honeywell|强生|辉瑞|默克|诺华|罗氏|阿斯利康/;
+    const GLOBAL_LEADER = ENTITY_RE.GLOBAL_LEADER;
 
     if (!S_CONTEXT.test(head) && !/[?？]/.test(head)) {
       const mxPct = maxPctOf(head);
       const om = head.match(OIL_LEVEL);
       /* ① 原油：价位 ≥90 美元（供给冲击区间）且带方向动作 → A，涨跌不限 */
-      if (om && parseFloat(om[2]) >= 90 && OIL_MOVE.test(head) && !OIL_QUOTE.test(head)) return ['A', '能源'];
+      if (om && parseFloat(om[2]) >= THRESHOLDS.OIL_PRICE_A && OIL_MOVE.test(head) && !OIL_QUOTE.test(head)) return ['A', '能源'];
       /* ② 商品主力合约：|%| ≥5 或涨跌停 → A（收盘汇总稿里的品种波动同样是事件） */
       if (COMMOD_FUT.test(head) && /主力合约|期货|夜盘|期市|现货/.test(head)
-        && COMMOD_MOVE.test(head) && (maxPricePct(head) >= 5 || /涨停|跌停/.test(head))) {
+        && COMMOD_MOVE.test(head) && (maxPricePct(head) >= THRESHOLDS.PCT_COMMOD_A || /涨停|跌停/.test(head))) {
         return ['A', /液化石油气|LPG|燃料油|沥青|原油|天然气|动力煤|焦煤|焦炭/.test(head) ? '能源' : '重要快讯'];
       }
       /* ③ 核心指数：|%| ≥2 → A（ETF / 成分股 / 行业指数不算指数本身） */
-      if (CORE_INDEX.test(head) && INDEX_MOVE.test(head) && mxPct >= 3
+      if (CORE_INDEX.test(head) && INDEX_MOVE.test(head) && mxPct >= THRESHOLDS.PCT_INDEX_A
         && !INDEX_NOT_SELF.test(head)
         /* 盘后多指数收盘汇总是统计播报，不是单一指数的暴涨暴跌 */
         && !/纽约尾盘|尾盘.{0,8}最终|盘后.{0,8}收盘|收盘.{0,8}一览/.test(head)) return ['A', '指数'];
@@ -2766,11 +2985,11 @@
       const megaHits = (head.match(new RegExp(US_MEGA.source, 'g')) || []).length;
       const usCtx = /美股|盘前|盘后|纳指|纳斯达克|标普|道指|美元|ADR|隔夜|集体大涨|集体大跌|市值/.test(head);
       if ((US_MEGA.test(head) || A_LEADER.test(head))
-        && (!US_MEGA.test(head) || usCtx || megaHits >= 2)
+        && (!US_MEGA.test(head) || usCtx || megaHits >= THRESHOLDS.MEGA_HITS)
         && !/目标价|评级|上调评级|下调评级|首次覆盖|给予/.test(head)
         && !/净利|净利润|营收|营业收入|销售金额|销售额|合同|业绩|毛利|同比|环比|预减|预增|扭亏|亏损|订单|出货|交付|产量|中标/.test(head)
         && /涨停|跌停|大涨|大跌|暴涨|暴跌|重挫|飙升|跳水|股价|盘前|盘后|盘中|收涨|收跌|涨超|跌超|涨逾|跌逾|涨幅|跌幅/.test(head)
-        && (mxPct >= 8 || /涨停|跌停/.test(head))) {
+        && (mxPct >= THRESHOLDS.PCT_LEADER_A || /涨停|跌停/.test(head))) {
         return ['A', US_MEGA.test(head) ? '美股' : 'A股'];
       }
     }
@@ -2782,18 +3001,18 @@
     /* 总则配套：没够到 A 门槛的行情仍要留档 B —— 用户要的是「A 收窄」，
      * 不是把信息丢掉。原油 3~5%、核心指数 1~3% 都属于「知道就行」。 */
     if (!/[?？]/.test(head)) {
-      if (/布伦特|布油|WTI|美油|原油|油价/.test(head) && maxPricePct(head) >= 3) {
+      if (/布伦特|布油|WTI|美油|原油|油价/.test(head) && maxPricePct(head) >= THRESHOLDS.PCT_OIL_B) {
         return ['B', '重要快讯'];
       }
-      if (CORE_INDEX.test(head) && maxPctOf(head) >= 1) return ['B', '市场行情'];
+      if (CORE_INDEX.test(head) && maxPctOf(head) >= THRESHOLDS.PCT_INDEX_B) return ['B', '市场行情'];
       if (COMMOD_FUT.test(head) && /主力合约|期货|夜盘/.test(head)
-        && maxPricePct(head) >= 3) return ['B', '重要快讯'];
+        && maxPricePct(head) >= THRESHOLDS.PCT_OIL_B) return ['B', '重要快讯'];
       /* 财报口径的 23% / 30% 不是股价波动，别在这里留档（应走公司公告 → C） */
-      if ((US_MEGA.test(head) || A_LEADER.test(head)) && maxPctOf(head) >= 5
+      if ((US_MEGA.test(head) || A_LEADER.test(head)) && maxPctOf(head) >= THRESHOLDS.PCT_LEADER_B
         && !/净利|营收|营业收入|销售金额|销售额|合同|业绩|毛利|同比|环比|订单|产量/.test(head)) {
         return ['B', '行情播报'];
       }
-      if (/黄金|金价|白银|沪金|沪银|COMEX/.test(head) && maxPricePct(head) >= 2) {
+      if (/黄金|金价|白银|沪金|沪银|COMEX/.test(head) && maxPricePct(head) >= THRESHOLDS.PCT_GOLD_B) {
         return ['B', '贵金属'];
       }
     }
@@ -2814,7 +3033,7 @@
       if (MARKET_DATA.test(head)) return ['B', '市场数据'];
       if (/跌穿|跌破|失守|升破|突破|站上|重挫|暴跌|大涨/.test(head)
         && /原油|布油|WTI|黄金|金价|指数|美股|港股/.test(head)) return ['B', '重要快讯'];
-      if (/指数/.test(head) && maxPctOf(head) >= 2) return ['B', '市场行情'];
+      if (/指数/.test(head) && maxPctOf(head) >= THRESHOLDS.PCT_INDEX_B2) return ['B', '市场行情'];
       return ['C', '行情播报'];
     }
 
@@ -2890,10 +3109,12 @@
       }
     }
     /* 比例 ≥1% 是全局硬性门槛：写在 && 最外层，龙头 / 金额两个分支都不能绕过。 */
+    /* P1：口径 = HOLDER_LEADERS（与 ENTITIES 同源）；US_MEGA 分支仍单独
+     * 保留 FIRM_NOT_SELF 蹭名闸（A_LEADER 的公司名不存在蹭名问题）。 */
     const holderLeader = A_LEADER.test(head)
       || (US_MEGA.test(head) && !FIRM_NOT_SELF.test(head));
-    const holderQualified = holderPct >= 1
-      && (holderLeader || holderAmount(head) >= 1);
+    const holderQualified = holderPct >= THRESHOLDS.PCT_HOLDER_MIN
+      && (holderLeader || holderAmount(head) >= THRESHOLDS.AMT_HOLDER_B);
     /* v98：交易额 / 套现金额 ≥100 亿 → 直接 A。
      * 用户口径（11-06 02:00）：「英伟达：股东减持1.5%股份，交易额150亿元绝对算a」。
      * 根因：holderAmount() 本来就抽得到「交易额150亿元 / 套现约150亿元 /
@@ -2904,13 +3125,13 @@
      * 只过 aCap 旧闸（常规战况 / 记录型稿子），不再要求 croPillar ——
      * 本条本身就是支柱 1 新增的金额门槛，再走 croPillar 会被打回 B。 */
     const hAmt = holderAmount(head);
-    if (holderQualified && hAmt >= 100) {
+    if (holderQualified && hAmt >= THRESHOLDS.AMT_HOLDER_A) {
       /* 蹭名主体（苹果概念股 / XX产业链）不该借金额分支绕进 A —— v97 的
        * FIRM_NOT_SELF 只挂在 holderLeader 上，这里单独补一道，保持 C 出清。 */
       if (FIRM_NOT_SELF.test(head)) return ['C', '公司动作'];
       return aCap(head, '公司重大', text) ? ['B', '公司重大'] : ['A', '公司重大'];
     }
-    if (holderQualified && !croPillar(head, '公司重大', text) && dealAmount(head) < 100) {
+    if (holderQualified && !croPillar(head, '公司重大', text) && dealAmount(head) < THRESHOLDS.AMT_DEAL_A) {
       return ['B', '公司动作'];
     }
 
@@ -2927,11 +3148,13 @@
      * 只给 B，不碰 A 档阈值（指数3 / 商品5 / 龙头8），也不碰 croPillar；
      * 已经是重磅的（croPillar 或 ≥100 亿交易）放行，继续走原来的 A 判定链。
      * 前面的 S/A/行情闸都已跑完，这里只捞「否则会被 C 出清」的那些。 */
-    const leaderFirmAction = (US_MEGA.test(head) || A_LEADER.test(head) || CRO_SEMI6.test(head)
-      || GLOBAL_LEADER.test(head))
+    /* P1：龙头名单统一走 ENTITY_RE.ALL_LEADERS（US_MEGA ∪ A_LEADER ∪
+     * GLOBAL_LEADER ∪ CRO_SEMI6），不再在这里手写 4 份 OR —— 以后补龙头只改
+     * 顶层 ENTITIES，croPillar / 1.37 / 1.38 自动同步。语义与原来完全等价。 */
+    const leaderFirmAction = ENTITY_RE.ALL_LEADERS.test(head)
       && LEADER_ACTION.test(head) && !LEADER_NOT.test(head) && !FIRM_NOT_SELF.test(head)
       && !/^[^，。；]{2,26}(首席执行官|首席财务官|首席运营官|CEO|CFO|COO|分析师|行长|主席|董事长|总裁)[：:]/.test(head);
-    if (leaderFirmAction && !croPillar(head, '公司重大', text) && dealAmount(head) < 100) {
+    if (leaderFirmAction && !croPillar(head, '公司重大', text) && dealAmount(head) < THRESHOLDS.AMT_DEAL_A) {
       return ['B', '公司动作'];
     }
 
@@ -2964,7 +3187,7 @@
       /* 大额并购用 dealAmount 兜一道：FIRM_BIG 只认「收购…N亿」这个方向，
        * 「拟 320 亿元收购」这种金额在前的写法会漏。
        * 这里只决定留在 B 还是被 C 出清，不决定 A。 */
-      const big = FIRM_BIG.test(probe) || dealAmount(head) >= 100
+      const big = FIRM_BIG.test(probe) || dealAmount(head) >= THRESHOLDS.AMT_DEAL_A
         || croPillar(head, '公司重大', text);
       /* 「董事长提议回购 2~4 亿」只是动议，不是已经发生的事 ——
        * 用户口径里的重磅是「回购金额上调」这种实质变化，
@@ -2983,7 +3206,7 @@
        * 它是统计口径，不该当公司公告出清，继续走后面的 big / tentative 判定。 */
       if (/回购/.test(head) && buybackAmt(head) > 0) {
         const bb = buybackAmt(head);
-        if (bb < 1) return ['C', '公司事项'];          // 不到 1 亿：出清
+        if (bb < THRESHOLDS.BUYBACK_C) return ['C', '公司事项'];          // 不到 1 亿：出清
         return asA('公司重大', head, text);            // 其余交给支柱 1 判 A / 降 B
       }
       const buyback = /回购|增持/.test(head);
@@ -2995,7 +3218,7 @@
       const bbAmt = bbM ? parseFloat(bbM[1]) * (bbM[2] === '万亿' ? 10000 : 1) : 0;
       const tentative = buyback && /提议|拟|计划|筹划|准备|研究|考虑/.test(head)
         && !/上调|提高|增加|扩大|翻倍|追加/.test(head)
-        && bbAmt < 50;
+        && bbAmt < THRESHOLDS.BUYBACK_A;
       /* 公司类 A 级也必须过 croPillar 的支柱 1 门槛 ——
        * 用户口径（原话）：「公司层面的消息够上 A 级应该要够重磅，
        *   像宁德时代回购 400 亿注销、长鑫存储提高回购到 50 亿这种级别才可以。」
@@ -3090,48 +3313,12 @@
       return ['A', '地缘'];
     }
 
-    // 0.13) v54「标级纠错单」1 条（规则 v53 导出 2026/11/7 15:10:40）
-    /* 用户纠错：「香港证监会收紧误导性称衔，降低投资者误判风险」原被判 S/中国政策。
-     * 「收紧误导性称衔」只是对金融从业人士头衔/称谓的规范（打击夸大宣传），
-     * 不是什么重大政策，不该触发 S。下调到 B/中国政策。
-     * 判据必须很窄：同时命中「证监会」+「称衔/误导性称衔/头衔」，
-     * 避免误伤真正的重磅监管（如证监会收紧融券、收紧IPO这类市场级动作）。 */
-    if (/证监会/.test(head) && /称衔|误导性称衔|头衔/.test(head)) {
-      return ['B', '中国政策'];
-    }
-
-    // 0.13b) v55「标级纠错单」1 条（规则 v54 导出 2026/11/7 17:50:31）
-    /* 用户纠错：「胡塞武装称也门遭沙特主导的联军空袭致多人伤亡」原被判 S/地缘。
-     * 口径：区域冲突（代理人互射、遭空袭致伤亡）S 级只放能引发市场巨震的
-     * 超重磅政策 / 贸易战 / 战争爆发；单次区域空袭致伤亡属 A/地缘。
-     * 根因：PROXY_WAR→A 那条被 STRATEGIC_HIT（正文带红海/资产词）绕过，直落 S。
-     * 判据要窄：代理人/区域主体 + 空袭类动作，且**不含**真正的战略升级
-     * （封锁海峡 / 正式开战 / 全面战争 / 打击石油设施 / 美军航母基地 / 使馆 / 核）。
-     * 有战略升级的仍走下面 S_PAT 全流程，不被这条截走。 */
-    if (/胡塞|也门|加沙|黎巴嫩|真主党|哈马斯|叙利亚|伊拉克/.test(head)
-      && /空袭|袭击|遭袭|遇袭|炮击|打击|交火|冲突|爆炸/.test(head)
-      && !/封锁.{0,6}(海峡|航道)|霍尔木兹|曼德海峡|正式开战|宣布开战|进入战争状态|全面战争|地面(进攻|战)|石油设施|油田|炼油厂|输油|美军(基地|航母|军舰)|使馆|核(打击|试验|武器)/.test(head)) {
-      return ['A', '地缘'];
-    }
-
-    // 0.13c) 规则 v56「标级纠错单」1 条（规则 v55 导出 2026/11/9 00:18:46）
-    /* 用户纠错：「美国宣布将黎巴嫩驻底特律领事列为“不受欢迎人物”」原判 S/地缘 → A/地缘。
-     * 原因（用户原话）：「这种消息算不上 S 级，S 级只有能引爆市场剧烈震动的，
-     *   重磅政策如 924 或者战争开战（如美伊刚爆发冲突的时候），
-     *   或者 2000 年互联网泡沫、08 年金融海啸」。
-     * 外交礼节性反制（不受欢迎人物 / 驱逐或召见外交官 / 抗议照会 / 降低外交级别）
-     * 只是双边关系表态，不产生全球风险资产重定价，绝不能顶格 S。
-     * 判据刻意收窄：必须命中外交身份+动作词，且**不含**真正的升级信号
-     * （断交 / 宣战 / 空袭 / 封锁 / 制裁 / 关税 / 禁运 / 冻结资产 / 大规模撤侨），
-     * 那些仍走下面 S_PAT 全流程，不被这条截走。 */
-    const DIPLO_COURTESY = /(不受欢迎人物|驱逐.{0,8}(外交官|大使|领事|代办|武官)|召见.{0,8}(大使|代办|外交官)|外交抗议|抗议照会|降低外交(关系|级别)|撤回.{0,6}(大使|代办)|宣布.{0,6}(领事|外交官).{0,8}(离境|限期)|吊销.{0,6}(领事|外交).{0,4}(证件|签证))/;
-    const DIPLO_ESCALATE = /(断交|宣战|开战|全面战争|军事(打击|行动|进攻)|空袭|封锁|制裁|关税|禁运|冻结资产|核(打击|试验)|大规模(撤侨|撤离)|驱逐.{0,6}(全部|所有|数百))/;
-    if (DIPLO_COURTESY.test(head) && !DIPLO_ESCALATE.test(head)) {
-      return ['A', '地缘'];
-    }
-
-    for (const [r, cat] of S_RE) {
+    const geoCapHit = runGeoCapGates(head, brief, text);
+    if (geoCapHit) return geoCapHit;
+    for (let _si = 0; _si < S_RE.length; _si++) {
+      const [r, cat] = S_RE[_si];
       if (!r.test(scope)) continue;
+      _mark('S_RE[' + _si + ']', 'S_RE');
       const c = normCat(cat, scope, usRate);
       /* v96：「银行倒闭 / 挤兑」若只是背景状语（「在银行倒闭事件压力…之际」），
        * 不是刚发生的银行体系事件，不该触发 S_PAT 信用风险。
@@ -3215,8 +3402,10 @@
     }
 
     // 4) A 级
-    for (const [r, cat] of A_RE) {
+    for (let _ai = 0; _ai < A_RE.length; _ai++) {
+      const [r, cat] = A_RE[_ai];
       if (!r.test(scope)) continue;
+      _mark('A_RE[' + _ai + ']', 'A_RE');
       const c = normCat(cat, scope, usRate);
       // 地缘 A 级同样要求是「动作」而非「表态」；纯表态降到 B
       if (c === '地缘' && RHETORIC.test(head) && !/\d/.test(head)) return ['B', c];
@@ -3289,8 +3478,9 @@
      * 分类错了会污染纠错样本的归因（我按 cat 反推规则族时会归错）。 */
     if (/外汇储备|黄金储备|储备资产|外储规模/.test(head)) return ['B', '宏观数据'];
 
-    for (const [r, cat] of B_RE) {
-      if (r.test(scope)) return ['B', cat];
+    for (let _bi = 0; _bi < B_RE.length; _bi++) {
+      const [r, cat] = B_RE[_bi];
+      if (r.test(scope)) { _mark('B_RE[' + _bi + ']', 'B_RE'); return ['B', cat]; }
     }
 
     // 6) 数据源标红兜底：只把「真正的宏观事件」捞回 A，
@@ -3319,6 +3509,7 @@
       return ['B', '重要快讯'];
     }
 
+    _mark('fallback:C', 'pipeline');
     return ['C', '杂讯'];
   }
 
@@ -3394,8 +3585,16 @@
    *    ③ 改级内聚：grade() 退化为薄包装，v122 出清 / 订阅源 C→B /
    *       川普分类归位 / 标红兜底统一进 gradeCore() 单一出口；
    *       enrich() 只保留「C 不入流」入池闸，mergeNews / gv 重算均带 src。
-   *    升版让存量条目按新口径重算。回归 441/441、去重 69/69。 */
-  const GRADE_VER = 62;
+   *    升版让存量条目按新口径重算。回归 441/441、去重 69/69。
+   * 63（本次）：P1 结构归位 + P2 纠错防补丁机制（见
+   *    docs/P1结构归位改动明细-2026-11-10.md）。三个子项：
+   *    ① 单一真源 THRESHOLDS（29 组数字）/ ENTITIES（13 张词表）。
+   *    ② 29 个历史插队闸归位成 3 个声明式 gate 阶段，
+   *       gradeCoreRules 早退出口 138 → 107。
+   *    ③ _explain() 决策追溯 + 纠错单 ruleId/stage + 反补丁棘轮锁。
+   *    判级结果本身不变（441 条全过、三链路一致）；升版仅为让存量
+   *    条目的 gv 对齐新规则集，并符合台账「改规则必升版」规范。 */
+  const GRADE_VER = 63;
 
   /* ---------------- 关于「C 级要不要进信息流」 ----------------
    * 11-05 曾试过把 C 级里「带硬信息」的那部分（小国数据 / 边缘板块 / 网络安全…）
@@ -6541,6 +6740,7 @@
     _dedupSlots: dedupSlots,
     _grade: grade,
     _gradeCore: gradeCore,      // P0-3：分级单一出口（调试/自检用）
+    _explain: explain,           // P2-A：决策追溯 { level, cat, ruleId, stage }
     _catAudit: _gradeCatAudit,   // P0-2：C 级分类登记表一致性自检
     _stripHtml: stripHtml,
     _fixBrief: fixBrief,
@@ -6572,7 +6772,10 @@
      * from='title' = 这条新闻的主题就是它；from='body' = 正文顺带提了一句。
      * from='geo'   = 地缘传导补齐（中东冲突 → 原油/黄金），是设计意图。
      * 用户报「纳斯达克下面全是 A 股上市辅导」时，靠它逐条定位误伤。 */
-    _explain: function (title, brief) {
+    /* P2-A：本接口原名 _explain（品种匹配溯源），与新增的分级决策追溯
+     * LiveNews._explain() 撞名 —— 对象字面量里后写的 key 会覆盖前面的。
+     * 这里改名保留能力；全项目无调用点，仅为调试内窥，不破坏任何业务。 */
+    _explainAssets: function (title, brief) {
       const head = desig(title || '');
       const body = desig(brief || '');
       const out = [];

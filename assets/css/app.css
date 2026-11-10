@@ -3397,3 +3397,7 @@ body.chart-fs.draw-open #chartHost,
 body.chart-fs.draw-open .sh-legend,
 body.chart-fs.draw-open .sh-chartbar{right:auto}
 @media (orientation: portrait){ :root{--dp-w:128px} }
+
+/* P2-A：纠错单「复制文本 / 复制 JSON」并排，不挤压左侧说明 */
+.fix-btns{display:inline-flex;gap:6px;flex-shrink:0;align-items:center}
+.fix-btns .mini-btn{white-space:nowrap}
