@@ -4738,7 +4738,14 @@
   }
 
   const PROXIES = [
-    ...(IS_SHELL && HAS_BACKEND ? [{ id: 'native', build: u => '/__fetch?u=' + encodeURIComponent(u) }] : []),
+    /* v244【WorkBuddy 挂掉后的真 bug】原来写成 IS_SHELL && HAS_BACKEND：
+     * 把「APK 原生通道」和「主站后端」绑死了。但 Java 侧
+     * shouldInterceptRequest 只按 URL 路径 endsWith('/__fetch') 拦截，
+     * **与域名无关** —— 切到 GitHub Pages 备用源后它照样可用。
+     * 结果主站一挂，APP 自动切到备用源，财联社/KZG/川普这几个
+     * 没有 CORS 的源反而因为原生通道被关掉而『需中转』甚至取不到。
+     * 只要有壳就开原生通道；只有 /__proxy、/api/news 才真正依赖主站后端。 */
+    ...(IS_SHELL ? [{ id: 'native', build: u => '/__fetch?u=' + encodeURIComponent(u) }] : []),
     /* 同源服务端转发（/__proxy，由 server.py 提供）：
      * 服务器直连目标站，绕开浏览器 CORS，也不受 jina / microlink 这类
      * 第三方免费中转的额度限制。财联社 / 东财 / 格隆汇 / 深度这些「标红源」
