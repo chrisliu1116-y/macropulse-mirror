@@ -5767,7 +5767,16 @@
   /* 任何点击 / Esc 之后重算哨兵（覆盖点 ×、点返回按钮、点空白关闭等所有入口） */
   d.addEventListener('click', () => setTimeout(() => { try { bkSync(); } catch (e) {} }, 0), true);
   d.addEventListener('keydown', (e) => { if (e.key === 'Escape') setTimeout(() => { try { bkSync(); } catch (er) {} }, 0); });
-  w.__exitFs = () => { if (d.body.classList.contains('chart-fs')) exitChartFS(); };
+  /* v1.5.10：原生返回键会调它 —— 除了退出主站 chart-fs，还要通知赚钱效应
+   * iframe 退出它自己的全屏（iframe 的 fullscreenElement 在 iframe 文档里，
+   * 父页面 document.exitFullscreen() 管不到），否则竖屏回来了但页面还是全屏态。 */
+  w.__exitFs = () => {
+    if (d.body.classList.contains('chart-fs')) exitChartFS();
+    try {
+      const f = $('#effectFrame');
+      if (f && f.contentWindow) f.contentWindow.postMessage({ mm_exit_fs: 1 }, location.origin);
+    } catch (e) {}
+  };
   w.__bkSync = bkSync;
 
   function closeSheet() {

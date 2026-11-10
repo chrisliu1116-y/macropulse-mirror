@@ -107,10 +107,57 @@
   ];
   function dataSources() {
     var d = new Date();
-    var tag = '' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
+    /* 收盘窗口内按 10 分钟分桶破缓存：跑批 15:00–16:00 每 10 分钟可能更新一次，
+     * 只按天打 tag 的话当天刷新也拿不到新数据。10 分钟桶既不击穿 CDN、又能及时可见。 */
+    var tag = '' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2)
+      + ('0' + d.getDate()).slice(-2) + ('0' + d.getHours()).slice(-2)
+      + Math.floor(d.getMinutes() / 10);
     return DATA_SOURCES.map(function (u) {
       return u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + tag;
     });
+  }
+
+  /* 收盘窗口内静默追新：数据一落库，已经打开的页面也能在 3 分钟内看到，
+   * 不需要用户手动刷新、更不整页 reload（整页重载会把用户的放大/拖动状态清空，
+   * 正是之前反馈过的那个问题）。只原地替换 S.d 并重绘，保留当前 from/to 视野。 */
+  function intradayWindow() {
+    var n = new Date();
+    var wd = n.getDay();
+    if (wd === 0 || wd === 6) return false;
+    var hm = n.getHours() * 100 + n.getMinutes();
+    return hm >= 1500 && hm <= 1800;
+  }
+  function startIntradayRefresh() {
+    setInterval(function () {
+      if (!intradayWindow() || !S.d || S.pinch || S.drag || S.ptrs.size) return;
+      var u = DATA_SOURCES[0] + '?t=' + Date.now();
+      fetch(u, { cache: 'no-store' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function (d) {
+          if (!validData(d) || !isFresh(d)) return;
+          var oldLast = S.d.dates[S.d.dates.length - 1];
+          var newLast = d.dates[d.dates.length - 1];
+          if (newLast <= oldLast) return;                 // 没有新交易日
+          if (S.pinch || S.drag || S.ptrs.size) return;   // 用户正在操作，下一轮再说
+          /* 按日期重新定位视野：新数据只在尾部追加，历史索引有偏移时按日期找回来 */
+          var oldFromDate = S.d.dates[S.from], oldToDate = S.d.dates[S.to];
+          var wasAtEnd = S.to >= S.d.dates.length - 1;
+          S.d = d;
+          var fi = d.dates.indexOf(oldFromDate), ti = d.dates.indexOf(oldToDate);
+          S.from = fi >= 0 ? fi : 0;
+          S.to = wasAtEnd ? d.dates.length - 1 : (ti >= 0 ? ti : d.dates.length - 1);
+          if (S.to < S.from) S.to = S.from;
+          $('upd').textContent = '全A股 · ' + updText(d);
+          $('dot').classList.remove('old');
+          $('ft').textContent = '全部A股 ' + d.meta.universe + ' 只 · 有效 ' +
+            d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · ' + updText(d);
+          if (S.cursor >= 0 && S.cursor < d.dates.length) updateCards(S.cursor);
+          else updateCards(d.dates.length - 1);
+          paintLegend();
+          draw();
+        })
+        .catch(function () { /* 单个源失败不影响页面，下一轮再试 */ });
+    }, 3 * 60 * 1000);
   }
   function validData(d) { return !!(d && d.dates && d.dates.length > 100 && d.meta); }
   /* 收盘后 5 个自然日内都算新鲜：覆盖周末 + 小长假，又不至于把
@@ -233,6 +280,15 @@
     applyTheme(readTheme());
     window.addEventListener('message', function (e) {
       if (e.data && typeof e.data.mm_theme === 'string') applyTheme(e.data.mm_theme);
+      /* v1.5.10：原生返回键 → 父页面 postMessage 通知退出全屏。
+       * 赚钱效应是在 iframe 里全屏的，父页面无法替它调 exitFullscreen。 */
+      if (e.data && e.data.mm_exit_fs) {
+        var cur = document.fullscreenElement || document.webkitFullscreenElement;
+        if (cur) {
+          try { (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document); } catch (err) {}
+        }
+        nativeLandscape(false);
+      }
     });
     window.addEventListener('storage', function (e) {
       if (e.key === 'mm_theme') applyTheme(readTheme());
@@ -755,4 +811,5 @@
 
   boot();
   bind();
+  startIntradayRefresh();   // 收盘窗口内静默追新，不整页重载
 })();
