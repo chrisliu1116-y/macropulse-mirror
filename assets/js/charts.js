@@ -396,6 +396,11 @@
           volume: 0
         };
         if (last.seg) np.seg = last.seg;       // 盘前/盘后段续尾时保住段标签
+        /* 当前这一分钟还没有成交量、均价也还没结算：继承上一根，
+         * 否则顶部信息行的「均 / 量」会在活线补点后整块消失。 */
+        if (last.avg) np.avg = last.avg;
+        if (last.volume) np.volume = last.volume;
+        if (last.amount) np.amount = last.amount;
         L.arr.push(np);
         added = true;
       }
