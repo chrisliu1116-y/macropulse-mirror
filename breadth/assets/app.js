@@ -85,17 +85,20 @@
   }
 
   /* ---------------- 数据 ---------------- */
-  /* ---------------- 数据来源（v236 三通道错峰竞速） ----------------
-   * ① GitHub raw：ACAO=*，缓存 max-age=300（5 分钟）—— 每天 15:20 跑批后最快拿到新数据。
-   * ② jsDelivr CDN：国内部分运营商下比 raw 更可达；@main 有 12h 缓存，只作可达性备用，
-   *    不能当主源（否则当天数据要晚半天）。
-   * ③ 同目录 data/breadth.json：离线 / 前两条全挂时兜底。
-   * 错峰竞速：raw 立即发、CDN 延后 350ms、本地延后 800ms，谁先返回有效 JSON 用谁。
-   * 正常情况下 raw 总是赢（实测 0.49s vs CDN 0.50s），raw 被墙时 CDN 顶上不白屏。 */
+  /* ---------------- 数据来源（v237 四源并发竞速 + 新鲜度校验） ----------------
+   * 实测（2026-11-10，国内，各 3 次）：
+   *   同源 data/breadth.json   主站热 0.33s / Pages 0.76s   ← 最快
+   *   raw.githubusercontent  0.76 ~ 1.05s（cache 5 分钟）
+   *   jsDelivr CDN           0.78 ~ 0.81s（原本 12h 缓存，跑批后已自动 purge）
+   *   Pages 绝对地址          0.76 ~ 1.08s
+   * 旧版把同源文件故意延后 800ms、又把 raw 设成第一源，等于放弃了最快的通道。
+   * 现在四源同时发：第一个返回「新鲜」数据的直接上屏；陈旧副本不会顶掉新数据。
+   * 最坏情况（主站冷启动 2.78s）由 CDN / raw 在 0.8s 左右补齐，不再白屏。 */
   var DATA_SOURCES = [
+    'data/breadth.json',
     'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
-    'data/breadth.json'
+    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json'
   ];
   function dataSources() {
     var d = new Date();
@@ -105,26 +108,43 @@
     });
   }
   function validData(d) { return !!(d && d.dates && d.dates.length > 100 && d.meta); }
+  /* 收盘后 5 个自然日内都算新鲜：覆盖周末 + 小长假，又不至于把
+   * 主站 dist 里那份「部署当天之后就不再更新」的旧副本当成新数据。 */
+  function isFresh(d) {
+    try {
+      var last = d.dates[d.dates.length - 1];
+      var t = Date.parse(last + 'T00:00:00Z');
+      return isFinite(t) && (Date.now() - t) < 5 * 86400e3 && (Date.now() - t) > -86400e3;
+    } catch (e) { return false; }
+  }
   function loadData() {
     return new Promise(function (resolve, reject) {
       var srcs = dataSources(), done = false, pending = srcs.length;
+      var stale = null, staleDay = '';
       var hard = setTimeout(function () {
-        if (!done) { done = true; reject(new Error('全部数据源超时')); }
+        if (done) return;
+        done = true;
+        if (stale) resolve(stale); else reject(new Error('全部数据源超时'));
       }, 9000);
-      srcs.forEach(function (u, i) {
-        var go = function () {
-          if (done) return;
-          fetch(u, { cache: 'no-store' })
-            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(function (d) {
-              if (done || !validData(d)) return;
-              done = true; clearTimeout(hard); resolve(d);
-            })
-            .catch(function () {
-              if (--pending === 0 && !done) { done = true; clearTimeout(hard); reject(new Error('全部数据源失败')); }
-            });
-        };
-        if (i === 0) go(); else setTimeout(go, i === 1 ? 350 : 800);
+      srcs.forEach(function (u) {
+        fetch(u, { cache: 'no-store' })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(function (d) {
+            if (done || !validData(d)) return;
+            var day = d.dates[d.dates.length - 1];
+            if (!isFresh(d)) {
+              if (!stale || day > staleDay) { stale = d; staleDay = day; }
+              return;
+            }
+            done = true; clearTimeout(hard); resolve(d);
+          })
+          .catch(function () { /* 单个源失败不影响其余 */ })
+          .then(function () {
+            if (--pending === 0 && !done) {
+              done = true; clearTimeout(hard);
+              if (stale) resolve(stale); else reject(new Error('全部数据源失败'));
+            }
+          });
       });
     });
   }

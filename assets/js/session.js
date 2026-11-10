@@ -98,9 +98,11 @@
       name: '美股'
     },
     rate: {
-      // 美债现货 08:00-17:00 ET，期货几乎 24h；这里以现货口径判断
-      tz: TZ.us, weekdays: [1, 2, 3, 4, 5],
-      segs: [[480, 1020]],
+      /* v237：旧定义按「现货 08:00-17:00 ET」判，北京白天整段被误标休市，
+       * 可数据源（东财）给的是近 23 小时滚动窗口（fullMinutes('rate')=1380），
+       * 分时线仍在走却写「休市」。改成跟外汇一样的 24×5 电子盘口径。 */
+      tz: TZ.us, weekdays: [0, 1, 2, 3, 4, 5], weekly: true,
+      segs: [[0, 1440]],
       name: '美债'
     },
     fx: {
@@ -185,6 +187,30 @@
     return judge(type, new Date());
   }
 
+  /* v237【全品种修复·第二层】时段表的「并集」不能代表组内每个品种。
+   * apac 是日经 09:00-11:30 / 12:30-15:00（东京）的并集，但同组的
+   * 港股(hk) / 韩股(kr) / 台股(tw) 时段完全不同：北京 10:46 港股在交易，
+   * judge('apac') 却落在东京午休 → 整个「亚太」组被判休市、沉到列表底部。
+   * 这里给分组排序/顶部提示用：组内任一品种在交易，这个时段就算活跃。 */
+  function sessionLive(sk) {
+    const j = judge(sk, new Date());
+    if (j.open) return true;
+    if (j.phase === 'pre' || j.phase === 'post') return true;
+    const U = w.UNIVERSE;
+    if (!U || !U.keys) return false;
+    const grps = Object.keys(U.GROUPS).filter(g => U.GROUPS[g].session === sk);
+    if (!grps.length) return false;
+    let hit = false;
+    U.keys().forEach(k => {
+      if (hit) return;
+      const a = U.get(k);
+      if (!a || grps.indexOf(a.grp) < 0) return;
+      const s = state(k);
+      if (s.open || s.phase === 'pre' || s.phase === 'post') hit = true;
+    });
+    return hit;
+  }
+
   // 交易所当地时间的可读字符串（用于详情页副标题）
   function localTime(type) {
     const cfg = SESSIONS[type];
@@ -211,5 +237,5 @@
     return 0;
   }
 
-  w.Session = { state: state, judge: judge, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes };
+  w.Session = { state: state, judge: judge, sessionLive: sessionLive, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes };
 })(window);

@@ -2630,6 +2630,9 @@
   const SESS_PRIORITY = ['cn', 'hk', 'kr', 'jp', 'tw', 'apac', 'us', 'fx', 'rate', 'cmdty', 'crypto'];
   function sessLive(sk) {
     try {
+      /* v237：优先用「组内品种实际状态」，修复 apac 这类并集时段把
+       * 正在交易的港股/韩股/台股整组误判成休市的问题。 */
+      if (w.Session.sessionLive) return w.Session.sessionLive(sk);
       const j = w.Session.judge(sk, new Date());
       return !!j.open || j.phase === 'pre' || j.phase === 'post';
     } catch (e) { return false; }
