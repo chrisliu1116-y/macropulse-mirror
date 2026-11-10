@@ -393,6 +393,20 @@ b,strong{font-weight:600}
 .view.on{display:block}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 
+/* ---------------- 赚钱效应指标（iframe） ---------------- */
+/* 该视图不吃主站的文档滚动：iframe 撑满「顶栏→底栏」之间的可视高度，
+ * 内部由 breadth 页自己滚。height 用 100dvh 扣掉顶栏/底栏，避免双滚动条。 */
+#view-effect{padding:0}
+#view-effect iframe{
+  display:block;width:100%;border:0;
+  height:calc(100dvh - var(--topH,86px) - var(--tabH,64px) - env(safe-area-inset-bottom));
+  background:var(--bg);
+}
+/* 高度兜底：老 WebView 不认识 dvh 时退回 vh（差别只在地址栏那几像素） */
+@supports not (height: 1dvh) {
+  #view-effect iframe{height:calc(100vh - var(--topH,86px) - var(--tabH,64px) - env(safe-area-inset-bottom))}
+}
+
 /* 筛选（级别 / 类别 两行） */
 .feed-bar{
   position:sticky;top:var(--topH,86px);
@@ -1214,7 +1228,7 @@ input[type=range]::-webkit-slider-thumb{
      加了 translateZ(0) 或 will-change:transform 只会让概率更高。
      底栏一旦消失就等于导航丢了，稳定 > 那点毛玻璃。 */
   position:fixed;left:0;right:0;bottom:0;z-index:80;
-  display:grid;grid-template-columns:repeat(5,1fr);
+  display:grid;grid-template-columns:repeat(6,1fr);
   background:var(--bg2);
   border-top:1px solid var(--line);
   box-shadow:var(--top-sh);
@@ -1222,18 +1236,18 @@ input[type=range]::-webkit-slider-thumb{
 }
 .tabbar button{
   position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;
-  padding:9px 0 7px;color:var(--tx3);transition:.16s;
+  padding:8px 0 6px;color:var(--tx3);transition:.16s;
   min-width:0;
 }
 .tabbar i{font-style:normal;font-size:15px;line-height:1}
 .tabbar span{
-  font-size:9.5px;letter-spacing:.2px;
+  font-size:9px;letter-spacing:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;
 }
 .tabbar button.on{color:var(--accent)}
 .tabbar button.on i{text-shadow:0 0 14px rgba(79,157,255,.9)}
 .tab-dot{
-  position:absolute;top:4px;left:calc(50% + 8px);
+  position:absolute;top:4px;left:calc(50% + 6px);
   min-width:15px;height:15px;padding:0 4px;border-radius:9px;
   background:var(--s);color:#fff;font-style:normal;font-size:9px;font-weight:700;
   font-family:var(--mono);display:grid;place-items:center;

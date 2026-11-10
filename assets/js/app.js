@@ -407,6 +407,7 @@
     d.documentElement.setAttribute('data-theme', S.theme);
     const meta = d.querySelector('meta[name="theme-color"]');
     if (meta) meta.setAttribute('content', S.theme === 'light' ? '#f3f6fb' : '#070a0f');
+    postEffectTheme();
     const btn = $('#btnTheme');
     if (btn) {
       btn.textContent = S.theme === 'light' ? '☾' : '☀';
@@ -4647,8 +4648,11 @@
     const isKr = !!(a && a.grp === 'krstock');
     /* 还要看这一条序列实际有没有延展段：纳斯达克取数失败会回退东财常规时段，
      * 那时 data.ext=false，开关点下去毫无变化（用户会以为「没加载出来」）。
-     * chart.extAvailable 由 charts.js 在每次 render 后写入。 */
-    const dataOk = !chart || chart.extAvailable !== false;
+     * chart.extAvailable 由 charts.js 在每次 render 后写入。
+     * v236：改成「必须确认为 true 才显示」，并靠 chart.onRendered 在每次渲染后
+     * 重新同步一次。以前用 !== false，渲染前读到的是上一场的旧值（或 undefined），
+     * 于是「这一场压根没取到盘前数据」也照样亮着一个点了没反应的「盘前分时」。 */
+    const dataOk = !chart || chart.extAvailable === true;
     const hasExt = !!(a && a.tv && (isUS || isKr) && dataOk);
     const show = S.sheetMode === 'min' && hasExt;
     bar.hidden = !show;
@@ -4704,6 +4708,8 @@
     chart.host = host;
     chart.legendEl = $('#shLegend');
     chart.showExt = effMinExt();
+    /* v236：每次渲染结束后重新判定「盘前分时」开关要不要露出来（见 syncMinBar 的 dataOk） */
+    chart.onRendered = syncMinBar;
     /* 画图工具：数量变化与工具切换回传给面板 */
     chart.onDrawCount = (n) => {
       const b = $('#dpClear');
@@ -6709,6 +6715,25 @@
   }
 
   /* ---------------- 视图切换 ---------------- */
+  /* ---------------- 赚钱效应指标（iframe 嵌入 /breadth/） ----------------
+   * 独立页有自己的全局名与裸标签样式，直接搬进主站会冲突，用 iframe 隔离。
+   * 懒加载：第一次点进 tab 才赋 src，避免拖慢首屏。主题经 postMessage 同步；
+   * 同源 localStorage 的 mm_theme 也能被 iframe 读到，双保险。 */
+  let _effectLoaded = false;
+  function postEffectTheme() {
+    try {
+      const f = $('#effectFrame');
+      if (f && f.contentWindow) f.contentWindow.postMessage({ mm_theme: S.theme }, location.origin);
+    } catch (e) {}
+  }
+  function ensureEffectFrame() {
+    const f = $('#effectFrame');
+    if (!f || _effectLoaded) return;
+    _effectLoaded = true;
+    f.src = f.dataset.src || './breadth/?embed=1';
+    f.onload = postEffectTheme;
+  }
+
   function switchTab(tab) {
     S.tab = tab;
     /* v201：记下当前页，供 WebView 层下拉刷新整页重载后原地恢复。
@@ -6736,6 +6761,7 @@
       Object.keys(S.session).forEach(k => delete S.session[k]);
       renderRadar(radar ? Object.values(radar.state) : [], radar);
     }
+    if (tab === 'effect') ensureEffectFrame();
     syncAlerts(radar);
   }
 

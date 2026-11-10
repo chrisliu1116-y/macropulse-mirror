@@ -327,6 +327,15 @@
      * keepUserZoom=true 时（活线每 8 秒的追加）若用户自己缩放过就不抢视野。 */
     _pinMin(pts, key, keepUserZoom) {
       if (this.mode !== 'min' || !this.chart || !pts) return;
+      /* v236：盘前/盘后段在画的时候按「全部点」铺满，不按单一时段的格数钉，
+       * 否则延展段会被切到可视区外（见 render 里 _extView 的注释）。 */
+      if (this._extView) {
+        try {
+          this.chart.timeScale().fitContent();
+          if (this.volChart) this.volChart.timeScale().fitContent();
+        } catch (e) {}
+        return;
+      }
       const m = this._minBars(pts, key);
       if (!m) return;
       const to = Math.min(m.want, Math.max(m.n + 8, Math.round(m.n * 2.2)));
@@ -357,7 +366,7 @@
 
     _liveSetup(key, o) {
       this._stopLive();
-      this._live = { key: key, arr: o.arr, series: o.series, paint: o.paint, hasPad: !!o.hasPad };
+      this._live = { key: key, arr: o.arr, series: o.series, paint: o.paint, hasPad: !!o.hasPad, seg: o.seg || null };
       this._liveTimer = setInterval(() => this._liveTick(), 8000);
     }
 
@@ -378,7 +387,20 @@
         if (this._live !== L) return;          // 期间切了品种 / 周期
       }
       if (!q || !(q.price > 0)) return;
-      const px = q.price;
+      let px = q.price;
+      /* v236：延展段的实时价不能取批量报价（那是常规收盘价），改取 extQuotes
+       * 的盘前/盘后价；取不到就这一轮不动，绝不把线尾拉回昨收。 */
+      if (L.seg === 'pre' || L.seg === 'post') {
+        let e = null;
+        try {
+          const m = await w.API.extQuotes([L.key]);
+          e = m && m[L.key];
+        } catch (err) { e = null; }
+        if (this._live !== L) return;
+        if (!e || !(e.price > 0)) return;
+        if (e.phase && e.phase !== L.seg) return;   // 时段变了（盘前→盘中），别混着画
+        px = e.price;
+      }
       const nowMin = Math.floor((Date.now() + 8 * 3600e3) / 60000) * 60;
       const last = L.arr[L.arr.length - 1];
       if (!last || !isFinite(last.close)) return;
@@ -588,12 +610,18 @@
       /* v231：活线要用的两个值从 isMin 块里带出来（mainPts/hasSeg 都是块内 const） */
       let liveArr = null, liveHasSeg = false;
       if (isMin) {
-        const base = data.preClose || pts[0].close;
         const hasSeg = pts.some(p => p.seg);
         /* 【盘后分时】用户口径：★默认点进去就是正常分时（和富途一样），
          * 另有一个「盘后分时」开关，打开了才把盘前 04:00–09:30 ET、
          * 盘后 16:00–20:00 ET 的成交接上去，并分别上色。 */
         useExt = !!this.showExt && !!data.ext;
+        /* v236【盘前分时的 0% 基准】接了延展段之后，零轴必须是「最近一次常规收盘」
+         * （regClose），不能再拿 preClose。preClose 是「上一交易日涨跌幅的分母」，
+         * 比常规收盘早一天：美光现价 733.15 时 preClose=690（733.15 正是相对 690
+         * 的 +6.25%），拿 690 当 0 轴，盘前 -1.64% 会被画成 +4.7%，整条盘前线贴到
+         * 图顶、右轴 ±7.84% 也和顶部「盘前 -0.87%」对不上（用户 11-10 20:15 截图）。
+         * 常规分时（不接延展段）继续用 preClose —— 那是它自己那一场的昨收。 */
+        const base = (useExt && data.regClose) ? data.regClose : (data.preClose || pts[0].close);
         /* 把「这条序列到底有没有延展段」记在实例上，供 app.js 决定
          * 「盘后分时」开关要不要露出来。纳斯达克偶尔取数失败会回退东财
          * 常规时段（只有 reg 点），此时开关点下去没有任何变化 ——
@@ -922,7 +950,12 @@
             `<span class="lg-item">价 <b class="${cls}">${priceFmt(p.close)}</b></span>` +
             (p.avg ? `<span class="lg-item">均 <b>${priceFmt(p.avg)}</b></span>` : '') +
             segChip(p) +
-            `<span class="lg-item ${cls}" title="相对昨收 ${priceFmt(prev)}">全天 ${chg >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>` +
+            /* v236：盘前/盘后点不再显示「全天 x%」。那个数是相对 preClose（上一交易日
+             * 涨跌幅的分母，比最近一次常规收盘早一天）算的：英伟达盘前 177.15 实际
+             * 只比昨收 178.67 低 0.85%，却被写成「全天 -5.08%」（用户 11-10 截图）。
+             * 延展时段的涨跌口径由上面的「盘前 / 盘后 x%」负责，这里不再重复且不冲突。 */
+            ((p.seg && p.seg !== 'reg') ? '' :
+              `<span class="lg-item ${cls}" title="相对昨收 ${priceFmt(prev)}">全天 ${chg >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>`) +
             (useExt ? `<span class="lg-item lg-ext" title="这条曲线把延展时段接进来了（美股：盘前 04:00–09:30 ET / 盘后 16:00–20:00 ET；韩股：收盘定价 15:40–16:00 + Nextrade 애프터마켓 16:00–20:00）">${extTagText(pts)}</span>` : '') +
             amtTag(p) +
             (data.synthetic ? '<span class="lg-err">演示数据</span>' : '');
@@ -945,7 +978,12 @@
       if (isMin) {
         const tailSeg = (useExt && liveHasSeg && last && last.seg) ? last.seg : null;
         const extRef = (tailSeg && this._extS) ? this._extS[tailSeg] : null;
-        if (extRef) this._liveSetup(key, { arr: extRef.arr, series: extRef.s, paint: paint, hasPad: false });
+        /* v236：盘前 / 盘后段的活线必须换价格来源。
+         * 活线原来续的是批量报价的 price，而美股盘前时段那个 price 还是「最近一次
+         * 常规收盘」（英伟达盘前 176.74 时报价仍是 178.67），续进 pre 段等于每 8 秒
+         * 把线尾拉回昨收：末端竖起假尖峰、图例跳成「盘前 +0.00%」（线上 21:03 实测）。
+         * 现在把段标签带进活线，_liveTick 见到 pre/post 就改用 extQuotes 的盘前盘后价。 */
+        if (extRef) this._liveSetup(key, { arr: extRef.arr, series: extRef.s, paint: paint, hasPad: false, seg: tailSeg });
         else this._liveSetup(key, { arr: liveArr || view, series: mainSeries, paint: paint, hasPad: true });
       }
       /* 十字游标移开后要回到「最新一点」—— 活线会不断追加，不能回退到打开时那根 */
@@ -984,12 +1022,23 @@
        * 【K 线千万不能 fitContent】K 线是全历史（几千根），全塞进来会让
        * 最近一年被压成一条细线、左侧价格轴也变成全历史高低；保持库默认的
        * 最近可视窗口即可（rightOffset 已设 0，本身也是铺满的）。 */
+      /* v236：接了盘前/盘后段时不能按「一个常规时段」的格数钉范围。
+       * _minBars 按 fullMinutes（美股 390 格）算 want，而盘前段是**独立 series**，
+       * 钉到 0..390 会把 200 多个盘前点整段切到画布外 —— 用户看到的还是「昨天的
+       * 常规分时 + 右端一个小蓝尖」，等于盘前分时没生效（11-10 20:15 两张截图）。
+       * 这时交给 fitContent 铺满全部点，两段都完整可见。 */
+      this._extView = !!(isMin && useExt);
       if (isMin) this._pinMin(this._minPts, this._minKey, false);
       /* v169：主图指标按钮 / 着色 / 卖点图标 */
       this._applyMainInd();
       /* 图表重建后 applyOptions 会回到默认值，这里按当前是否有选中线恢复 */
       this._interOn = null;
       this.syncChartInteraction();
+      /* v236：render 结束回告一次 —— app.js 的「盘前分时」开关要按
+       * chart.extAvailable（这一场到底有没有接到延展段）决定露不露。
+       * 以前 syncMinBar 在 render 之前调用，读到的是上一次渲染留下的 extAvailable，
+       * 于是「这次根本没取到盘前数据」的品种照样显示一个点了没反应的按钮。 */
+      if (typeof this.onRendered === 'function') { try { this.onRendered(this); } catch (e) {} }
     }
 
     /* ---- v164：画图工具 / 坐标模式的对外接口（app.js 调这几个） ---- */

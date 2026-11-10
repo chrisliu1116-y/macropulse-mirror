@@ -1640,31 +1640,128 @@
    */
   const NASDAQ_Q = 'https://api.nasdaq.com/api/quote/';
   const nasdaqCache = new Map();
+  /* 今天最后一次成功的原文（不设 60 秒上限）。中转两条同时失败时用它兜底：
+   * 差几分钟的盘前曲线，远好于整段消失、退回「只有昨天常规时段」的分时图。 */
+  const nasdaqLast = new Map();
 
-  async function nasdaqChart(sym) {
-    const target = `${NASDAQ_Q}${encodeURIComponent(sym)}/chart?assetclass=stocks`;
-    try {
-      const r = await fetch(target, { cache: 'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return await r.json();
-    } catch (e) {
-      const P = w.LiveNews && w.LiveNews.proxy;
-      if (typeof P !== 'function') throw e;
-      /* 失败重试一次：首屏会同时打出十几个请求，浏览器偶尔会
-       * ERR_HTTP2_PROTOCOL_ERROR 直接掐断某一条（实测首次渲染踩过），
-       * 重试一次基本就过，不至于让分时图退回「只有常规时段」。 */
-      for (let i = 0; i < 2; i++) {
-        try {
-          const t = await P(target, { timeout: 16000, check: b => String(b).indexOf('"chart"') >= 0 });
-          const cut = String(t).indexOf('{');
-          if (cut < 0) throw new Error('bad proxy payload');
-          return JSON.parse(String(t).slice(cut));
-        } catch (e2) {
-          if (i === 1) throw e2;
-          await new Promise(z => setTimeout(z, 350));
+  /* v236：从「夹了杂质的文本」里抠出第一个完整 JSON 对象。
+   * 【2026-11-10 实测，盘前分时全站失效的真因】
+   *   ① api.nasdaq.com 现在**不再回 Access-Control-Allow-Origin**（响应头实测没有），
+   *      浏览器直连一律 TypeError: Failed to fetch —— 不是 403，连重试都没有意义；
+   *   ② 只能走中转，但中转会把原文包一层：
+   *        · microlink → `{...原文JSON...}</pre><div class="json-formatter-container"></div>`
+   *        · jina      → 前面三行 `Title: / URL Source: / Markdown Content:`
+   *   ③ 旧代码 `JSON.parse(text.slice(text.indexOf('{')))` 遇到尾巴上的
+   *      `</pre><div ...>` 直接 SyntaxError → nasdaqChart 抛错 → 静默退回东财
+   *      常规时段 → 图上还是「昨天的分时」，但按钮仍写着「盘前分时」并高亮，
+   *      用户点与不点一个样（11-10 20:15 美光 / 英伟达两张截图）。
+   * 这里按括号配对取到真正的结尾（跳过字符串内的括号与转义），再解析。 */
+  function jsonSlice(text) {
+    const s = String(text || '');
+    const i = s.indexOf('{');
+    if (i < 0) return null;
+    let depth = 0, inStr = false, esc = false;
+    for (let k = i; k < s.length; k++) {
+      const ch = s[k];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') {
+        inStr = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (!depth) {
+          try { return JSON.parse(s.slice(i, k + 1)); } catch (e) { return null; }
         }
       }
     }
+    return null;
+  }
+
+  /* 中转有缓存：microlink 实测回过「前一天 22:00」的快照（timeAsOf = Nov 9）。
+   * 把昨天的盘前曲线当成今天画，比不画更糟，所以按 timeAsOf 的美东日期判新鲜。
+   * 没给 timeAsOf（老格式）时按可用处理，不因为判据缺失就整条丢掉。 */
+  function nqFresh(d) {
+    const s = String((d && d.data && d.data.timeAsOf) || '');
+    const m = s.match(/^([A-Z][a-z]{2}) (\d{1,2}), (\d{4})/);
+    if (!m) return true;
+    const MON = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+    const mon = MON[m[1]];
+    if (!mon) return true;
+    const et = new Date(Date.now() + tzOffMin('America/New_York') * 60000);
+    return et.getUTCFullYear() === +m[3] && (et.getUTCMonth() + 1) === mon && et.getUTCDate() === +m[2];
+  }
+
+  async function nasdaqChart(sym) {
+    const target = `${NASDAQ_Q}${encodeURIComponent(sym)}/chart?assetclass=stocks`;
+    const good = d => !!(d && d.data && d.data.chart && d.data.chart.length);
+    let lastErr = null;
+
+    /* ① 直连：Nasdaq 现已撤掉 CORS 头，正常网络下必失败（约 300ms 就报错，
+     *    不拖首屏）。留着是因为 APK 壳的原生通道、以及哪天对方重新放开时能直接吃。 */
+    try {
+      const r = await fetch(target, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (good(d)) return d;
+      throw new Error('no chart');
+    } catch (e) { lastErr = e; }
+
+    /* ② 中转：jina 立刻发；400ms 没回来就并行再拉代理池，谁先给出「当天且完整」
+     *    的 chart 就用谁，另一条结果丢弃。实测 jina 单发 0.5~1s，代理池偶发 8~10s
+     *    （microlink 通道要等它自己的超时），串行等会把冷启动拖到 10 秒以上。
+     *    两条都按括号配对抠 JSON（jsonSlice），并用 nqFresh 挡掉隔夜快照。 */
+    const viaJina = async () => {
+      /* 5 秒硬超时：jina 平时 0.6~1s，偶发排队到 10s 以上（实测 INTC 9.9s）。
+       * 超时就认输走代理池 / 东财兜底，不能让一条慢通道把详情页拖成白屏。 */
+      const ac = (typeof AbortController === 'function') ? new AbortController() : null;
+      const to = ac ? setTimeout(() => { try { ac.abort(); } catch (e) {} }, 5000) : 0;
+      try {
+        const r = await fetch('https://r.jina.ai/' + target,
+          { cache: 'no-store', signal: ac ? ac.signal : undefined });
+        if (!r.ok) throw new Error('jina HTTP ' + r.status);
+        return jsonSlice(await r.text());
+      } finally { if (to) clearTimeout(to); }
+    };
+    const viaPool = async () => {
+      const P = w.LiveNews && w.LiveNews.proxy;
+      if (typeof P !== 'function') throw new Error('no proxy channel');
+      return jsonSlice(await P(target, { timeout: 5000 }));
+    };
+    const raced = await new Promise((resolve) => {
+      let done = false, pending = 2, timer = 0;
+      const finish = (d) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        resolve(d || null);
+      };
+      const run = (fn) => {
+        Promise.resolve().then(fn).then((d) => {
+          if (done) return;
+          if (good(d) && nqFresh(d)) return finish(d);
+          if (good(d)) lastErr = new Error('stale snapshot (timeAsOf ' + (d.data.timeAsOf || '?') + ')');
+          if (--pending === 0) finish(null);
+        }).catch((e) => {
+          lastErr = e;
+          if (!done && --pending === 0) finish(null);
+        });
+      };
+      run(viaJina);
+      timer = setTimeout(() => run(viaPool), 400);
+    });
+    if (raced) {
+      nasdaqLast.set(sym, raced);
+      return raced;
+    }
+    /* 两条中转都没成（jina 限流 / 代理池只剩隔夜快照）时，用今天最后一次成功的
+     * 副本兜底 —— 盘前曲线落后几分钟可以接受，整段消失不行。 */
+    const keep = nasdaqLast.get(sym);
+    if (keep && good(keep) && nqFresh(keep)) return keep;
+    throw lastErr || new Error('nasdaq chart unavailable');
   }
 
   /* ---------------- Nasdaq 官方历史日线（长历史兜底） ----------------
@@ -2102,6 +2199,14 @@
       const nowMin = Math.floor((Date.now() + 8 * 3600e3) / 60000) * 60;
       const pts = res.points;
       let last = pts[pts.length - 1];
+
+      /* v236：延展时段（盘前 / 盘后）不补这个实时点。
+       * 批量报价给的是「最近一次常规收盘」：美光盘前已经在 724.76 走了一小时，
+       * 报价里的 f2 仍然是 733.15。把它补进 pre 段末端，图上就会凭空拉出一根
+       * 从 724 直跳 733 的竖线（用户 11-10 20:15 英伟达截图右端那个尖峰），
+       * 图例还会把盘前显示成 +0.00%。盘前/盘后价本来就由 extQuotes 单独显示在
+       * 页面顶部，分钟线自己已经是最新一分钟，不需要这条补点。 */
+      if (last.seg && last.seg !== 'reg') return res;
 
       /* 【先把时间轴对齐】各家源对「分钟」的打标签方式不一样：
        *   · 美股（Nasdaq/东财个股）按**起始**打标，最后一根 ≤ 当前分钟；

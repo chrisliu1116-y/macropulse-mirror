@@ -203,13 +203,33 @@
     window.addEventListener('resize', function () { setTimeout(draw, 240); });
   }
 
-  function boot() {
-    bindFullscreen();
-    /* 跟随 APP 主题（并进 APP 后由宿主写入 mm_theme，这里只读） */
+  function readTheme() {
     try {
       var th = JSON.parse(localStorage.getItem('mm_theme') || '"dark"');
-      document.body.classList.toggle('light', th === 'light');
-    } catch (e) {}
+      return th === 'light' ? 'light' : 'dark';
+    } catch (e) { return 'dark'; }
+  }
+
+  function applyTheme(th) {
+    var on = th === 'light';
+    document.body.classList.toggle('light', on);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', on ? '#eef2f7' : '#070a0f');
+    if (S.d) draw();      // 图表是 canvas，换了主题要重画
+  }
+
+  function boot() {
+    bindFullscreen();
+    /* 并进 APP 后由宿主 iframe 通过 postMessage 写主题；同源 localStorage 的
+     * mm_theme 也作为兜底。embed 模式（?embed=1）隐藏重复的大标题，把高度让给图表。 */
+    if (/embed=1/.test(location.search)) document.body.classList.add('embed');
+    applyTheme(readTheme());
+    window.addEventListener('message', function (e) {
+      if (e.data && typeof e.data.mm_theme === 'string') applyTheme(e.data.mm_theme);
+    });
+    window.addEventListener('storage', function (e) {
+      if (e.key === 'mm_theme') applyTheme(readTheme());
+    });
     loadData()
       .then(function (d) {
         S.d = d;

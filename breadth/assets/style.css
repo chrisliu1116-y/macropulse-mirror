@@ -160,3 +160,10 @@ body.light .btn-fs.on{border-color:#9db9e8;background:#e8efff;color:#1d4ed8}
   .card u{display:none}
   .lg{font-size:9.5px;padding:0 6px 3px}
 }
+
+/* ---------- 嵌入主站 H5（?embed=1） ---------- */
+/* 大标题与主站 tab 文案重复，隐藏；保留更新时间(#upd)与全屏按钮(#btnFull) */
+body.embed .hd{align-items:center}
+body.embed .hd-l h1{display:none}
+body.embed .hd-l .sub{font-size:11px}
+body.embed .wrap{padding-top:6px}
