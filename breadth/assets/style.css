@@ -26,10 +26,12 @@ body{
   border:1px solid #1b2331;border-radius:11px;
   padding:8px 9px 9px;min-width:0;
 }
-.card i{display:block;font-style:normal;font-size:10px;color:#65748d;letter-spacing:.2px;white-space:nowrap}
+.card i{display:block;font-style:normal;font-size:10px;color:#65748d;letter-spacing:.2px;white-space:nowrap;overflow:hidden}
 .card i .tag{
-  font-style:normal;font-size:8.5px;margin-left:3px;padding:0 3px;border-radius:3px;
-  background:#1e2937;color:#93a3b8;vertical-align:1px;
+  /* v263：两字标签（攻击/冰点）在 4 卡窄列里会顶出卡片边 —— 字号 8.5→8、
+   * 间距 3→2，并让标题行 overflow:hidden 兜底，保证永远裁在卡片内。 */
+  font-style:normal;font-size:8px;margin-left:2px;padding:0 2px;border-radius:3px;
+  background:#1e2937;color:#93a3b8;vertical-align:1px;letter-spacing:0;
 }
 .card i .tag:empty{display:none}
 .card b{
