@@ -1,0 +1,123 @@
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:#070a0f;color:#e6edf7;
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  overscroll-behavior:none;
+}
+.wrap{
+  height:100%;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) 12px calc(env(safe-area-inset-bottom,0px) + 8px);
+  gap:10px;
+}
+
+/* ---------- 头部 ---------- */
+.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:10px}
+.hd-l h1{margin:0;font-size:17px;font-weight:650;letter-spacing:.3px}
+.hd-l .sub{font-size:10.5px;color:#5d6b82;letter-spacing:.2px}
+.hd-r{display:flex;align-items:center;gap:5px;font-size:10.5px;color:#5d6b82;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.14)}
+.dot.old{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.14)}
+
+/* ---------- 数值卡 ---------- */
+.cards{display:grid;grid-template-columns:1.35fr 1fr 1fr 1fr;gap:7px}
+.card{
+  background:linear-gradient(180deg,#0f141d,#0b0f16);
+  border:1px solid #1b2331;border-radius:11px;
+  padding:8px 9px 9px;min-width:0;
+}
+.card i{display:block;font-style:normal;font-size:10px;color:#65748d;letter-spacing:.2px;white-space:nowrap}
+.card i .tag{
+  font-style:normal;font-size:8.5px;margin-left:3px;padding:0 3px;border-radius:3px;
+  background:#1e2937;color:#93a3b8;vertical-align:1px;
+}
+.card i .tag:empty{display:none}
+.card b{
+  display:block;font-size:21px;font-weight:640;line-height:1.15;margin-top:3px;
+  font-variant-numeric:tabular-nums;letter-spacing:-.4px;
+}
+.card u{display:block;text-decoration:none;font-size:9.5px;margin-top:1px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.k-main{border-color:#23314a;background:linear-gradient(180deg,#111a2b,#0b1018)}
+.k-main b{font-size:26px;color:#eaf1ff}
+.up{color:#ff4d4f}
+.dn{color:#22c55e}
+.flat{color:#65748d}
+
+/* ---------- 图表 ---------- */
+.chartbox{
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  background:linear-gradient(180deg,#0b1017,#080c12);
+  border:1px solid #171f2b;border-radius:13px;padding:8px 4px 4px;position:relative;overflow:hidden;
+}
+.lg{
+  display:flex;gap:11px;flex-wrap:wrap;padding:0 8px 6px;
+  font-size:10.5px;color:#66748c;letter-spacing:.2px;
+}
+.lg span{display:inline-flex;align-items:center;gap:4px}
+.lg em{width:7px;height:7px;border-radius:50%;display:inline-block;font-style:normal}
+.lg em.sq{border-radius:1.5px}
+.lg em.ln{width:13px;height:2.5px;border-radius:1px}
+.cvwrap{flex:1;min-height:0;position:relative}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+.tip{
+  position:absolute;left:10px;top:32px;pointer-events:none;
+  background:rgba(9,13,20,.94);border:1px solid #23314a;border-radius:8px;
+  padding:5px 8px;font-size:10.5px;line-height:1.55;color:#cbd6e8;
+  font-variant-numeric:tabular-nums;opacity:0;transition:opacity .12s;white-space:nowrap;
+  box-shadow:0 8px 22px rgba(0,0,0,.55);
+}
+.tip.on{opacity:1}
+
+/* ---------- 区间按钮 ---------- */
+.ranges{display:flex;gap:6px}
+.ranges button{
+  flex:1;appearance:none;border:1px solid #1b2331;background:#0d1219;color:#7b8aa3;
+  font-size:12px;padding:8px 0;border-radius:9px;font-family:inherit;transition:.15s;
+}
+.ranges button.on{background:#16233a;border-color:#2c4370;color:#dbe8ff}
+.ranges button.fit{flex:0 0 40px;font-size:14px;color:#8b9ab2}
+.ranges{gap:5px}
+.ranges button{font-size:11.5px;letter-spacing:.2px}
+.ft{font-size:9.5px;color:#3f4c60;text-align:center;line-height:1.5}
+
+/* ---------- 横屏：把纵向空间尽量让给图表 ---------- */
+@media (orientation:landscape) and (max-height:560px){
+  .wrap{
+    padding:calc(env(safe-area-inset-top,0px) + 5px) 10px calc(env(safe-area-inset-bottom,0px) + 5px);
+    gap:5px;
+  }
+  .hd-l h1{font-size:14px}
+  .hd-l .sub{display:none}
+  .hd-r{font-size:9.5px}
+  .cards{gap:5px}
+  .card{padding:4px 8px 5px;border-radius:9px}
+  .card i{font-size:9px}
+  .card b{font-size:17px;margin-top:0;letter-spacing:-.3px}
+  .card u{font-size:9px}
+  .k-main b{font-size:20px}
+  .chartbox{padding:6px 4px 2px;border-radius:10px}
+  .lg{font-size:9.5px;padding:0 6px 3px;gap:9px}
+  .ranges button{padding:5px 0;font-size:11px;border-radius:7px}
+  .ranges button.fit{flex:0 0 38px}
+  .ft{display:none}
+}
+
+/* ---------- 浅色主题（跟随 APP 的 mm_theme，最终并入 APP 时自动生效） ---------- */
+body.light{background:#eef2f7;color:#0f172a}
+body.light .hd-l .sub{color:#94a3b8}
+body.light .hd-r{color:#94a3b8}
+body.light .dot{box-shadow:0 0 0 3px rgba(34,197,94,.16)}
+body.light .card{background:#fff;border-color:#e2e8f0}
+body.light .card i{color:#64748b}
+body.light .card i .tag{background:#e8eef7;color:#475569}
+body.light .k-main{background:#fff;border-color:#c7d5e8}
+body.light .k-main b{color:#0f172a}
+body.light .chartbox{background:#fff;border-color:#e2e8f0}
+body.light .lg{color:#64748b}
+body.light .ranges button{background:#fff;border-color:#dbe3ee;color:#64748b}
+body.light .ranges button.on{background:#e8efff;border-color:#9db9e8;color:#1d4ed8}
+body.light .ranges button.fit{color:#94a3b8}
+body.light .ft{color:#94a3b8}
+body.light .up{color:#dc2626}
+body.light .dn{color:#16a34a}
+body.light .flat{color:#94a3b8}
