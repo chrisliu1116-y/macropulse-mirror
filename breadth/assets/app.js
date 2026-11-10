@@ -26,7 +26,7 @@
       /* 点：同色系亮一档 */
       dot: ['#a8b4c6', '#ff7d7d', '#ffc247'],
       ring: 'rgba(11,16,23,.95)',
-      /* 数字：常规红 / 大数橙 / 冰点蓝 */
+      /* 数字：常规红 / 攻击橙 / 冰点蓝 */
       num: ['#ff7d7d', '#ffc247', '#38bdf8'],
       /* 红三角：比原来更亮，加白描边让它跳出来 */
       upArrow: '#ff5c5c', upEdge: 'rgba(255,255,255,.85)',
@@ -42,9 +42,9 @@
       line: ['rgba(154,166,184,.80)', 'rgba(220,38,38,.62)', 'rgba(217,119,6,.62)'],
       dot: ['#5f6b7d', '#b91c1c', '#ea8a00'],
       ring: 'rgba(255,255,255,.95)',
-      /* v261：浅色「大数」橙由 #b45309 提亮到 #ea8a00 —— 原值深棕发暗，用户反馈像屎黄 */
+      /* v261：浅色「攻击」橙由 #b45309 提亮到 #ea8a00 —— 原值深棕发暗，用户反馈像屎黄 */
       num: ['#dc2626', '#ea8a00', '#0369a1'],
-      /* v261：点的特殊色（跟当日家数走）—— 冰点蓝 / 大数橙 */
+      /* v261：点的特殊色（跟当日家数走）—— 冰点蓝 / 攻击橙 */
       dotIce: '#0369a1', dotHot: '#ea8a00',
       upArrow: '#e53935', upEdge: 'rgba(127,29,29,.85)',
       downArrow: '#16a34a', downEdge: 'rgba(255,255,255,.9)',
@@ -72,7 +72,7 @@
   }
 
   /* v261 折线分段：符合总数 <100 灰 / ≥100 红（不再有橙色档；
-   * 橙色改为「点」跟当日家数走的大数标记，见下方点色逻辑） */
+   * 橙色改为「点」跟当日家数走的攻击标记，见下方点色逻辑） */
   function bandOf(v) { return v >= 100 ? 1 : 0; }
 
   var MIN_BARS = 15;
@@ -86,7 +86,7 @@
       '<span><em style="background:' + T.dot[0] + '"></em>&lt;100</span>' +
       '<span><em style="background:' + T.dot[1] + '"></em>≥100</span>' +
       '<span><em style="background:' + T.dotIce + '"></em>冰点</span>' +
-      '<span><em style="background:' + T.dotHot + '"></em>大数≥150</span>' +
+      '<span><em style="background:' + T.dotHot + '"></em>攻击≥150</span>' +
       '<span style="color:' + T.upArrow + '">▲ 转多</span>' +
       '<span style="color:' + T.downArrow + '">▼ 转空</span>' +
       '<span style="color:' + T.warnDot + '">! 预警</span>';
@@ -354,7 +354,7 @@
     var half = prevDay != null && day <= prevDay * 0.5;
     var T = cur();
     $('vDay').style.color = day >= 150 ? T.num[1] : (half ? T.num[2] : T.num[0]);
-    $('vDayTag').textContent = day >= 150 ? '大数' : (half ? '冰点' : '');
+    $('vDayTag').textContent = day >= 150 ? '攻击' : (half ? '冰点' : '');
 
     /* 标题右侧日期：游标模式显示游标日，否则显示最新日 */
     var isLast = i === d.dates.length - 1;
@@ -450,7 +450,7 @@
         var gi = from + b;
         var bx = xOf(b), by = yOf(d.total[gi]);
         /* v261：点色跟「当日家数」的特殊状态走 —— 冰点（家数 ≤ 前日一半）蓝、
-         * 大数（家数 ≥150）橙，其余按符合总数：<100 灰 / ≥100 红。
+         * 攻击（家数 ≥150）橙，其余按符合总数：<100 灰 / ≥100 红。
          * 判据与家数数字着色（isHalf / ≥150）完全一致。 */
         var dv0 = d.daycnt[gi], pg0 = gi > 0 ? d.daycnt[gi - 1] : null;
         g.fillStyle = (pg0 != null && dv0 <= pg0 * 0.5) ? T.dotIce
@@ -557,13 +557,19 @@
       }
     }
 
-    /* 最新点 */
+    /* 最新点：v262 由「白色实心小圆」改为「空心定位环」。
+     * 旧实现在所有点画完后用 T.last 实心覆盖最后一个点（深色主题是纯白），
+     * 会把该点按「当日家数」规则算出的颜色盖成白心 —— 用户截图里今天那个点
+     * 跟其他点都不一样，就是这个残留设计，不是数据错误。
+     * 现在只描一圈对比色细环定位「今天」，内部颜色照常由点色规则决定。 */
     if (to === N - 1) {
       var lx = xOf(cnt - 1), ly = yOf(d.total[N - 1]);
+      var lastR = (typeof rr === 'number' && isFinite(rr)) ? rr + 2.4 : 5.2;
       g.beginPath();
-      g.arc(lx, ly, 2.6, 0, Math.PI * 2);
-      g.fillStyle = T.last;
-      g.fill();
+      g.arc(lx, ly, lastR, 0, Math.PI * 2);
+      g.strokeStyle = T.last;
+      g.lineWidth = 1.4;
+      g.stroke();
     }
 
     /* X 轴日期（v257：按可见跨度自适应刻度）

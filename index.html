@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=261">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=261">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=261">
-<link rel="stylesheet" href="assets/css/app.css?v=261">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=262">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=262">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=262">
+<link rel="stylesheet" href="assets/css/app.css?v=262">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -40,7 +40,7 @@
     <div class="brand">
       <span class="bdot"></span>
       <span class="bname">异动<em>看板</em></span>
-      <span class="ver-pill" id="verPill" title="版本号自动取自 sw.js 的缓存版本，不再手写">v261</span>
+      <span class="ver-pill" id="verPill" title="版本号自动取自 sw.js 的缓存版本，不再手写">v262</span>
       <span class="shell-pill" id="shellPill" title="原生 App 壳版本（网页加载自线上，和壳版本独立）">壳?</span>
     </div>
     <div class="hdr-right">
@@ -119,7 +119,7 @@
           <div class="mx-lg-g"><b class="mx-sz1"></b><b class="mx-sz2"></b><b class="mx-sz3"></b><em>方块越大＝异动越大</em></div>
         </div>
         <p>六个尺度并联（1 / 2 / 3 / 5 / 15 / 30 分钟），阈值按各品种自身波动率逐档标定，任一越线即报警。异动越大、方块越大、排得越靠前：领跑者用 2×2 大块，紧随其后的用宽块，其余 1×1，休市/取数失败沉底。可在「设置 → 异动矩阵展示」切成「按颜色」的等大热力图。格内数字是真实振幅，不是排名。点任意格子，倒查它当时前后的消息。</p>
-        <p><b>阈值不拍脑袋定</b>，每个品种按自己的波动率单独标定，并且六个时间尺度并联。最快的三档为什么要切到 1~3 分钟——闪崩与垂直拉升的真实时间常数就是几十秒到两三分钟，只盯 30 分钟等于事后复述。5/15/30 分钟用 TradingView 真实 5 分钟 K 线（A股 106 个交易日）按「触发日占比」反解；1/2/3 分钟用近 5 个交易日真实 1 分钟数据量出「等稀有度比例」（r1=0.53 / r2=0.71 / r3=0.85 · t5）再乘 1.25 阻尼。例：科创50 1 分钟 1.37% / 5 分钟 2.07% / 30 分钟 4.24%；上证 0.46 / 0.70 / 1.36%；VIX 3.44 / 5.20 / 7.99%。短尺度还有一道闸门：1~3 分钟越线时，5 分钟窗口必须同向走掉自身阈值一半以上。阈值每天都在自己漂移，靠页面自己的观测，不用更新文件。</p>
+        <p><b>阈值不拍脑袋定</b>，每个品种按自己的波动率单独标定，并且六个时间尺度并联。最快的三档为什么要切到 1~3 分钟——闪崩与垂直拉升的真实时间常数就是几十秒到两三分钟，只盯 30 分钟等于事后复述。5/15/30 分钟用 TradingView 真实 5 分钟 K 线（A股 106 个交易日）按「触发日占比」反解；1/2/3 分钟用近 5 个交易日真实 1 分钟数据量出「等稀有度比例」（r1=0.66 / r2=0.78 / r3=0.88 · t5），分类下限对短窗等比缩放，不垫高外汇等低波品种。例：科创50 1 分钟 1.37% / 5 分钟 2.07% / 30 分钟 4.24%；上证 0.46 / 0.70 / 1.36%；VIX 3.44 / 5.20 / 7.99%。短尺度还有一道闸门：1~3 分钟越线时，5 分钟窗口必须同向走掉自身阈值一半以上。阈值每天都在自己漂移：平静期收紧、高波日放宽（双向 ±15%），40 个交易日后以实盘分布为主、仍夹紧防脏数据。重复提醒只认 1~5 分钟瞬时脉冲——横盘磨洋工不重报、快速 V 反立即报、再下一台阶立即升级报「跌幅已扩大至 X%」。</p>
         <p><b>还有一条兜底通道</b>：如果行情链路没抓到，而媒体报道了「某品种突然拉升 / 跳水」，就用真实分钟线按新闻发布那一刻回溯去核对（试 0 / +10 / +20 分钟三个锚点，因为新闻常在行情走完才发）；核对通过才补进异动名单，标成「新闻补获」，不弹全屏。行情链路已经自己抓到的，不会重复补。</p>
       </div>
     </details>
@@ -200,32 +200,32 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=261">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=261">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=261">
-  <link rel="preload" as="script" href="assets/js/app.js?v=261">
-  <link rel="preload" as="script" href="assets/js/api.js?v=261">
-<script src="vendor/lightweight-charts.standalone.production.js?v=261"></script>
-<script src="assets/js/cn-stocks.js?v=261"></script>
-<script src="assets/js/universe.js?v=261"></script>
-<script src="assets/js/session.js?v=261"></script>
-<script src="assets/js/topics.js?v=261"></script>
-<script src="assets/js/news-crypto.js?v=261"></script>
-<script src="assets/js/news-zh.js?v=261"></script>
-<script src="assets/js/pool.js?v=261"></script>
-<script src="assets/js/news-live-client.js?v=261"></script>
-<script src="assets/js/api.js?v=261"></script>
-<script src="assets/js/alert.js?v=261"></script>
-<script src="assets/js/indicator.js?v=261"></script>
-<script src="assets/js/drawing.js?v=261"></script>
-<script src="assets/js/charts.js?v=261"></script>
-<script src="assets/js/news-spike.js?v=261"></script>
-<script src="assets/js/anomaly.js?v=261"></script>
-<script src="assets/js/volprofile.js?v=261"></script>
-<script src="assets/js/verify.js?v=261"></script>
-<script src="assets/js/predict.js?v=261"></script>
-<script src="assets/js/hot-events.js?v=261"></script>
-<script src="assets/js/events.js?v=261"></script>
-<script src="assets/js/app.js?v=261"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=262">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=262">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=262">
+  <link rel="preload" as="script" href="assets/js/app.js?v=262">
+  <link rel="preload" as="script" href="assets/js/api.js?v=262">
+<script src="vendor/lightweight-charts.standalone.production.js?v=262"></script>
+<script src="assets/js/cn-stocks.js?v=262"></script>
+<script src="assets/js/universe.js?v=262"></script>
+<script src="assets/js/session.js?v=262"></script>
+<script src="assets/js/topics.js?v=262"></script>
+<script src="assets/js/news-crypto.js?v=262"></script>
+<script src="assets/js/news-zh.js?v=262"></script>
+<script src="assets/js/pool.js?v=262"></script>
+<script src="assets/js/news-live-client.js?v=262"></script>
+<script src="assets/js/api.js?v=262"></script>
+<script src="assets/js/alert.js?v=262"></script>
+<script src="assets/js/indicator.js?v=262"></script>
+<script src="assets/js/drawing.js?v=262"></script>
+<script src="assets/js/charts.js?v=262"></script>
+<script src="assets/js/news-spike.js?v=262"></script>
+<script src="assets/js/anomaly.js?v=262"></script>
+<script src="assets/js/volprofile.js?v=262"></script>
+<script src="assets/js/verify.js?v=262"></script>
+<script src="assets/js/predict.js?v=262"></script>
+<script src="assets/js/hot-events.js?v=262"></script>
+<script src="assets/js/events.js?v=262"></script>
+<script src="assets/js/app.js?v=262"></script>
 </body>
 </html>
