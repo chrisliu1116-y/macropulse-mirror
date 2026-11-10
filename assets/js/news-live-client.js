@@ -1021,7 +1021,7 @@
      * 所以只匹配词组，不用裸「统计」。 */
     if (/研选|次数统计|历史统计|走势统计|数据统计|复盘[:：]|盘点[:：]|历次回顾/.test(t)
       && !/统计局|统计公报|统计法/.test(t)) {
-      return '统计栏目';
+      return VCAT['统计栏目'];
     }
     // ① 小国常规数据（除非政权颠覆 / 主权违约 / 汇率崩盘）
     /* 例外：小国「央行行长 / 官员」的个人表态不按数据出清 —— 那是讲话，不是数据发布。
@@ -1030,33 +1030,33 @@
     if (CRO_SMALL_ECO.test(t) && CRO_MACRO_DATA.test(t)
       && !/政权|政变|颠覆|主权违约|债务违约|重组|崩盘|贬值\s*[5-9]|贬值\s*1\d/.test(t)
       && !(/(行长|主席|官员|委员|理事|执委)/.test(t) && /[：:]/.test(t))) {
-      return '小国常规数据';
+      return VCAT['小国常规数据'];
     }
     // ② 零售终端价格
     if (CRO_RETAIL_CHAIN.test(t)
       && !/回购|财报|业绩|净利|营收|公告|中标|签约|并购|重组|立案/.test(t)) {
-      return '零售终端价格';
+      return VCAT['零售终端价格'];
     }
     // ③ 边缘板块异动
-    if (CRO_EDGE_SECTOR.test(t) && CRO_MOVE_WORD.test(t)) return '边缘板块异动';
+    if (CRO_EDGE_SECTOR.test(t) && CRO_MOVE_WORD.test(t)) return VCAT['边缘板块异动'];
     /* ④ 规划 / 蓝图：没有落地文件、没有资金、没有时间表的远期设想。
      * 用户点名：「印尼2028粮食规划」这种连 B 级都不配，纯粹占屏幕。
      * 例外：带明确资金额或「正式印发/落地」的才算真政策。 */
     if (/\d{4}\s*年[^。]{0,10}(规划|蓝图|愿景|目标|设想|路线图)/.test(t)
       && !/(正式|印发|落地|下达|拨款|亿元|亿美元)/.test(t)) {
-      return '远期规划';
+      return VCAT['远期规划'];
     }
     /* ⑤ 行业协会 / 学会 / 研究会开会与领导发言 —— 不是市场事件。
      * 用户点名：「中钢协某领导开会发言」。 */
     if (/(协会|学会|研究会|联合会|商会)/.test(t)
       && /(领导|会长|副会长|秘书长|理事长|某|负责人|专家).{0,12}(表示|称|指出|发言|讲话|开会|研讨|论坛|峰会)/.test(t)) {
-      return '协会发言';
+      return VCAT['协会发言'];
     }
-    if (/某(领导|负责人|专家|官员|人士)/.test(t)) return '无主体发言';
+    if (/某(领导|负责人|专家|官员|人士)/.test(t)) return VCAT['无主体发言'];
     /* ⑥ 体育 / 娱乐 —— 与宏观定价无关。
      * 例外：含救市语境（「国家队资金入场护盘」）的放行，
      * 因为这里的「国家队」是证金汇金，不是球队。 */
-    if (CRO_SPORT.test(t) && !CRO_SPORT_OK.test(t)) return '体育娱乐';
+    if (CRO_SPORT.test(t) && !CRO_SPORT_OK.test(t)) return VCAT['体育娱乐'];
     /* ⑦ 公司高管「回顾式表态」—— 讲的是自家过去的事，不是新事件。
      * 纠错单（11-05 23:56）：「安赛乐米塔尔首席财务官：在停产前，乌克兰的产能
      * 已受到显著影响，我们当时并未向欧洲出口」被支柱5「停产+产能」抬成 A。
@@ -1064,7 +1064,7 @@
     if (/^[^，。；]{2,26}(首席执行官|首席财务官|首席运营官|CEO|CFO|COO|董事长|总裁|总经理|财务总监|发言人)[：:]/.test(t)
       && /当时|此前|之前|并未|我们|回顾|在.{0,10}前/.test(t)
       && !/宣布|决定|拟|计划|将|签署|发布|获批|投产|扩产|裁减|上调|下调/.test(t)) {
-      return '公司高管表态';
+      return VCAT['公司高管表态'];
     }
     /* ⑧ 小国货币对日常波动 —— 用户口径「小国汇率不管」。
      * 纠错单：「波兰兹罗提兑欧元跌0.2%，波兰央行行长Glapinski正在讲话」被判 A。
@@ -1072,7 +1072,7 @@
     const MINOR_FX = /兹罗提|福林|克朗|列伊|列弗|库纳|第纳尔|格里夫纳|兰特|比索|雷亚尔|林吉特|泰铢|印尼盾|卢比|里拉|谢克尔/;
     if (MINOR_FX.test(t) && /兑|汇率|贬值|升值|跌|涨/.test(t)
       && !/崩盘|危机|管制|违约|脱钩|暴跌|大幅贬值|贬值\s*[5-9]|贬值\s*1\d/.test(t)) {
-      return '小国汇率波动';
+      return VCAT['小国汇率波动'];
     }
     /* ⑨ 小国政局人事变动 —— 用户口径（11-06 01:04）：
      * 「巴拉圭总统培尼亚在银行倒闭事件压力不断加大之际辞职 这条怎么可能是s呢
@@ -1088,7 +1088,7 @@
     if (MINOR_COUNTRY.test(t) && POLITY_PERSONNEL.test(t) && POLITY_ACTION.test(t)
       && !/美国|中国|俄罗斯|欧盟|北约|日本|英国|德国|法国|印度|沙特|伊朗|以色列|乌克兰|韩国|G7|G20|联合国|美联储|OPEC/.test(t)
       && !/主权违约|债务违约|金融危机|银行体系|系统性风险|全面战争|开战|制裁|封锁|政变|军事/.test(t)) {
-      return '小国政局人事';
+      return VCAT['小国政局人事'];
     }
     /* ⑩ 公司高管「退休 / 离任」类人事谈资 —— 用户口径（11-09 21:34）：
      * 「由于伊朗冲突扰乱运营并削弱利润，阿联酋航空的克拉克推迟退休」
@@ -1101,14 +1101,14 @@
     if (EXEC_LEAVE.test(t)
       && (EXEC_TITLE.test(t) || CORP_SUFFIX_RE.test(t))
       && !/辞职|被罢免|接受调查|被捕|去世|逝世|病逝/.test(t)) {
-      return '公司人事谈资';
+      return VCAT['公司人事谈资'];
     }
     /* ⑪ 广告 / 营销活动 —— 不是新闻。
      * 纠错单：「非农公布日，竞猜赢大奖」被判 A/宏观数据 —— 这是平台拉新文案，
      * 撞上「非农」两个字就一路进了 A。含宏观关键词不算豁免理由，
      * 只要同时是广告话术就出清。 */
     if (/竞猜|赢大奖|有奖|抽奖|扫码|下载\s*APP|注册领|开户领|领取福利|红包|优惠券|限时特惠|活动报名|福利放送/i.test(t)) {
-      return '广告活动';
+      return VCAT['广告活动'];
     }
     return '';
   }
@@ -1596,9 +1596,12 @@
    *
    *  A 是「重点」，不是「有点重要」。用户口径：A 一天十几二十条就非常多了。 */
   function aCap(head, cat, text) {
-    // ① 常规战况：没有战略量级的袭击一律 B
+    /* ① 常规战况：没有战略量级的袭击一律 B
+     * P0 契约：守门判据一律只看 head。原来这里是 STRATEGIC_HIT.test(text)，
+     * 正文顺带一句「附近有油田/其中包括油轮」就能让 aCap 放弃降档、把例行
+     * 战报留在 A。这是 v243 只改了 S_RE 两处、漏掉 aCap 的同类 bug。 */
     if (cat === '地缘' && MINOR_COMBAT.test(head)
-      && !COMBAT_SCALE.test(head) && !STRATEGIC_HIT.test(text) && !STRATEGIC_SCALE.test(head)) {
+      && !COMBAT_SCALE.test(head) && !STRATEGIC_HIT.test(head) && !STRATEGIC_SCALE.test(head)) {
       return true;
     }
     // ② 政治程序与预期：还没落地的表决/程序
@@ -1915,11 +1918,13 @@
    * 按美国财政 → 美债、其余 → 美股 重新归类。
    * 这一步解决「美国财政部拍卖国债」「美国 AI 投资评论」被塞进中国政策。
    */
-  function normCat(c, text, usRate) {
+  /* P0：调用方一律传 scope（默认 head），形参名同步改掉，
+   * 避免以后有人以为这里可以安全地塞全文。 */
+  function normCat(c, scopeText, usRate) {
     if (c !== '中国政策') return c;
     // 「美国证监会 / SEC / 美财政部」不是中国证监会 / 中国财政部
-    if (/美国证监会|美证监会|SEC|美国证券交易委员会|美财政部|美国财政部|美国财政/.test(text)) return usRate ? '美债' : '美股';
-    if (CNPOL.test(text)) return c;
+    if (/美国证监会|美证监会|SEC|美国证券交易委员会|美财政部|美国财政部|美国财政/.test(scopeText)) return usRate ? '美债' : '美股';
+    if (CNPOL.test(scopeText)) return c;
     return usRate ? '美债' : '美股';
   }
 
@@ -1938,37 +1943,116 @@
    * 也不该因为 important 兜底就爬回信息流。 */
   /* v114：新增「无实质内容」—— 纯栏目名汇编稿（「期货热点追踪」）用户明确判 C，
    * 不能被下面「平台标红就抬到 B」的兜底又拉回来。 */
-  const VETO_CATS = /^(?:小国常规数据|零售终端价格|边缘板块异动|远期规划|协会发言|无主体发言|体育娱乐|公司高管表态|小国汇率波动|统计栏目|广告活动|空壳预告|小国政局人事|公司人事谈资|栏目汇总|无实质内容)$/;
+  /* ---------------- P0 单一真源：C 级分类登记表 ----------------
+   * 以前 croVeto() 的 13 个返回分类、gradeCore 的 C 级出清分类、
+   * 和 VETO_CATS 正则里的 16 个字符串是**三份手写清单**。新增 C 分类时
+   * 只要忘了加进正则，important 标红兜底就会把它抬回 B —— 正是
+   * 「用户判 C、标红稿又冒出来」的漏法（v114「无实质内容」踩过一次）。
+   *
+   * 现在全部从一张表生成：
+   *   VETO       = 一票否决/出清类，即使平台标红也不进流
+   *   REDEEMABLE = 内容有信息量只是级别低，v103 用户口径允许标红捞回 B
+   *                （软银股价 -16%、波音 100 亿回购、得州数据中心表态）
+   * 安全默认：**未登记的 C 分类一律不抬**。新增 C 分类若不加进
+   * REDEEMABLE，就自动「标红也不进流」，不会静默漏进信息流。
+   * 两组互斥，由 _gradeCatAudit() 自检。 */
+  const C_CAT_REGISTRY = Object.freeze({
+    VETO: Object.freeze([
+      '小国常规数据', '零售终端价格', '边缘板块异动', '远期规划', '协会发言',
+      '无主体发言', '体育娱乐', '公司高管表态', '小国汇率波动', '统计栏目',
+      '广告活动', '空壳预告', '小国政局人事', '公司人事谈资', '栏目汇总', '无实质内容',
+      '出清稿'
+    ]),
+    REDEEMABLE: Object.freeze([
+      '行情播报', '观点分析', '公司事项', '公司动作', '日程预告', '杂讯'
+    ])
+  });
+  const VETO_CATS = new RegExp('^(?:' + C_CAT_REGISTRY.VETO.join('|') + ')$');
+  const REDEEMABLE_CATS = new RegExp('^(?:' + C_CAT_REGISTRY.REDEEMABLE.join('|') + ')$');
+  /* croVeto / gradeCore 引用同一份名字，杜绝拼写漂移 */
+  const VCAT = Object.freeze(Object.fromEntries(
+    C_CAT_REGISTRY.VETO.map(function (x) { return [x, x]; })));
+  /* ---------------- P0-3 单一出口：来源相关策略的共用常量 ----------------
+   * 以前 SUBSCRIBED_SRC 与 v122 出清判据都写在 enrich() 内部，
+   * 结果只有「抓取入库」这一条链路会用到；mergeNews 重算调 grade()、
+   * 缓存 gv 升级重算走 _enrich 但字段不全，三条链路口径漂移。
+   * 现在提到顶层，由 gradeCore() 单一出口统一消费。 */
+  const SUBSCRIBED_SRC = /川普言论|口罩哥KZG/;
+  const V122_DROP_A = /被查|接受.{0,12}(纪律审查|监察调查|审查|调查)|纪律审查|监察调查|受贿|贪腐|落马|双开|严重违纪/;
+  const V122_DROP_B1 = /偏离值|连续\s*\d+\s*个交易日.{0,26}(涨幅|跌幅)/;
+  const V122_DROP_B2A = /^[\u4e00-\u9fa5A-Za-z\*]{2,10}[：:]/;
+  const V122_DROP_B2B = /立案|行政处罚|处罚决定书|被罚|罚款/;
+
+  function _gradeCatAudit() {
+    const overlap = C_CAT_REGISTRY.VETO.filter(function (x) {
+      return C_CAT_REGISTRY.REDEEMABLE.indexOf(x) >= 0; });
+    return { veto: C_CAT_REGISTRY.VETO.length, redeemable: C_CAT_REGISTRY.REDEEMABLE.length,
+             overlap: overlap, ok: overlap.length === 0 };
+  }
 
   /**
    * 返回 [level, cat]
    * 顺序很重要：美债/美国财政先于中国政策判定，
    * 否则「美国财政部拍卖国债」会被当成中国财政政策。
    */
-  function grade(title, brief, important, stocks) {
-    const r = gradeCore(title, brief, important, stocks);
-    /* v103：平台标红兜底。
-     *
-     * 平台（财联社加红 / 见闻 score≥2 / 金十 important / 东财 titleColor）
-     * 是人工筛过的 —— 实测两条被我们内部规则误杀：
-     *   「软银集团股价下跌幅度高达16%…」→ isNoise 当行情播报 → C
-     *   「得州候任州长：并不反对数据中心产业本身…」→ 当公司公告 → C
-     * 它们的共同问题是**内部闸排在 important 分支之前**，标红信号根本没机会生效。
-     *
-     * 这里做一层下限保护：只要平台标了红，落到 C 的一律抬到 B 留档；
-     * 但不越过 A 的门槛（A 仍要过 MACRO_SIG / BIG_SCALE 那套）。
-     * 栏目汇总稿除外 —— 一稿十几件事，抬到信息流只会干扰母子卡和归因。 */
-    if (important && r && r[0] === 'C' && !VETO_CATS.test(r[1] || '')
-      && !COLUMN_ROUNDUP.test(String(title || ''))) {
+  /* P0-3：grade() 退化为薄包装。**所有改级只在 gradeCore() 单一出口发生**，
+   * 抓取入库 / 合并重算 / gv 升级重算三条链路因此 100% 一致。 */
+  function grade(title, brief, important, stocks, src) {
+    return gradeCore(title, brief, important, stocks, src);
+  }
+
+  /* P0-3 单一出口：把原来散在 enrich() 里的 4 处来源改级 + grade() 里的
+   * 标红兜底，全部内聚到这里。gradeCoreRules() 只产出「规则判定的原始级别」。 */
+  function gradeCore(title, brief, important, stocks, src) {
+    let r = gradeCoreRules(title, brief, important, stocks);
+    const t = String(title || '');
+    const s = String(src || '');
+    const subscribed = SUBSCRIBED_SRC.test(s);
+
+    /* ① v122 出清：贪腐/被查、个股异常波动与立案处罚 → 不入流。
+     * 原在 enrich() 里 return null，合并重算链路完全不知道这条规则。 */
+    if (!subscribed && (V122_DROP_A.test(t) || V122_DROP_B1.test(t)
+      || (V122_DROP_B2A.test(t) && V122_DROP_B2B.test(t)))) {
+      return ['C', VCAT['出清稿']];
+    }
+    /* ② 订阅源（川普 / 口罩哥）最低保留为 B —— 用户主动订阅的人。 */
+    if (r[0] === 'C' && subscribed) r = ['B', r[1]];
+    /* ③ 川普讲话一律归政治事件（原在 enrich，重算会丢）。 */
+    if (subscribed && /川普/.test(s)) r = [r[0], '政治事件'];
+    /* ④ v103 平台标红兜底：原在 grade()，现内聚到同一出口。
+     * 只有显式登记为「可捞回」的 C 分类才允许标红抬 B；
+     * 未登记的新 C 分类默认留在 C（P0-2 安全默认）。 */
+    if (important && r[0] === 'C' && REDEEMABLE_CATS.test(r[1] || '')
+      && !VETO_CATS.test(r[1] || '')
+      && !COLUMN_ROUNDUP.test(t)) {
       return ['B', r[1] === '行情播报' ? '重要快讯' : (r[1] || '重要快讯')];
     }
     return r;
   }
 
-  function gradeCore(title, brief, important, stocks) {
+  /* 纯规则判定主体（138 个早退出口），不碰来源、不碰标红。 */
+  function gradeCoreRules(title, brief, important, stocks) {
     title = desig(title); brief = desig(brief);
     const text = title + ' ' + brief;
     const head = title;
+    /* ---------------- P0 统一 head / text 匹配契约 ----------------
+     * 起因：S_RE / A_RE / B_RE 三张表原本用 r.test(text)（标题+正文）匹配，
+     * 于是正文里一句背景词（「其中包括油轮」「附近有油田」）就能绕过所有
+     * 只看 head 的守门闸，把例行战报顶成 S。见 docs/分级规则全览.md §6.2。
+     *
+     * 契约：**定级一律以 head 为准**。唯一例外是 head 为空或极短
+     * （< 6 字符，如「快讯」「【独家】」）时，允许正文作为标题的延伸参与匹配 ——
+     * 这是用户明确认可的「标题为空或极短快讯」必要兜底。
+     *
+     * 【正文白名单登记】以下 3 处仍看 text/brief，但都不可能抬到 S/A，
+     * 且必须在此登记；任何新增项想看正文，先在这里写理由：
+     *   W1 空壳标题出清（AD_TEXT.test(text)）——仅降 C，且前置 HOLLOW_TITLE(head)
+     *   W2 海外财政稳市场动作词（MK_STAB_ACT.test(text)）——用户 v74 口径：
+     *      标题常是「首句截断」，动作词落在第二句；主体与议题仍必须 head 命中
+     *   W3 美债/中国政策分类矫正（US_RATE.test(text)）——只改分类，不改级别；
+     *      刻意看全文，防止正文出现「财政部」就误判成中国政策
+     * 其余一律不许 .test(text)。修改时用 `grep -n '\.test(text)'` 复核。 */
+    const scope = String(head || '').trim().length >= 6 ? head : text;
 
     /* 0.13f) 规则 v61「标级纠错单」1 条（规则 v60 导出 2026/11/10 13:39:49）
      * 「俄罗斯国防部表示，俄罗斯军队袭击了一批货物」原判 S/地缘 → 用户改判 A。
@@ -2017,7 +2101,7 @@
     const HAS_RESULT = /(?:\d+(?:\.\d+)?\s*%|同比\s*(?:上涨|下降|增长|回落|持平|录得|为)\s*[+-]?\d|录得\s*[+-]?\d|[+-]?\d+(?:\.\d+)?\s*(?:万人|万亿|亿元|基点|bp))/;
     if (SCHEDULE_ONLY.test(head) && !HAS_RESULT.test(head)
         && !HAS_RESULT.test(String(brief || '').slice(0, 120))) {
-      return ['C', '空壳预告'];
+      return ['C', VCAT['空壳预告']];
     }
 
     /* 0.13e) 规则 v58「标级纠错单 4 条 + 用户点名 1 条」(导出 2026/11/9 13:56:50)
@@ -2154,7 +2238,7 @@
       const AD_TEXT = /竞猜|赢大奖|有奖|抽奖|扫码|下载\s*APP|注册领|开户领|领取福利|红包|优惠券|限时特惠|活动报名|福利放送|直播间|点击阅读|点击查看|立即查看|详情见|敬请关注|戳这里|专属福利|免费领取/i;
       if (HOLLOW_TITLE.test(head) && !/\d/.test(head)
         && (AD_TEXT.test(text) || !/\d/.test(String(brief || '').slice(0, 200)))) {
-        return ['C', '空壳预告'];
+        return ['C', VCAT['空壳预告']];
       }
     }
 
@@ -2210,10 +2294,10 @@
          * 否定句（「宣布不会对伊朗发动打击」）不降；「特朗普称…」交给下面 ⑥ 判 A/政治事件。 */
         if (/(美军|美方|美国|华盛顿)/.test(head)
           && !/特朗普/.test(head)
-          && !NEG_MIL.test(text)
+          && !NEG_MIL.test(head)
           && /(伊朗|格什姆|霍尔木兹|波斯湾|中东|以色列|美军|叙利亚|黎巴嫩|也门|胡塞)/.test(head)
-          && !WAR_ESCALATE.test(text)
-          && !/(核设施|核电站|宣战|战争状态|全面战争|政权更迭)/.test(text)) {
+          && !WAR_ESCALATE.test(head)
+          && !/(核设施|核电站|宣战|战争状态|全面战争|政权更迭)/.test(head)) {
           return ['A', '地缘'];
         }
       }
@@ -2224,7 +2308,7 @@
       if (/(卫星图像|卫星照片|商业卫星|遥感卫星|卫星图|卫星影像)/.test(head)
         && /(修复|扩建|重建|建设|加固|恢复)/.test(head)
         && /(设施|基地|导弹|核|机场|港口)/.test(head)
-        && !WAR_ESCALATE.test(text)) {
+        && !WAR_ESCALATE.test(head)) {
         return ['A', '地缘'];
       }
 
@@ -2244,7 +2328,7 @@
        * 否定句（不会/暂不/否认…）仍走 B。 */
       if (/(特朗普|美方|美国)/.test(head) && /伊朗|中东|胡塞|委内瑞拉|墨西哥|朝鲜/.test(head)
         && /(打击|空袭|轰炸|军事行动|出兵|袭击)/.test(head)
-        && !NEG_MIL.test(text)) {
+        && !NEG_MIL.test(head)) {
         return ['A', '政治事件'];
       }
 
@@ -2260,7 +2344,7 @@
        * 纠错样例「期货盯盘神器专属文章」（原 B/重要快讯）。 */
       if (/(期货盯盘神器|盯盘神器|专属文章|专属福利|开户专属)/.test(head)
         && /(文章|福利|活动|广告|推送|服务)/.test(head)) {
-        return ['C', '广告活动'];
+        return ['C', VCAT['广告活动']];
       }
 
       /* ⑨ C←B 纯设问标题（无数字、无实质动作）→ C/无实质内容。
@@ -2269,7 +2353,7 @@
       if (/[？?]\s*$/.test(head) && !/\d/.test(head) && head.length <= 40
         && /(能|会|是否|吗|如何|为何|谁|何时|会不会|是不是|太早)/.test(head)
         && !/(宣布|签署|通过|批准|实施|开战|空袭|降息|加息|上调|下调|公布|发布|生效)/.test(head)) {
-        return ['C', '无实质内容'];
+        return ['C', VCAT['无实质内容']];
       }
     }
 
@@ -2762,7 +2846,7 @@
     const GROUP_BUY = /(?:\d{2,}家|数十家|多家|一批|十余家)[^，。；]{0,12}(?:回购|增持)/;
     if (GROUP_BUY.test(head)) return ['A', '公司事项'];
     /* 纯栏目名（「期货热点追踪」）→ C：整篇没有单一主体，只有一堆碎动态。 */
-    if (PURE_DIGEST.test(String(head).replace(/[\s|｜·—\-]+/g, ''))) return ['C', '无实质内容'];
+    if (PURE_DIGEST.test(String(head).replace(/[\s|｜·—\-]+/g, ''))) return ['C', VCAT['无实质内容']];
     /* 汇编/综述：一条稿子塞十几件事，不是事件本身。
      * 用户口径：「早间汇总归类到政策也是不对的」—— 这类稿子正文里必然出现
      * 「国务院 / 央行 / 财政部」等字眼，按规则表会被一路带到「中国政策 A 级」，
@@ -2966,7 +3050,7 @@
     // 观点 / 解读 / 风险提示：无论命中什么规则，最高只到 B
     const isOpinion = ANALYSIS.test(head) && !ACT_WORD.test(head);
     // 特朗普日常发帖：除非是史诗级 TACO，否则最高只到 B
-    const trumpDaily = TRUMP.test(text) && TRUMP_DAILY.test(head) && !TRUMP_TACO.test(text);
+    const trumpDaily = TRUMP.test(head) && TRUMP_DAILY.test(head) && !TRUMP_TACO.test(head);
     // 官员讲话 / 机构呼吁 / 日常操作数据：都不构成「事件」
     const speech = SPEECH.test(head) && !SPEECH_HARD.test(head);
     const instCall = INST_CALL.test(head);
@@ -3047,8 +3131,8 @@
     }
 
     for (const [r, cat] of S_RE) {
-      if (!r.test(text)) continue;
-      const c = normCat(cat, text, usRate);
+      if (!r.test(scope)) continue;
+      const c = normCat(cat, scope, usRate);
       /* v96：「银行倒闭 / 挤兑」若只是背景状语（「在银行倒闭事件压力…之际」），
        * 不是刚发生的银行体系事件，不该触发 S_PAT 信用风险。
        * croVeto 第 ⑨ 条已挡住小国政局稿；这条是换个国家也兜得住的通用兜底。 */
@@ -3062,7 +3146,7 @@
        * 但那是每件包裹 2 欧元的手续费 —— 影响面、税率量级都够不上国运级，
        * 按用户口径「这条只能 A」。判据：全品类 / 明确 ≥30% 的普遍加征。 */
       if (c === '关税'
-        && !/(全面|全品类|所有商品|全部商品|普遍加征|加征\s*[3-9]\d\s*%|[3-9]\d\s*%\s*的?(关税|税率))/.test(text)) {
+        && !/(全面|全品类|所有商品|全部商品|普遍加征|加征\s*[3-9]\d\s*%|[3-9]\d\s*%\s*的?(关税|税率))/.test(head)) {
         return ['A', c];
       }
       /* v135【纠错单 A←S / B←S】俄乌战场已经常态化，不能有动作词就顶格 S：
@@ -3082,7 +3166,7 @@
         /* v61：战略落点必须由**标题自己**说。原来用 text（标题+正文），
          * 正文顺带一句「其中包括油轮」「附近有油田」就能把例行战报顶成 S。
          * 正文里的战略词只作为背景，不构成「这一条打到了战略落点」。 */
-        if (ruua.test(head) && !escalate.test(text) && !STRATEGIC_HIT.test(head)) {
+        if (ruua.test(head) && !escalate.test(head) && !STRATEGIC_HIT.test(head)) {
           /* 已经打出去的真动作（空袭 / 导弹 / 击落）→ 直接 A。
            * 不能再走 asA()：aCap 会把「泽连斯基称…空袭」按表述语气再降到 B，
            * 而用户这条明确要 A（战争常态化，但发生了就得占 A 的版面）。 */
@@ -3118,11 +3202,12 @@
       if (c === '地缘' && LOCAL_SKIRMISH.test(head) && !STRATEGIC_SCALE.test(head)) return ['B', c];
       if (c === '地缘' && ROUTINE_CLAIM.test(head) && !STRATEGIC_SCALE.test(head)) return ['B', c];
       // 「小规模攻击，并非战事」：战术动作，不是黑天鹅 → A
-      if (c === '地缘' && LIMITED_STRIKE.test(text)) return asA(c, head, text);
+      if (c === '地缘' && LIMITED_STRIKE.test(head)) return asA(c, head, text);
       // 代理人互射（胡塞打沙特集结点）天天有 → A；打到航运/石油设施才够 S
       if (c === '地缘' && PROXY_WAR.test(head) && !STRATEGIC_HIT.test(head)) return asA(c, head, text);
       // S 级必须有可交易落点，否则降 A —— 全屏红框是稀缺资源
-      const hasLanding = tagAssets(head, brief).length || geoAssets(head).length || tagCN(head, brief, stocks, c).length;
+      /* P0：可交易落点必须由标题自己点名；正文顺带提一个品种不该保住 S。 */
+      const hasLanding = tagAssets(head, '').length || geoAssets(head).length || tagCN(head, '', stocks, c).length;
       if (!hasLanding) return asA(c, head, text);
       // 推测语气降级
       if (SPECULATION.test(head) && !REAL_DATA.test(head)) return asA(c, head, text);
@@ -3131,8 +3216,8 @@
 
     // 4) A 级
     for (const [r, cat] of A_RE) {
-      if (!r.test(text)) continue;
-      const c = normCat(cat, text, usRate);
+      if (!r.test(scope)) continue;
+      const c = normCat(cat, scope, usRate);
       // 地缘 A 级同样要求是「动作」而非「表态」；纯表态降到 B
       if (c === '地缘' && RHETORIC.test(head) && !/\d/.test(head)) return ['B', c];
       /* 「伊朗领导人称，进一步袭击将招致更广泛的回应」——
@@ -3193,7 +3278,7 @@
     // 4.5) 特朗普史诗级 TACO：没命中上面的规则表，但够重 —— 补一条升 A。
     //      「取消全部关税」「解雇鲍威尔」「宣布国家紧急状态」这类，
     //      原本会因为「表态」被判成 B，这里单独捞回来。
-    if (TRUMP.test(text) && TRUMP_TACO.test(text) && !isOpinion) {
+    if (TRUMP.test(head) && TRUMP_TACO.test(head) && !isOpinion) {
       return asA('政治事件', head, text);
     }
 
@@ -3205,7 +3290,7 @@
     if (/外汇储备|黄金储备|储备资产|外储规模/.test(head)) return ['B', '宏观数据'];
 
     for (const [r, cat] of B_RE) {
-      if (r.test(text)) return ['B', cat];
+      if (r.test(scope)) return ['B', cat];
     }
 
     // 6) 数据源标红兜底：只把「真正的宏观事件」捞回 A，
@@ -3298,8 +3383,19 @@
    *    袭击了一批货物」S→A。用户口径：S 只留给「能引起市场巨震 / 开战
    *    （热战争与贸易战）/ 重大政策发布」。落点 gradeCore 0.13f（官方战报
    *    + 模糊战果 → A）+ S_RE 地缘分支战略落点判定由 text 收紧到 head。
-   *    升版让池子里按 60 判过的存量条目按新口径重算，用户屏幕上立刻变 A。 */
-  const GRADE_VER = 61;
+   *    升版让池子里按 60 判过的存量条目按新口径重算，用户屏幕上立刻变 A。
+   * 62（本次）：P0 结构性治理（见 docs/分级规则全览.md §6 与
+   *    docs/P0止血修复改动明细-2026-11-10.md），三个子项：
+   *    ① 统一 head/text 匹配契约：三张规则表改用 scope（默认 head，
+   *       仅标题<6字符时正文兜底），aCap / S_RE / A_RE / hasLanding 等
+   *       全部正文抬 S/A 通道收紧到 head；登记 W1~W3 三处白名单。
+   *    ② C 级分类单一真源 C_CAT_REGISTRY，VETO_CATS / REDEEMABLE_CATS
+   *       由数组生成；标红兜底改为「未登记默认不抬」，防止新增 C 分类误抬回 B。
+   *    ③ 改级内聚：grade() 退化为薄包装，v122 出清 / 订阅源 C→B /
+   *       川普分类归位 / 标红兜底统一进 gradeCore() 单一出口；
+   *       enrich() 只保留「C 不入流」入池闸，mergeNews / gv 重算均带 src。
+   *    升版让存量条目按新口径重算。回归 441/441、去重 69/69。 */
+  const GRADE_VER = 62;
 
   /* ---------------- 关于「C 级要不要进信息流」 ----------------
    * 11-05 曾试过把 C 级里「带硬信息」的那部分（小国数据 / 边缘板块 / 网络安全…）
@@ -3312,32 +3408,12 @@
    * 前端 `.c-review` 那一块保留未删：它只在池子里真有 C 时才渲染，现在是死代码。
    */
   function enrich(raw) {
-    const g = grade(raw.title, raw.brief, raw.important, raw.stocks);
+    const g = grade(raw.title, raw.brief, raw.important, raw.stocks, raw.src);
     let lv = g[0];
     let cat = g[1];
-    /* ---------------- v122「标级纠错单」固化 ----------------
-     * 用户在导出单里逐条确认过的错判口径，直接按最终意图改写，交给下游落库：
-     *   ① 社会新闻：贪腐 / 被查 / 纪律审查 / 监察调查 → 一律 C，不进流
-     *      （原被判 B 混进「全部」，用户明确「贪腐被查的新闻一律不采纳」）
-     *   ② 个股异常波动（连续交易日涨幅偏离值）/ 个股立案·行政处罚
-     *      → C 不进流（原被判 B/A，用户「对投资影响不大」「价值一般」）
-     *   ③ 重大会议 → A：v127 起已上移到 gradeCore 0.11（见该文件注释），此处不再改写
-     * 订阅源（川普 / 口罩哥）不套用①②，避免误伤用户主动订阅的人。 */
-    {
-      const _t = String(raw.title || '');
-      const _sub = /川普言论|口罩哥KZG/.test(String(raw.src || ''));
-      if (!_sub && /被查|接受.{0,12}(纪律审查|监察调查|审查|调查)|纪律审查|监察调查|受贿|贪腐|落马|双开|严重违纪/.test(_t)) {
-        return null;  // ① 贪腐/被查 → 不进流
-      }
-      if (!_sub && (/(偏离值|连续\s*\d+\s*个交易日.{0,26}(涨幅|跌幅))/.test(_t)
-        || (/^[\u4e00-\u9fa5A-Za-z\*]{2,10}[：:]/.test(_t) && /(立案|行政处罚|处罚决定书|被罚|罚款)/.test(_t)))) {
-        return null;  // ② 个股异常波动 / 个股立案·处罚 → 不进流
-      }
-      /* ③ 重大会议 → A：v127 起已上移到 gradeCore 0.11（词序无关版本）。
-       * 原先写在这里是后置修正，合并重算 / 缓存重算都走 gradeCore，
-       * 会把 A 丢回 B —— 用户仍在纠错单里看到「国务院常务会议」是 B。
-       * 现在分级内核统一判定，这里不再二次改写，避免两套口径漂移。 */
-    }
+    /* P0-3：v122 出清（贪腐/被查、个股异动/立案）已内聚到 gradeCore() ①，
+     * 重大会议 → A 早就在 gradeCore 0.11。这里不再做任何级别改写，
+     * 否则「抓取入库」与「合并重算 / gv 升级重算」会得出不同结论。 */
     /* ---------------- 「人物 / 博主」源豁免 ----------------
      * 用户报：「川普的言论为什么一条都没有抓到，他不是很喜欢发推吗」。
      * 事实是**抓到了**（每轮 10 条），但全被分级闸丢掉了：
@@ -3347,16 +3423,11 @@
      * 但他们不是「常规财经资讯流」，是用户**主动订阅的人**。
      * 点开源名就是想看这个人说了什么 —— 全丢掉等于这个源永远空白。
      * 所以这两个源的内容最低保留为 B：不进「重点」，但「全部」和源筛选里都看得到。 */
-    const SUBSCRIBED_SRC = /川普言论|口罩哥KZG/;
+    /* P0-3：订阅源 C→B 与川普分类归位已内聚到 gradeCore() ②③。
+     * 这里只保留「C 级不入流」这一条入池闸（不是改级），
+     * subscribed 仅用于下文决定 brief 是否保留全文。 */
     const subscribed = SUBSCRIBED_SRC.test(String(raw.src || ''));
-    if (lv === 'C') {
-      if (!subscribed) return null;         // 其余 C 级仍不入流
-      lv = 'B';                             // 订阅源降级保留
-    }
-    /* 川普的讲话/采访/发布会一律归政治事件 ——
-     * 「特朗普讨论白宫宴会厅建设」里的「建设」会被公司规则抓成「公司事项」，
-     * 一个人讲了什么不该按公司公告归类。 */
-    if (subscribed && /川普/.test(String(raw.src || ''))) cat = '政治事件';
+    if (lv === 'C') return null;
 
     const text = raw.title + ' ' + raw.brief;
     /* 机构观点（花旗/高盛给的预测、目标价）不是市场事件 ——
@@ -4439,7 +4510,7 @@
      * 另一家媒体报了同一件事，走跨源合并，这里按规则重算一遍，
      * 把用户改的级别原封不动盖回去了。fixed 标记由 app.js 的 fixApply 打上。 */
     if (!target.fixed) {
-      const g = grade(target.title, target.brief, target.important || it.important, target.stocks);
+      const g = grade(target.title, target.brief, target.important || it.important, target.stocks, target.src);
       target.level = g[0];
       target.cat = g[1];
     }
@@ -6469,6 +6540,8 @@
     _splitClaim: splitClaim,
     _dedupSlots: dedupSlots,
     _grade: grade,
+    _gradeCore: gradeCore,      // P0-3：分级单一出口（调试/自检用）
+    _catAudit: _gradeCatAudit,   // P0-2：C 级分类登记表一致性自检
     _stripHtml: stripHtml,
     _fixBrief: fixBrief,
     GRADE_VER: GRADE_VER,
