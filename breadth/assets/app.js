@@ -85,29 +85,48 @@
   }
 
   /* ---------------- 数据 ---------------- */
-  /* ---------------- 数据来源 ----------------
-   * ① GitHub raw：云端 Actions 每天收盘跑批后自动提交 JSON，页面直接跨域读。
-   *    raw.githubusercontent.com 的 Access-Control-Allow-Origin 是 *，
-   *    缓存只有 max-age=300，适合每日更新（jsDelivr 会缓存 12 小时，不能用）。
-   * ② 同目录 data/breadth.json：本地跑批 / 云端还没配好时的兜底。
-   * 按顺序取第一个成功的 —— 远端挂了也不会白屏。 */
-  var DATA_REMOTE = 'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json';
+  /* ---------------- 数据来源（v236 三通道错峰竞速） ----------------
+   * ① GitHub raw：ACAO=*，缓存 max-age=300（5 分钟）—— 每天 15:20 跑批后最快拿到新数据。
+   * ② jsDelivr CDN：国内部分运营商下比 raw 更可达；@main 有 12h 缓存，只作可达性备用，
+   *    不能当主源（否则当天数据要晚半天）。
+   * ③ 同目录 data/breadth.json：离线 / 前两条全挂时兜底。
+   * 错峰竞速：raw 立即发、CDN 延后 350ms、本地延后 800ms，谁先返回有效 JSON 用谁。
+   * 正常情况下 raw 总是赢（实测 0.49s vs CDN 0.50s），raw 被墙时 CDN 顶上不白屏。 */
+  var DATA_SOURCES = [
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
+    'data/breadth.json'
+  ];
   function dataSources() {
-    var out = [];
-    if (DATA_REMOTE) {
-      var d = new Date();
-      var tag = '' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
-      out.push(DATA_REMOTE + (DATA_REMOTE.indexOf('?') >= 0 ? '&' : '?') + 't=' + tag);
-    }
-    out.push('data/breadth.json');
-    return out;
+    var d = new Date();
+    var tag = '' + d.getFullYear() + ('0' + (d.getMonth() + 1)).slice(-2) + ('0' + d.getDate()).slice(-2);
+    return DATA_SOURCES.map(function (u) {
+      return u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + tag;
+    });
   }
-  function loadData(i, srcs) {
-    srcs = srcs || dataSources();
-    if (i >= srcs.length) return Promise.reject(new Error('所有数据源都失败'));
-    return fetch(srcs[i], { cache: 'no-store' })
-      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .catch(function () { return loadData(i + 1, srcs); });
+  function validData(d) { return !!(d && d.dates && d.dates.length > 100 && d.meta); }
+  function loadData() {
+    return new Promise(function (resolve, reject) {
+      var srcs = dataSources(), done = false, pending = srcs.length;
+      var hard = setTimeout(function () {
+        if (!done) { done = true; reject(new Error('全部数据源超时')); }
+      }, 9000);
+      srcs.forEach(function (u, i) {
+        var go = function () {
+          if (done) return;
+          fetch(u, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (d) {
+              if (done || !validData(d)) return;
+              done = true; clearTimeout(hard); resolve(d);
+            })
+            .catch(function () {
+              if (--pending === 0 && !done) { done = true; clearTimeout(hard); reject(new Error('全部数据源失败')); }
+            });
+        };
+        if (i === 0) go(); else setTimeout(go, i === 1 ? 350 : 800);
+      });
+    });
   }
 
   function boot() {
@@ -116,7 +135,7 @@
       var th = JSON.parse(localStorage.getItem('mm_theme') || '"dark"');
       document.body.classList.toggle('light', th === 'light');
     } catch (e) {}
-    loadData(0)
+    loadData()
       .then(function (d) {
         S.d = d;
         setRange(30);

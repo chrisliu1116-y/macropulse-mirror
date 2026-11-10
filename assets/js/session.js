@@ -175,7 +175,13 @@
     const U = w.UNIVERSE;
     const a = U.get(key);
     if (!a) return { open: false, phase: 'closed', label: '--', hint: '' };
-    const type = (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
+    /* v236【全品种修复】品种自带 sess 必须优先于「分组时段」。
+     * apac 是日经+KOSPI 的**并集**（东京时区 09:00-11:30 / 12:30-15:00），
+     * 而 HSI/HSTECH(hk)、KS11(kr)、TWII(tw) 虽然 grp=apac，各自时段完全不同：
+     * 北京 10:46 港股正在交易，apac 却落在「东京午休」→ 详情页显示「亚太·休市」。
+     * 行情列表的 sessionOf() 早就优先 a.sess，只有直接调 state() 的
+     * 详情页 / 选股表 / 异动雷达漏了 —— 在这里统一修，所有入口一起好。 */
+    const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
     return judge(type, new Date());
   }
 

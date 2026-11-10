@@ -251,6 +251,10 @@
       this.interval = intervalMs || 20000;
       this.scan();
       this.timer = setInterval(() => this.scan(), this.interval);
+      /* v236：前台服务从 Java 侧主动注入扫描的入口。
+       * APP 退到后台时 Android 会节流 WebView 的 JS timer，但外部
+       * evaluateJavascript 注入不受影响；scan() 自带 busy 门，重复调用安全。 */
+      try { w.__forceAnomalyScan = () => this.scan(); } catch (e) {}
     }
 
     stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
