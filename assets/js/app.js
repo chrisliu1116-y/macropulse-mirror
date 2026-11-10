@@ -3612,6 +3612,8 @@
           </div></div>
         <div class="set-row"><div><b>发送测试通知</b><span>按「S 级快讯」的声音/震动开关发一条模拟通知，即时检验效果</span></div>
           <button class="mini-btn" id="btnTestNotify">测试</button></div>
+        <div class="set-row"><div><b>5 秒后测试后台通知</b><span>点完立刻切到后台或锁屏。5 秒后应响铃 + 震动 + 通知栏；计时在 APP 原生层，不受网页定时器冻结影响。没响＝后台进程被系统冻结，去「后台防杀」设为无限制</span></div>
+          <button class="mini-btn" id="btnTestDelayed">5 秒</button></div>
         <div class="set-row"><div><b>后台防杀</b><span>跳转系统电池优化，把本 APP 设为「无限制」避免后台被清理</span></div>
           <button class="mini-btn" id="btnBattery">去设置</button></div>
       </div>
@@ -7066,6 +7068,24 @@
           sysNotify('🔔 测试通知', '这是一条测试：请检查声音与震动表现', 'mm-test-notify', 's');
           alertNotifyPerm();
           toast2('已在浏览器发送测试通知');
+        }
+        return;
+      }
+      if (e.target.id === 'btnTestDelayed') {
+        const np = w.NativePulse;
+        if (np && typeof np.scheduleTest === 'function') {
+          try {
+            const pf = alertPrefs('s');
+            np.scheduleTest(5, pf.sound, pf.vib);
+            toast2('已设定：5 秒后响，请立刻切到后台');
+          } catch (err) { toast2('设定失败：' + err); }
+        } else {
+          /* 浏览器没有原生计时通道，只能前台验证；明确告知别误判成后台通过 */
+          toast2('浏览器模式：5 秒后发（请保持页面在前台，切后台测请用 APP）');
+          setTimeout(() => {
+            sysNotify('⏱ 后台通知测试', '5 秒延时测试（浏览器前台）', 'mm-test-delay', 's');
+            alertNotifyPerm();
+          }, 5000);
         }
         return;
       }
