@@ -138,6 +138,23 @@
     }, null, 2);
   }
 
+  /** 一键复制「修复指令」：纠错单 JSON + 完整 AI 修复要求拼成一段可直接发送的 Prompt */
+  function fixPrompt() {
+    const json = fixJson();
+    if (!json) return '';
+    return '请严格按《误判台账》的四桶归因法处理以下纠错单，严禁突破 tools/test_grade.js 的反补丁棘轮锁上限（gradeCoreRules ≤ 107 / Gates ≤ 29 / 总和 ≤ 136）：\n\n'
+      + '【客户端纠错单导出数据】：\n' + json + '\n\n'
+      + '【强制执行要求】：\n'
+      + '1. 第 0 步（读诊断与原因）：读取每条记录的 `ruleId`、`stage` 以及我在 `reason` 字段填写的业务定级口径。\n'
+      + '2. 第 1 步（四桶归因）：将每条误判归入以下四桶之一，并在台账根因列写明【桶X】：\n'
+      + '   - 【桶A 词表缺漏】→ 仅修改顶层 ENTITIES；\n'
+      + '   - 【桶B 数值语境误读】→ 仅修改通用数值提取器或 THRESHOLDS；\n'
+      + '   - 【桶C 支柱/守门边界】→ 仅在 croVeto() / croPillar() / aCap() 或既有阶段内修正边界条件；\n'
+      + '   - 【桶D 纯个例怪异标题】→ 仅保留本机 mm_fix_v1 映射，不改任何规则代码。\n'
+      + '   * 铁律：严禁为单条新闻编写一次性表面特征正则，严禁在 gradeCoreRules 或 Gate 函数中新增独立早退 return 分支！\n'
+      + '3. 第 2 步（验证与落盘）：在 tools/test_grade.js 中补充正反回归用例，确保 441+ 分级测试、80+ 去重测试及四面棘轮锁 100% 通过；随后将 GRADE_VER +1，追加登记至 docs/误判台账.md，并同步发版。';
+  }
+
   /* 改判面板：长按卡片弹出。走独立遮罩，不复用 #sheet ——
    * 那个是行情详情用的，混在一起会把锁定滚动/手势逻辑搅乱。 */
   function closeFixPanel() {
@@ -2772,9 +2789,12 @@
       const ptsNow = S.pts[k];
       const ptsTxt = (ptsNow && closed) ? altLabel({ kind: 'pts', price: ptsNow.price, pct: ptsNow.pct }, k) : '';
       /* v215：美股指数没有连续的盘前/盘后成交（三大源都只给常规时段），
-       * 列表里再挂个「盘前」标签会让人以为能看到盘前走势 —— 统一按「已收盘」显示。 */
+       * 列表里再挂个「盘前」标签会让人以为能看到盘前走势 —— 统一按「已收盘」显示。
+       * v255：VIX（CBOE 恐慌指数）例外 —— CBOE GTH 延展时段 03:15–16:15 ET 有真实
+       * 连续成交，CNBC `.VIX` 给得出真实盘前价（inExt），此时必须显示「盘前」，
+       * 不能把正在交易 VIX 标成「已收盘」（用户实测纠错）。 */
       const isUsIdx = (a.grp === 'us' || a.grp === 'usstock') && a.kind === 'index';
-      const idxExt = isUsIdx && (sess.phase === 'pre' || sess.phase === 'post');
+      const idxExt = isUsIdx && (sess.phase === 'pre' || sess.phase === 'post') && !inExt;
       const sessLbl = idxExt ? '已收盘' : sess.label;
       const sessCls = idxExt ? 'closed' : (sess.open ? 'open' : sess.phase);
       return `<div class="mk-row qrow" data-k="${esc(k)}">
@@ -3410,6 +3430,13 @@
     if (!host) return;
     const ex = S.ext[key];
     if (!ex || !ex.phase) { host.hidden = true; host.innerHTML = ''; return; }
+    /* v255：延展报价晚到时，头部会话标签同步从「已收盘」改为「盘前/盘后」，
+     * 避免打开瞬间是「已收盘」、数据到了才闪变（VIX 实测）。 */
+    const sessEl = document.querySelector('#sheet .sh-sess');
+    if (sessEl && sessEl.textContent === '已收盘') {
+      sessEl.textContent = ex.phase === 'pre' ? '盘前' : '盘后';
+      sessEl.classList.add('open');
+    }
     const cls = (ex.pct != null && ex.pct < 0) ? 'down' : 'up';
     host.hidden = false;
     host.innerHTML = `<i>${ex.phase === 'pre' ? '盘前' : '盘后'}</i>`
@@ -3673,7 +3700,7 @@
         <div class="set-row"><div><b>纠错单</b><span>${fixStore.list.length
           ? '攒够一批再点「复制」，一次性粘给 AI —— 它会按这批样本改规则、记台账、补回归用例。'
           : '还没有改判记录。遇到判错的长按卡片改一次，就会出现在这里；攒一批再一起复制。'}</span></div>
-          <span class="fix-btns"><button class="mini-btn" id="fixCopy"${fixStore.list.length ? '' : ' disabled'}>复制文本</button><button class="mini-btn" id="fixJson"${fixStore.list.length ? '' : ' disabled'}>复制 JSON</button></span></div>
+          <span class="fix-btns"><button class="mini-btn" id="fixCopy"${fixStore.list.length ? '' : ' disabled'}>复制修复指令</button></span></div>
         ${fixStore.list.length ? `<div class="set-row col"><div class="fix-prev">${fixStore.list.slice(0, 8).map(x =>
           `<div class="fix-prev-i"><b>${esc(x.to)}←${esc(x.from)}</b><span>${esc(String(x.title || '').slice(0, 44))}</span>`
           + `<i>${esc(x.reason || '未填原因')}</i></div>`
@@ -4476,9 +4503,12 @@
     syncLock();
 
     const q = QuoteHub.get(key);
-    /* v215：美股指数没有连续盘前/盘后成交，头部也不挂「盘前/盘后」，统一「已收盘」。 */
+    /* v215：美股指数没有连续盘前/盘后成交，头部也不挂「盘前/盘后」，统一「已收盘」。
+     * v255：与列表同口径 —— 拿到真实延展报价（VIX 的 CNBC 盘前）时不强制「已收盘」。 */
+    const _extNow = S.ext[key];
     const _idxExt = (a.grp === 'us' || a.grp === 'usstock') && a.kind === 'index'
-      && (sess.phase === 'pre' || sess.phase === 'post');
+      && (sess.phase === 'pre' || sess.phase === 'post')
+      && !(_extNow && _extNow.phase);
     const _sessLbl = _idxExt ? '已收盘' : sess.label;
     sheet.innerHTML = `
       <div class="sh-panel">
@@ -5629,6 +5659,12 @@
      * 靠 manifest 的 orientation:"any" 让用户转手机就能横过来，此时给一条轻提示。 */
     const after = () => {
       _tryLockLandscape(2);
+      /* v255：WebView 里 screen.orientation.lock 通常锁不动 —— 直接调原生桥
+       * 强制横屏（APK v1.5.8 NativePulse.setLandscape）。浏览器里没这个桥，静默跳过。 */
+      try {
+        const np = w.NativePulse;
+        if (np && np.setLandscape) np.setLandscape(true);
+      } catch (e) {}
       const portrait = () => (w.innerHeight || 0) > (w.innerWidth || 0);
       setTimeout(() => { if (portrait() && d.body.classList.contains('chart-fs')) ensureFsHint(); }, 700);
     };
@@ -5650,6 +5686,11 @@
     try { if (d.fullscreenElement && d.exitFullscreen) d.exitFullscreen(); } catch (e) {}
     try {
       if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+    } catch (e) {}
+    /* v255：退出图表全屏 → 回竖屏（与进入时 setLandscape(true) 配对） */
+    try {
+      const np = w.NativePulse;
+      if (np && np.setLandscape) np.setLandscape(false);
     } catch (e) {}
     _fsResizeSoon();
   }
@@ -7167,10 +7208,9 @@
         }
         return;
       }
-      if (e.target.id === 'fixCopy' || e.target.id === 'fixJson') {
-        const isJson = e.target.id === 'fixJson';
-        const label = isJson ? '复制 JSON' : '复制文本';
-        const txt = isJson ? fixJson() : fixText();
+      if (e.target.id === 'fixCopy') {
+        const label = '复制修复指令';
+        const txt = fixPrompt();
         if (!txt) return;
         const done = () => { e.target.textContent = '已复制'; setTimeout(() => { e.target.textContent = label; }, 1600); };
         const fallback = () => {

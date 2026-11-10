@@ -165,5 +165,7 @@ body.light .btn-fs.on{border-color:#9db9e8;background:#e8efff;color:#1d4ed8}
 /* 大标题与主站 tab 文案重复，隐藏；保留更新时间(#upd)与全屏按钮(#btnFull) */
 body.embed .hd{align-items:center}
 body.embed .hd-l h1{display:none}
-body.embed .hd-l .sub{font-size:11px}
+/* v255：embed 里顶部这行「全A股 · 数据 …」与底部「全部A股 N 只 · … · 更新 …」重复，
+ * 用户要求去掉 —— 底部 #ft 信息更全（总家数/有效/交易日/更新时间），只留它。 */
+body.embed .hd-l .sub{display:none}
 body.embed .wrap{padding-top:6px}

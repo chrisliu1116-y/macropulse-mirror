@@ -170,8 +170,14 @@
   }
 
   /* 全屏：优先 Fullscreen API；WebView 会走 WebChromeClient.onShowCustomView。
-   * 横屏方向锁（screen.orientation.lock）在 WebView 里通常不可用，
-   * 所以横屏由 CSS @media 自适应 + 用户旋转设备完成；APK 侧方向控制留待下一轮。 */
+   * v255：APK 里点全屏 → 原生强制横屏、退出 → 回竖屏（NativePulse.setLandscape，
+   * 由宿主 APK v1.5.8 提供；iframe 里经 parent 取同一个桥）。浏览器无桥，静默跳过。 */
+  function nativeLandscape(on) {
+    try {
+      var np = (window.parent && window.parent !== window && window.parent.NativePulse) || window.NativePulse;
+      if (np && np.setLandscape) np.setLandscape(!!on);
+    } catch (e) {}
+  }
   function bindFullscreen() {
     var btn = $('btnFull');
     if (!btn) return;
@@ -180,6 +186,7 @@
       btn.classList.toggle('on', on);
       var lab = btn.querySelector('span');
       if (lab) lab.textContent = on ? '退出' : '全屏';
+      nativeLandscape(on);
     }
     btn.addEventListener('click', function () {
       var el = document.documentElement;
