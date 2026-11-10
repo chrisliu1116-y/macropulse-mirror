@@ -40,9 +40,12 @@
       grid: 'rgba(15,23,42,.07)', axis: '#94a3b8',
       red: '#dc2626', green: '#16a34a', warn: '#ea8a00',
       line: ['rgba(154,166,184,.80)', 'rgba(220,38,38,.62)', 'rgba(217,119,6,.62)'],
-      dot: ['#5f6b7d', '#b91c1c', '#b45309'],
+      dot: ['#5f6b7d', '#b91c1c', '#ea8a00'],
       ring: 'rgba(255,255,255,.95)',
-      num: ['#dc2626', '#b45309', '#0369a1'],
+      /* v261：浅色「大数」橙由 #b45309 提亮到 #ea8a00 —— 原值深棕发暗，用户反馈像屎黄 */
+      num: ['#dc2626', '#ea8a00', '#0369a1'],
+      /* v261：点的特殊色（跟当日家数走）—— 冰点蓝 / 大数橙 */
+      dotIce: '#0369a1', dotHot: '#ea8a00',
       upArrow: '#e53935', upEdge: 'rgba(127,29,29,.85)',
       downArrow: '#16a34a', downEdge: 'rgba(255,255,255,.9)',
       warnDot: '#ea8a00', warnEdge: '#ffffff', warnMark: '#ffffff',
@@ -52,6 +55,9 @@
     }
   };
   var C = THEMES.dark;
+  /* 深色主题同样要有点的特殊色键（跟当日家数走） */
+  THEMES.dark.dotIce = '#38bdf8';
+  THEMES.dark.dotHot = '#ffc247';
 
   function isLight() { return document.body.classList.contains('light'); }
   function cur() { return isLight() ? THEMES.light : THEMES.dark; }
@@ -65,8 +71,9 @@
     } catch (e) { return ''; }
   }
 
-  /* 折线分段：<100 灰 / 100~149 红 / ≥150 橙 */
-  function bandOf(v) { return v >= 150 ? 2 : (v >= 100 ? 1 : 0); }
+  /* v261 折线分段：符合总数 <100 灰 / ≥100 红（不再有橙色档；
+   * 橙色改为「点」跟当日家数走的大数标记，见下方点色逻辑） */
+  function bandOf(v) { return v >= 100 ? 1 : 0; }
 
   var MIN_BARS = 15;
 
@@ -77,8 +84,9 @@
     var T = cur();
     $('lg').innerHTML =
       '<span><em style="background:' + T.dot[0] + '"></em>&lt;100</span>' +
-      '<span><em style="background:' + T.dot[1] + '"></em>100–149</span>' +
-      '<span><em style="background:' + T.dot[2] + '"></em>≥150</span>' +
+      '<span><em style="background:' + T.dot[1] + '"></em>≥100</span>' +
+      '<span><em style="background:' + T.dotIce + '"></em>冰点</span>' +
+      '<span><em style="background:' + T.dotHot + '"></em>大数≥150</span>' +
       '<span style="color:' + T.upArrow + '">▲ 转多</span>' +
       '<span style="color:' + T.downArrow + '">▼ 转空</span>' +
       '<span style="color:' + T.warnDot + '">! 预警</span>';
@@ -440,11 +448,15 @@
       var rr = step >= 8 ? 4.5 : (step >= 4.5 ? 3.4 : 2.4);
       for (var b = 0; b < cnt; b++) {
         var gi = from + b;
-        var bd = bandOf(d.total[gi]);
         var bx = xOf(b), by = yOf(d.total[gi]);
+        /* v261：点色跟「当日家数」的特殊状态走 —— 冰点（家数 ≤ 前日一半）蓝、
+         * 大数（家数 ≥150）橙，其余按符合总数：<100 灰 / ≥100 红。
+         * 判据与家数数字着色（isHalf / ≥150）完全一致。 */
+        var dv0 = d.daycnt[gi], pg0 = gi > 0 ? d.daycnt[gi - 1] : null;
+        g.fillStyle = (pg0 != null && dv0 <= pg0 * 0.5) ? T.dotIce
+          : (dv0 >= 150 ? T.dotHot : (d.total[gi] >= 100 ? T.dot[1] : T.dot[0]));
         g.beginPath();
         g.arc(bx, by, rr, 0, Math.PI * 2);
-        g.fillStyle = T.dot[bd];
         g.fill();
         g.lineWidth = 1;
         g.strokeStyle = T.ring;
@@ -452,7 +464,8 @@
       }
     }
 
-    /* 箭头 / 预警：画在折线点下方，放大到一眼可见 */
+    /* 箭头 / 预警：v261 起转空▼与预警⚠画在**点的上方**（转多▲仍在点下方）。
+     * 家数数字也画在上方（step≥4 时），图标再抬一档避开数字带；顶边夹紧。 */
     var lastIconX = -1e9;
     var iconGap = step < 2.2 ? 9 : 4;
     var big = step >= 5;
@@ -464,8 +477,12 @@
       var ax = xOf(a);
       if (ax - lastIconX < iconGap) continue;
       lastIconX = ax;
-      var ay = yOf(d.total[gi2]) + (big ? 13 : 11);
-      if (ay > P.t + ih + 6) ay = P.t + ih + 6;
+      var py2 = yOf(d.total[gi2]);
+      var ayDown = py2 + (big ? 13 : 11);
+      if (ayDown > P.t + ih + 6) ayDown = P.t + ih + 6;
+      var ay = isRed ? ayDown
+        : py2 - (step >= 4 ? (big ? 25 : 22) : (big ? 14 : 12));
+      if (ay < P.t + 9) ay = P.t + 9;
       var sc = big ? 1 : (step >= 3 ? 0.85 : 0.7);
 
       if (isRed) {
@@ -476,15 +493,15 @@
         g.lineWidth = 1;
         if (isSup && step >= 3) { g.shadowColor = 'rgba(255,92,92,.95)'; g.shadowBlur = 9; }
         g.beginPath();
-        g.moveTo(ax, ay - 7.2 * sc);
-        g.lineTo(ax + 6 * sc, ay + 2.6 * sc);
-        g.lineTo(ax - 6 * sc, ay + 2.6 * sc);
+        g.moveTo(ax, ayDown - 7.2 * sc);
+        g.lineTo(ax + 6 * sc, ayDown + 2.6 * sc);
+        g.lineTo(ax - 6 * sc, ayDown + 2.6 * sc);
         g.closePath(); g.fill(); g.stroke();
         if (isSup && step >= 3) {
           g.beginPath();
-          g.moveTo(ax, ay + 2.6 * sc);
-          g.lineTo(ax + 6 * sc, ay + 9.6 * sc);
-          g.lineTo(ax - 6 * sc, ay + 9.6 * sc);
+          g.moveTo(ax, ayDown + 2.6 * sc);
+          g.lineTo(ax + 6 * sc, ayDown + 9.6 * sc);
+          g.lineTo(ax - 6 * sc, ayDown + 9.6 * sc);
           g.closePath(); g.fill(); g.stroke();
           g.shadowBlur = 0;
         }
