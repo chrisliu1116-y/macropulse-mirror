@@ -8,21 +8,27 @@
  *   用户原话：「那种剧烈波动，特别是黑天鹅，都是发生在几分钟里面的，
  *   你 30 分钟才去看的话，根本就来不及了。」
  *   所以六个窗口同时盯，任一越线即触发：
- *     1 分钟  → 闪崩 / 单根 K 线垂直拉升（不等确认，1.4 倍直接报）
+ *     1 分钟  → 闪崩 / 单根 K 线垂直拉升（不等确认，FAST_MULT=1.3 倍直接报）
  *     2 分钟  → 短促脉冲（同上）
- *     3 分钟  → 脉冲确认
- *     5 分钟  → 主战场（1.6 倍直接报，否则需连续两轮）
+ *     3 分钟  → 脉冲确认（同上）
+ *     5 分钟  → 主战场（FAST_MULT=1.5 倍直接报，否则需连续两轮）
  *     15 分钟 → 短促趋势（连续两轮）
  *     30 分钟 → 持续趋势（连续两轮）
  *   短尺度额外闸门：1/2/3 分钟越线时，要求 5 分钟窗口也走掉阈值的 50%
  *   以上 —— 单笔异常成交打出的「一分钟插针」不会同向推动 5 分钟窗口，
  *   这条闸门把「真急动」和「撮合毛刺」分开。
  *
+ * 【日内阶梯】当日累计幅度跨 1.0x / 1.8x / 2.6x / 3.5x 当日阈值时，
+ *   每跨一档立即升级报警并豁免常规窗口冷却，专门抓「1% → 3% → 5%」的主升浪。
+ *
  * 【动态波动率】
  *   阈值不是死值。每次扫描把「今天到目前为止的窗口极值」写进
  *   VolBank（localStorage），跨天累积成经验分布，再与静态标定值
  *   按样本量加权 —— 详见 volprofile.js。页面开着就一直在学，
- *   40 个交易日后完全由实盘分布决定，不用再改 universe.js。
+ *   40 个交易日后权重 w 达到 1，但**经验值始终受 [base*0.6, base*2.0]
+ *   夹紧**（防脏数据打穿），并非「完全无约束地交给实盘」；
+ *   样本 ≥15 日时还会做「近 15 日 0.7 + 全量 0.3」双窗口分位融合，
+ *   让近期低波能收紧阈值、突发启动立刻被抓到。
  *
  * 【关键防护】
  *   · 休市/跨夜：窗口首尾时间跨度必须严格等于 win 分钟，否则本轮放弃判断，
@@ -46,6 +52,11 @@
 
   /* 短尺度闸门：5 分钟窗口至少走掉自身阈值的这个比例 */
   const CROSS_GATE = 0.5;
+
+  /* 日内大行情阶梯（× 当日阈值）：从 1.0x 跨到 1.8x / 2.6x / 3.5x 时，
+   * 每跨一档立即升级报警，豁免常规窗口冷却 —— 用户口径：「从涨 1% 一路爆拉
+   * 到 3%、5%」不该被 10 分钟冷却静音在主升浪里。 */
+  const DAY_STAGES = [1.0, 1.8, 2.6, 3.5];
 
   /** 窗口 → 尺度名 */
   function scaleOf(win) {
@@ -201,6 +212,8 @@
        * 会在两轮之间从「命中」掉回「平静」，横幅一闪一灭。
        * 当日阈值只许降不许升（同一交易日内取最小值），状态就不会来回跳。 */
       this.dayBase = {};
+      /* 日内阶梯：{ key: { d: 交易日, s: 已达最高档位索引 } }，跨天自动重置。 */
+      this.dayStage = {};
 
       /* 每个品种上一轮是否处于「异动中」。
        * 用途：波动率还高的时候把异动状态**维持**住 —— 从 +5% 跌回 +1% 的那一路
@@ -504,7 +517,8 @@
     /** 连续同向的那一段：从最后一根 bar 往前扩，只要这段的「最大回撤」不超过噪声就继续。
      *  返回 { idx, at, from, cum, durMin }。
      *
-     *  为什么不能用「从首次越线算起」：以前只要累计没回吐一半就继续计时，
+     *  为什么不能用「从首次越线算起」：旧版曾按「累计没回吐一半」计时
+     *  （现行实现已改为「最大回撤 ≤ 噪声」，见下），
      *  于是「涨—回调—再涨」的一整天会被算成「持续上涨 109 分钟」。
      *  用户原话：「明显不可能 100 多分钟一直都在拉升或下跌」。
      *
@@ -575,12 +589,15 @@
       const d = VP.dynThreshold(k, win, staticThr, TARGET_RATE[win] || 0.05);
       let thr = d.thr;
 
-      // 当日已经很躁动 → 尺子适度放宽；上限 1.15 倍（否则会压住正在发生的暴力行情）
+      // 双向系数 [0.85, 1.15]：高波日放宽、平静期收紧 15%（见 volprofile.liveVol）
       const lv = VP.liveVol(k, win);
-      if (lv > 1) thr *= Math.min(1.15, lv);
+      thr *= lv;
 
       const cls = VP.classOf(k).cls;
-      thr = Math.max(cls.floor, Math.min(cls.ceil, thr));
+      /* CLASS.floor 是 t5 口径基准，1/2/3 分钟按 staticThr/t5 等比缩小，
+       * 否则低波品种（外汇/黄金/SPX）的短窗标定会被一刀切垫高。 */
+      const floor = VP.floorFor ? VP.floorFor(k, win, staticThr) : cls.floor;
+      thr = Math.max(floor, Math.min(cls.ceil, thr));
       thr *= this.thrScale;
 
       this.calib[k + ':' + win] = { t: Date.now(), thr: thr, src: d.src };
@@ -726,8 +743,12 @@
           }
 
           const h5thr = (hits.find(x => x.win === 5) || {}).thr || t.t5 || 1;
-          /* 当日阈值：同一天内只降不升，避免动态阈值飘动导致命中状态抖动 */
-          const rawDayThr = Math.max(h5thr * 3.2, 1.5);
+          const h30thr = (hits.find(x => x.win === 30) || {}).thr || t.t30 || 1;
+          /* 当日阈值：同一天内只降不升，避免动态阈值飘动导致命中状态抖动。
+           * 纯品种自适应，不再用 1.5% 绝对值硬地板 —— 那个地板比
+           * USDCNH 的 t30(0.121%)、DXY 的 t30(0.257%) 高一个量级，
+           * 外汇日内涨 1%（自身波动的十几倍）都触发不了当日异动。 */
+          const rawDayThr = Math.max(h5thr * 3.2, h30thr * 1.6);
           const dayKey = new Date(bars[n - 1].time * 1000).toDateString();
           if (this.dayBase[t.k] && this.dayBase[t.k].d !== dayKey) delete this.dayBase[t.k];
           const b0 = this.dayBase[t.k];
@@ -745,8 +766,10 @@
            * 弹一次「突发剧烈异动」。分时图上早就是一条平线了。
            *
            * 判据：最近 15/30 分钟得真在动 ——
-           *   同向变动 ≥ 该窗口阈值的 35%（且不低于 0.15%），
-           *   或者 ≥ 当日幅度的 8%（大行情里的小回调也算还在推进）。
+           *   同向变动 ≥ 该窗口阈值的 35%，
+           *   且 ≥ 该品种 5 分钟尺子的一半（低波品种不写死 0.15%），
+           *   且 ≥ 当日幅度的 12%（大行情里的小回调不算还在推进）。
+           *   或波动率 z ≥ FRESH_Z，直接认新鲜。
            * 不满足 → 这条当日命中只留在 hits 里供 UI 显示「今日累计 / 近 24 小时」，
            * 不参与 best 选择、不触发预警。异动已经走完，就不该再喊。 */
           /* ---------------- 波动率状态（本轮的核心判据） ----------------
@@ -764,18 +787,34 @@
           const hv15 = hits.find(x => x.win === 15);
           const hv30 = hits.find(x => x.win === 30);
           const recentMag = Math.max(hv15 ? Math.abs(hv15.chg) : 0, hv30 ? Math.abs(hv30.chg) : 0);
-          /* 门槛：既要压过该窗口阈值的三分之一（正常的「还在动」），
-           * 也要占到当日幅度的 12% 以上 —— 否则「跌了 5% 之后反弹 0.3%」
-           * 也会被当成「还在推进」，一天的行情永远不结束。
-           * 另外 z 够高（波动率明显高于常态）也直接认为新鲜：
-           * 这才是「现在真的在震」的直接证据，比幅度间接判断可靠。 */
+          /* 同向确认门槛：既要压过该窗口阈值的 35%，也要占到当日幅度的 12%，
+           * 另外留一条「按品种自身 5 分钟尺子的一半」的地板 ——
+           * 以前写死 0.15%，比 USDCNH 的 t30 还高，等于给外汇上了静音。
+           * 现在低波品种按自己的 hv5.thr * 0.5 算，高波品种照旧由 35%/12% 主导。 */
+          const hv5 = hits.find(x => x.win === 5);
           const recentNeed = Math.max(
             hv30 ? hv30.thr * 0.35 : 0,
             hv15 ? hv15.thr * 0.35 : 0,
-            0.15,
+            (hv5 ? hv5.thr : h5thr) * 0.5,
             Math.abs(dayPct) * 0.12
           );
           const dayFresh = recentMag >= recentNeed || volZ >= FRESH_Z;
+
+          /* ---------------- 日内大行情阶梯跃迁 ----------------
+           * 当日累计幅度跨过 1.0x / 1.8x / 2.6x / 3.5x 当日阈值时记录档位；
+           * 每跨入更高一档且行情仍新鲜，就立即升级报警，豁免常规窗口冷却
+           * （主升浪里 10 分钟冷却不该把「1% → 3% → 5%」的升级静音）。 */
+          const dayRatio = dayThr > 0 ? Math.abs(dayPct) / dayThr : 0;
+          const stageRec = this.dayStage[t.k];
+          if (stageRec && stageRec.d !== dayKey) delete this.dayStage[t.k];
+          let stageIdx = 0;
+          for (let si = 0; si < DAY_STAGES.length; si++) {
+            if (dayRatio >= DAY_STAGES[si]) stageIdx = si + 1;
+          }
+          const prevStage = this.dayStage[t.k] ? this.dayStage[t.k].s : 0;
+          /* 阶梯本身要求 dayFresh（行情还在推进），stale 由后面统一的陈旧判定兜底。 */
+          const stageUp = stageIdx > prevStage && stageIdx > 0 && dayFresh;
+          this.dayStage[t.k] = { d: dayKey, s: Math.max(prevStage, stageIdx) };
 
           if (Math.abs(dayPct) >= dayThr) {
             hits.push({
@@ -829,9 +868,10 @@
             && ageMin > Math.max((best && best.win ? best.win : 30) * 3 + 8, 25) + delayMin;
 
           // ---- 触发判定 ----
-          // 1/2/3 分钟：1.4~1.5 倍直接报，不等下一轮（等 20 秒，行情可能已经走完）
-          // 5 分钟：1.6 倍直接报，否则连续两轮
+          // 1/2/3 分钟：FAST_MULT=1.3 倍直接报，不等下一轮（等 20 秒，行情可能已经走完）
+          // 5 分钟：FAST_MULT=1.5 倍直接报，否则连续两轮
           // 15/30 分钟：必须连续两轮（防止单根插针把长窗口也污染掉）
+          // 日内阶梯跨档：立即升级报警，不等第二轮、不受常规窗口判定限制
           let alarm = false;
           let holding = false;
           const prev = this.hitState[t.k];
@@ -841,11 +881,14 @@
              * 这件 13 小时前的事会每轮重弹一次（用户报的以太坊误报）。 */
             const quick = best.win === 0
               ? (best.fresh !== false)
-              : (best.win <= 5 && best.ratio >= (FAST_MULT[best.win] || 1.6));
+              : (best.win <= 5 && best.ratio >= FAST_MULT[best.win]);
             const sustained = prev && prev.hit && (best.win === 0 || prev.win === best.win)
               && (nowEpoch - prev.at) < 180;
             alarm = quick || sustained;
           }
+          /* 阶梯跃迁：跨入更高一档就升级报警（dayFresh 已在上面保证），
+           * 不因为 best 被 gated 或短窗未越线而漏掉主升浪。 */
+          if (stageUp && !stale) alarm = true;
           /* ---------------- 异动的「维持」 ----------------
            * 用户口径：「上午 +5% 回落到 +1% 这种本身就是高波动的杀盘，
            * 本身就已经够预警了。」
@@ -872,7 +915,8 @@
            * 所以除了窗口幅度，再跟一条「从起点累计」的线：
            *   起点 = 第一次越线那一轮的窗口起始 bar
            *   同向且幅度超过历史峰值 → expanding（还在扩大）
-           *   回吐超过峰值一半 / 方向反转 / 跨节超过 6 小时 → 本次结束
+           *   同向且幅度超过历史峰值 → expanding（还在扩大）
+           *   幅度萎缩到峰值的 34% 以下 / 方向反转 / 跨节超过 6 小时 → 本次结束
            */
           const br0 = this.bursts[t.k];
           const noise = this.runNoise(bars);
@@ -888,7 +932,7 @@
             const sameDir = !!(seg && Math.sign(cumNow) === br0.dir);
             // 「当日」命中的起点本来就是当天开盘，别用 6 小时把它反复掐断
             const aged = !br0.day && (bars[n - 1].time - br0.at) > 6 * 3600;
-            /* 连续段已经不成立（中间出现过像样反弹），或者幅度萎缩到峰值的三分之一，
+            /* 连续段已经不成立（中间出现过像样反弹），或者幅度萎缩到峰值的 34% 以下，
              * 就认定这一波结束。不能再挂着「持续 109 分」的牌子 —— 那是在骗人。 */
             const over = !sameDir || Math.abs(cumNow) < br0.peak * 0.34 || aged;
             if (over) {
@@ -965,6 +1009,8 @@
              * holding = 这轮没有新的越线窗口，但波动率还高，所以异动状态继续保持。 */
             volZ: +volZ.toFixed(2),
             rv: +rvNow.toFixed(3),
+            /* 日内阶梯：当前档位 0~4 与「本轮是否跨档」，列表/卡片可写「日内 2 档升级」。 */
+            dayStage: stageIdx, dayStageUp: !!stageUp,
             holding: !!(alarm && !(best && best.ratio >= 1 && !best.gated)),
             status: stale ? 'closed' : (!alarm ? 'quiet'
               : (cause ? 'attributed' : 'unattributed')),
@@ -983,13 +1029,14 @@
             /* 判「这次扩大得明不明显」用的尺子 = 该品种自己的波动尺度。 */
             const sigma = this.sigmaOf(r);
             // 冷却：闪崩尺度最激进但最容易重复（同一段行情 1/2/3 分钟会连着越线），
-            // 冷却期最短；已归因的（消息驱动）拉长，避免一条新闻反复弹。
-            const cool = r.status === 'attributed' ? this.cooldown * 2
-              : r.scale === 'flash' ? this.cooldown * 0.4
-                : r.scale === 'fast' ? this.cooldown * 0.6
-                  : this.cooldown;
+            // 冷却期最短。已归因的（消息驱动）曾用 ×2(20min) 拉长，但那会把真行情
+            // 的主升浪静音 —— 有快讯配合的异动往往正是主升浪，改回 ×1(10min)。
+            const cool = r.scale === 'flash' ? this.cooldown * 0.4
+              : r.scale === 'fast' ? this.cooldown * 0.6
+                : this.cooldown;
             // 首次必报；之后必须「冷却期已过」且「按自身波动率算确实在明显扩大」才再报。
-            if (ampGate(curAmp, lastAmp, sigma, cool, prevAt, Date.now())) {
+            // 例外：日内阶梯跨档 = 主升浪升级，豁免常规冷却与幅度扩大判据，立即报。
+            if (stageUp || ampGate(curAmp, lastAmp, sigma, cool, prevAt, Date.now())) {
               this.alertedAt[t.k] = Date.now();
               this.alertedAmp[t.k] = Math.max(lastAmp, curAmp);
               /* 落盘 —— 否则关掉 app 再打开，alertedAt 清零，

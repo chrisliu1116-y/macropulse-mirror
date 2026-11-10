@@ -22,12 +22,20 @@
  *     · 每天第一次拉历史画像时，用**精确重算**的值覆盖前几天的临时值
  *       （页面只开半小时也不会污染数据）；
  *     · 阈值 = w·经验分位 + (1-w)·静态标定，w = min(1, 样本天数/40)
- *       → 样本少时信先验，样本多了就完全交给真实行情。
+ *       → 样本少时信先验，样本多了以真实行情为主；但结果始终夹紧在
+ *       [base*0.6, base*2.0]，不是无约束漂移。
+ *     · 样本 ≥15 日时经验分位做「近 15 日 ×0.7 + 全量 ×0.3」双窗口融合：
+ *       近期低波不再被几个月前的高波钝化，平静期突然启动能立刻抓到。
  *   收敛后阈值随市场自动漂移，不需要任何人再动 universe.js。
  *
+ * 【双向自适应 + 短窗下限】
+ *   liveVol() 返回 [0.85, 1.15]：近期波动显著低于历史中位数时收紧 15%，
+ *   高于时放宽 15%。CLASS.floor 是 **t5 口径**下限，1/2/3 分钟窗口经
+ *   floorFor() 按 staticThr/t5 等比缩放，避免低波品种短窗标定被一刀切垫高。
+ *
  * 【多尺度】
- *   5 / 15 / 30 分钟三个窗口各自维护一套库与阈值：
- *   5 分钟抓闪崩，30 分钟抓趋势。
+ *   1/2/3/5/15/30 分钟六个窗口各自维护一套库与阈值：
+ *   1 分钟抓闪崩，30 分钟抓趋势。
  * ============================================================ */
 (function (w) {
   'use strict';
@@ -80,6 +88,21 @@
   function classOf(key) {
     const c = classify(key);
     return { cat: c, cls: CLASS[CLASS_KEY[c]] || CLASS.index_us };
+  }
+
+  /** 分类下限（floor）按时间窗等比缩放。
+   *  CLASS.floor 是 **5 分钟（t5）口径**的基准下限。1/2/3 分钟窗口的静态标定
+   *  本来就比 t5 低（约 0.66~0.88 倍），若直接套同一个 floor 会把 GOLD t1=0.522
+   *  垫到 0.55、USDCNH t1=0.044 垫到 0.05、SPX t1=0.188 垫到 0.20 ——
+   *  低波品种的短窗标定全部失真。这里按 staticThr / t5 等比缩小下限。 */
+  function floorFor(key, win, staticThr) {
+    const cls = classOf(key).cls;
+    const base = cls.floor || 0.3;
+    if (win >= 5) return base;
+    const t = (U.RADAR || []).find(x => x.k === key);
+    const t5 = t ? t.t5 : 0;
+    if (!(t5 > 0) || !(staticThr > 0)) return base;
+    return Math.max(0.005, base * (staticThr / t5));
   }
 
   function quantile(sorted, p) {
@@ -329,6 +352,18 @@
     return out.sort((a, b) => a - b);
   }
 
+  /** 最近 N 个交易日的日极值（升序）。
+   *  150 日全量分位会被几个月前的高波「钝化」：近期一直低波时，长窗分位
+   *  仍停在很高位置，于是「从 1% 突然拉到 3%」抓不出来。这里按日期键取
+   *  尾部 N 天，供 dynThreshold 做双窗口融合。 */
+  function recentSeriesOf(key, win, days, withToday) {
+    const s = BANK[key] && BANK[key][win];
+    if (!s) return [];
+    const today = TODAY();
+    const ds = Object.keys(s).filter(d => s[d] > 0 && (withToday || d !== today)).sort();
+    return ds.slice(-days).map(d => s[d]).sort((a, b) => a - b);
+  }
+
   /**
    * 动态阈值
    * @param key    品种
@@ -347,7 +382,21 @@
 
     // 与标定完全同一个口径：第 k 大日极值，k = 目标占比 × 样本天数
     const k = Math.max(1, Math.round((targetRate || 0.05) * n));
-    const empir = arr[Math.max(0, n - 1 - k)];
+    const empirLong = arr[Math.max(0, n - 1 - k)];
+    /* 双窗口分位融合：样本 ≥15 天时，让「最近 15 个交易日」占 0.7 权重、
+     * 全量（最多 150 日）占 0.3。近期低波就按近期收紧阈值，不再被历史高波
+     * 拖着走 —— 这正是「平静几周后突然启动」能被抓到的关键。 */
+    let empir = empirLong;
+    let fused = false;
+    if (n >= 15) {
+      const recent = recentSeriesOf(key, win, 15, false);
+      if (recent.length >= 5) {
+        const kr = Math.max(1, Math.round((targetRate || 0.05) * recent.length));
+        const empirRecent = recent[Math.max(0, recent.length - 1 - kr)];
+        empir = 0.7 * empirRecent + 0.3 * empirLong;
+        fused = true;
+      }
+    }
 
     // 样本越多越信经验值
     const wEmp = Math.min(1, n / 40);
@@ -356,29 +405,37 @@
     // 经验值只在标定值的 0.6 ~ 2.0 倍区间内允许漂移（防脏数据打穿）
     thr = Math.max(base * 0.6, Math.min(base * 2.0, thr));
 
-    return { thr: thr, src: n >= 25 ? 'adaptive' : 'blend', n, w: +wEmp.toFixed(2), empir: +empir.toFixed(3) };
+    return { thr: thr, src: n >= 25 ? 'adaptive' : 'blend', n, w: +wEmp.toFixed(2),
+             empir: +empir.toFixed(3), fused: fused };
   }
 
-  /** 当日实时波动强度（用于事件密集日适度放宽尺子，上限 1.15） */
+  /** 波动强度系数：双向自适应 [0.85, 1.15]。
+   *  当日/近期波动明显高于历史 → 放宽尺子（避免暴力行情里阈值反复被击穿刷屏）；
+   *  显著低于历史 → 收紧 15%（平静期突然启动更容易越线）。
+   *  用「最近 15 日中位数 / 全量中位数」为主、当日极值为辅，避免只看单日噪声。 */
   function liveVol(key, win) {
     const arr = seriesOf(key, win, true);
     if (arr.length < 10) return 1;
-    const today = TODAY();
-    const s = BANK[key] && BANK[key][win];
-    const tv = s && s[today];
-    if (!(tv > 0)) return 1;
     const hist = seriesOf(key, win, false);
     const med = quantile(hist, 0.5);
     if (!(med > 0)) return 1;
-    return Math.max(1, Math.min(1.6, tv / med));
+    const today = TODAY();
+    const s = BANK[key] && BANK[key][win];
+    const tv = s && s[today];
+    const tvRatio = tv > 0 ? tv / med : 1;
+    const recent = recentSeriesOf(key, win, 15, true);
+    const rmed = recent.length >= 5 ? quantile(recent, 0.5) : med;
+    const recentRatio = rmed / med;
+    const raw = 1 + (recentRatio - 1) * 0.6 + (tvRatio - 1) * 0.4;
+    return Math.max(0.85, Math.min(1.15, raw));
   }
 
   w.VolProfile = {
-    profile, classify, classOf, CLASS, CATS,
+    profile, classify, classOf, floorFor, CLASS, CATS,
     windowReturns: windowSeries, quantile, rawBars,
     dynThreshold, liveVol,
     VolBank: {
-      observe, ingestDays, seriesOf,
+      observe, ingestDays, seriesOf, recentSeriesOf,
       load() { BANK = loadBank(); },
       save: saveBank,
       get size() {
