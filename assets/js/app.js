@@ -2937,7 +2937,7 @@
   }
 
   function mkSparkSVG(vals, up, fullN) {
-    if (!vals || vals.length < 4) return '<span class="mk-sp-ph"></span>';
+    if (!vals || vals.length < 4) return '<span class="mk-sp-ph" data-mksp=""></span>';
     const W = 68, H = 30, P = 2;
     const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
     const rg = (hi - lo) || 1;
@@ -2997,10 +2997,13 @@
       if (Object.keys(data).length) store.set(SPARK_SNAP_KEY, { at: now, data, n: ns });
     } catch (e) {}
   }
+  const _mkSparkFail = new Map();   // v242：失败时刻，用于退避重试
   async function loadMkSpark(k) {
     let vals = _mkSpark.get(k);
+    const failAt = _mkSparkFail.get(k) || 0;
+    const cooling = failAt && (Date.now() - failAt < 12000);  // 失败后 12 秒退避，避免每轮补拉都重打
     const stale = _mkSparkStale.has(k);
-    if (vals === undefined || stale) {
+    if (!cooling && (vals === undefined || stale)) {
       try {
         const r = await w.API.intraday(k);
         const allPts = (r && r.points) || [];
@@ -3014,13 +3017,17 @@
         if (nv.length >= 4) {
           vals = nv;
           _mkSpark.set(k, vals);
+          _mkSparkFail.delete(k);
           _mkSparkN.set(k, sparkFullN(k, pts));
           _mkSparkStale.delete(k);
           saveSparkSnap();
         } else if (vals === undefined) {
-          _mkSpark.set(k, null);
+          /* v242：只记失败时刻，不永久写 null。
+           * 原来失败即 set(k,null)，之后 vals===undefined 不成立、stale 也不成立，
+           * 这一行再也不会重试 —— 网络抖一下就永久空白（用户截图里的灰块）。 */
+          _mkSparkFail.set(k, Date.now());
         }
-      } catch (e) { if (vals === undefined) _mkSpark.set(k, null); }
+      } catch (e) { if (vals === undefined) _mkSparkFail.set(k, Date.now()); }
     }
     if (!vals) return;
     const body = $('#marketBody');
@@ -7585,14 +7592,21 @@
     window.__event = { eventQuoteKeys, eventMetricBar, eventCardHTML, eventDetailHTML, renderEvent };
 
     setInterval(() => { QuoteHub.refresh(allNewsKeys().slice(0, 12)); }, 60000);
-    /* v241【报价加速】原来行情页的涨跌幅只在 renderMarket() 里刷新，
-     * 而整页重绘是 120 秒一次 —— 盘中价格看着像「两分钟才动一次」。
-     * 这里单独给行情页加一条 15 秒的轻量轮询：只就地改数字（paintQuote），
-     * 不重建 DOM、不重排列表、不重画缩略图；一次批量请求覆盖全部品种。 */
+    /* v242：v241 的 15 秒 force 全量轮询会和缩略图的 intraday 请求抢东财连接，
+     * 一旦 intraday 失败又被永久缓存 null，整页缩略图就都变成灰块。
+     * 「上次」标签的真正根因是 paintQuote 没清 snap 类，跟刷新频率无关，
+     * 所以这里退回温和轮询：25 秒、按 TTL 自然过期、不强制全量。
+     * 既把报价从 120 秒提到 25 秒，又不额外制造请求压力。 */
     setInterval(() => {
       if (S.tab !== 'market' || document.hidden) return;
-      QuoteHub.refresh(mktCatKeys().filter(k => U.get(k)), true);
-    }, 15000);
+      QuoteHub.refresh(mktCatKeys().filter(k => U.get(k)));
+    }, 25000);
+    /* v242：残留占位符定时补拉。任何一次网络抖动都能自愈，不必等 120 秒整页重绘。 */
+    setInterval(() => {
+      if (S.tab !== 'market' || document.hidden || !mktSparkOn) return;
+      if (!document.querySelector('.mk-sp-ph[data-mksp]')) return;
+      fillMkSparks();
+    }, 12000);
     setInterval(() => { if (S.tab === 'market') renderMarket(); }, 120000);
     /* 盘前/盘后价 60 秒刷一次：延展时段成交稀、变化快，
      * 等 120 秒整页重绘太慢；这里只就地改那一行，不重排列表。 */
