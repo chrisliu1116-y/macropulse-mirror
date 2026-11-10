@@ -157,7 +157,54 @@
     });
   }
 
+  /* 更新时间：meta.generated 已由跑批脚本写成固定 UTC+8 北京时间。
+   * 老数据没有 trade_date / generated_tz 字段，就退回用 dates 末日显示，
+   * 但会打上「旧格式」标记，让用户一眼看出跑批脚本没更新。 */
+  function updText(d) {
+    var m = d.meta || {};
+    var day = m.trade_date || d.dates[d.dates.length - 1] || '';
+    var g = String(m.generated || '');
+    if (!g) return '数据截至 ' + day + '（无跑批时间）';
+    var short = g.replace(/^\d{4}-/, '').slice(0, 11);
+    return '数据 ' + day + ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '');
+  }
+
+  /* 全屏：优先 Fullscreen API；WebView 会走 WebChromeClient.onShowCustomView。
+   * 横屏方向锁（screen.orientation.lock）在 WebView 里通常不可用，
+   * 所以横屏由 CSS @media 自适应 + 用户旋转设备完成；APK 侧方向控制留待下一轮。 */
+  function bindFullscreen() {
+    var btn = $('btnFull');
+    if (!btn) return;
+    function sync() {
+      var on = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      btn.classList.toggle('on', on);
+      var lab = btn.querySelector('span');
+      if (lab) lab.textContent = on ? '退出' : '全屏';
+    }
+    btn.addEventListener('click', function () {
+      var el = document.documentElement;
+      var cur = document.fullscreenElement || document.webkitFullscreenElement;
+      try {
+        if (cur) {
+          (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
+        } else {
+          var req = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (req) {
+            req.call(el).then(function () {
+              try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape'); } catch (e) {}
+            }).catch(function () {});
+          }
+        }
+      } catch (e) {}
+      setTimeout(function () { sync(); draw(); }, 320);
+    });
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
+    window.addEventListener('resize', function () { setTimeout(draw, 240); });
+  }
+
   function boot() {
+    bindFullscreen();
     /* 跟随 APP 主题（并进 APP 后由宿主写入 mm_theme，这里只读） */
     try {
       var th = JSON.parse(localStorage.getItem('mm_theme') || '"dark"');
@@ -166,16 +213,18 @@
     loadData()
       .then(function (d) {
         S.d = d;
+        $('upd').textContent = '全A股 · ' + updText(d);
         setRange(30);
         updateCards(d.dates.length - 1);
         $('dot').classList.remove('old');
         paintLegend();
         $('ft').textContent = '全部A股 ' + d.meta.universe + ' 只 · 有效 ' +
-          d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · 收盘批处理';
+          d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · ' + updText(d);
         draw();
       })
       .catch(function (e) {
         $('gen').textContent = '数据加载失败';
+        $('upd').textContent = '全A股 · 数据未更新，请检查跑批';
         $('dot').classList.add('old');
       });
   }

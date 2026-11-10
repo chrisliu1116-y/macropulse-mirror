@@ -121,3 +121,42 @@ body.light .ft{color:#94a3b8}
 body.light .up{color:#dc2626}
 body.light .dn{color:#16a34a}
 body.light .flat{color:#94a3b8}
+
+
+/* ---------- v1：全屏按钮 + 更新时间（赚钱效应指标） ---------- */
+.hd{gap:8px}
+.hd-l{min-width:0}
+.hd-l .sub{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.hd-r{flex:0 0 auto;gap:6px}
+.btn-fs{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:5px 9px;margin-left:2px;border-radius:9px;
+  border:1px solid #2a3a55;background:linear-gradient(180deg,#172338,#111a2a);
+  color:#a8c4ee;font-size:10.5px;font-family:inherit;letter-spacing:.2px;
+  cursor:pointer;transition:.18s;white-space:nowrap;
+}
+.btn-fs svg{display:block;flex:0 0 auto}
+.btn-fs:active{transform:scale(.95)}
+.btn-fs.on{border-color:#3b6bb5;color:#eaf2ff;background:linear-gradient(180deg,#1e3a66,#16294a)}
+body.light .btn-fs{border-color:#c7d5e8;background:#fff;color:#3b5b8c}
+body.light .btn-fs.on{border-color:#9db9e8;background:#e8efff;color:#1d4ed8}
+
+/* 全屏态：铺满、隐藏状态栏干扰，图表吃掉所有高度 */
+:fullscreen .wrap,:webkit-full-screen .wrap{height:100dvh;padding:8px 10px}
+:fullscreen .hd-l .sub,:webkit-full-screen .hd-l .sub{font-size:10px}
+:fullscreen .ranges,:webkit-full-screen .ranges{gap:8px}
+
+/* 横屏全屏时更紧凑：数值卡收成一行、图例缩小，把高度让给图表 */
+@media (orientation:landscape){
+  .wrap{padding:calc(env(safe-area-inset-top,0px) + 5px) 10px calc(env(safe-area-inset-bottom,0px) + 5px);gap:6px}
+  .cards{gap:6px}
+  .card{padding:5px 9px 6px}
+  .card b{font-size:19px;margin-top:0}
+  .k-main b{font-size:22px}
+  .ranges button{padding:6px 0}
+}
+@media (orientation:landscape) and (max-height:560px){
+  .hd-l .sub{font-size:9.5px}
+  .card u{display:none}
+  .lg{font-size:9.5px;padding:0 6px 3px}
+}

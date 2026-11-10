@@ -4,19 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#070a0f">
-<title>市场宽度 · XY_BASE</title>
-<link rel="stylesheet" href="assets/style.css?v=4">
+<title>赚钱效应指标 · 宏观脉冲</title>
+<link rel="stylesheet" href="assets/style.css?v=6">
 </head>
 <body>
 <div class="wrap">
   <header class="hd">
     <div class="hd-l">
-      <h1>市场宽度</h1>
-      <span class="sub">XY_BASE · INSUM 全A股</span>
+      <h1>赚钱效应指标</h1>
+      <span class="sub" id="upd">全A股 · 数据加载中</span>
     </div>
     <div class="hd-r">
       <span class="dot" id="dot"></span>
       <span id="gen">加载中</span>
+      <button id="btnFull" class="btn-fs" type="button" title="全屏 / 横屏查看" aria-label="全屏查看">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
+        </svg>
+        <span>全屏</span>
+      </button>
     </div>
   </header>
 
@@ -59,6 +66,6 @@
 
   <footer class="ft" id="ft"></footer>
 </div>
-<script src="assets/app.js?v=5"></script>
+<script src="assets/app.js?v=6"></script>
 </body>
 </html>
