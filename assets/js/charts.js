@@ -633,6 +633,14 @@
 
         mainSeries = chart.addBaselineSeries({
           baseValue: { type: 'price', price: base },
+          /* v234：库默认会在 baseValue（昨收）位置画一条**水平基准线**，
+           * 而且只画到「有数据的最后一格」为止。盘中看起来就是
+           * 「一条卡在半路、末端带方块的红色横线」——用户截图里 KOSPI、
+           * 恒生、沪深300 全都出现，因为它对所有品种、所有时段都一样。
+           * 关掉它：零轴继续用 6 等分横格的中线表示（v206 的既定口径）。 */
+          baseLineVisible: false,
+          baseLineColor: 'rgba(0,0,0,0)',
+          baseLineWidth: 1,
           topLineColor: UP, topFillColor1: 'rgba(246,70,93,0.26)', topFillColor2: 'rgba(246,70,93,0.02)',
           bottomLineColor: DOWN, bottomFillColor1: 'rgba(14,203,129,0.02)', bottomFillColor2: 'rgba(14,203,129,0.26)',
           lineWidth: 2,
