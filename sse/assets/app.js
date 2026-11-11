@@ -58,16 +58,8 @@
     }
   };
 
-  /* v266【浅色模式保留深色点线配色】用户喜欢深色那套亮色点线，
-   * 浅色模式只把背景/网格/坐标文字换浅，点、线、数字、箭头、K 线全部沿用 dark。 */
-  (function () {
-    var KEEP_DARK = ['line', 'dot', 'num', 'dotIce', 'dotHot', 'lineHot',
-      'upArrow', 'upEdge', 'downArrow', 'downEdge', 'warnDot', 'warnEdge', 'warnMark',
-      'sseUp', 'sseDown', 'sseLine', 'sseFillTop', 'sseFillBot'];
-    for (var q = 0; q < KEEP_DARK.length; q++) {
-      THEMES.light[KEEP_DARK[q]] = THEMES.dark[KEEP_DARK[q]];
-    }
-  })();
+  /* v267：恢复 H5 原本的浅色配色（浅底配深红/深橙/深蓝），
+   * 不再把深色那套亮色点线搬到浅色上。 */
 
   function isLight() { return document.body.classList.contains('light'); }
   function cur() { return isLight() ? THEMES.light : THEMES.dark; }
@@ -82,8 +74,26 @@
 
   /* 折线分段：符合总数 <100 灰 / >=100 红 */
   function bandOf(v) { return v >= 100 ? 1 : 0; }
-  /* v266：上证数轴直接用整数点位（2800 / 3500），不再写成 3.66k */
-  function sseAxisLabel(v) { return String(Math.round(v)); }
+  /* v267【整数关卡】上证数轴只显示整百整数点位（2800 / 3100 / 3500），
+   * 不写 3.66k，也不出现 3991 / 3881 这类带十位个位的均分杂数。
+   * 任何数值都吸附到最近的 100 点关卡。 */
+  function sseAxisLabel(v) { return String(Math.round(v / 100) * 100); }
+  /* 生成落在 [lo,hi] 内的整百关卡刻度：步长在 100/200/500/1000… 中自适应，
+   * 保证 4~6 条、且每条都是 100 的整数倍（放大到早期低点位区间也不会出杂数）。 */
+  function sseAxisTicks(lo, hi) {
+    var range = Math.max(1, hi - lo);
+    var raw = range / 5;   /* 目标约 4~6 条关卡：近期 440 点区间 → 100 步长出 4 条 */
+    var CAND = [100, 200, 500, 1000, 2000, 5000, 10000];
+    var step = CAND[CAND.length - 1];
+    for (var i = 0; i < CAND.length; i++) {
+      if (CAND[i] >= raw) { step = CAND[i]; break; }
+    }
+    var first = Math.ceil(lo / step) * step;
+    var out = [];
+    for (var v = first; v <= hi + 0.001; v += step) out.push(v);
+    if (!out.length) out.push(Math.round(((lo + hi) / 2) / step) * step);
+    return out;
+  }
   /* 点色分类（与家数数字判据完全一致）：0 常规 / 1 冰点蓝 / 2 攻击橙。
    * 抽成纯函数，让「点」与「连续两日攻击的连线」共用同一把尺子。 */
   function dotColorIdx(d, gi) {
@@ -630,8 +640,9 @@
     g.font = '9px -apple-system,BlinkMacSystemFont,sans-serif';
     g.textAlign = 'right';
     g.textBaseline = 'middle';
-    for (var t = 0; t <= 4; t++) {
-      var val = lo + (hi - lo) * t / 4;
+    var ticks = sseAxisTicks(lo, hi);
+    for (var t = 0; t < ticks.length; t++) {
+      var val = ticks[t];
       var y = yOf(val);
       if (y < P.t - 1 || y > P.t + ih + 1) continue;
       g.strokeStyle = T.grid;
@@ -641,8 +652,7 @@
       g.lineTo(W - P.r, Math.round(y) + .5);
       g.stroke();
       g.fillStyle = T.axis;
-      var lbl = sseAxisLabel(val);
-      g.fillText(lbl, P.l - 5, y);
+      g.fillText(sseAxisLabel(val), P.l - 5, y);
     }
 
     var mode = sseMode(cnt, iw);
@@ -1105,7 +1115,7 @@
       xAt: xAt, sseMode: sseMode, axisTier: axisTier,
       spanDays: spanDays, buildAxisLabels: buildAxisLabels,
       dotColorIdx: dotColorIdx, hotSegs: hotSegs, nearestIdx: nearestIdx,
-      sseAxisLabel: sseAxisLabel
+      sseAxisLabel: sseAxisLabel, sseAxisTicks: sseAxisTicks
     };
   }
 })();
