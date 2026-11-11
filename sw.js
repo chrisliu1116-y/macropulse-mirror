@@ -9,7 +9,7 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v263';
+const CACHE = 'macro-pulse-v264';
 const NET_TIMEOUT = 1200;
 
 const CORE = [
@@ -136,6 +136,8 @@ self.addEventListener('fetch', e => {
   /* 市场宽度页（/breadth/）：数据 JSON 每天收盘后重写，必须每次直连网络，
    * 不能被 staleWhileRevalidate 用旧缓存顶一天。 */
   if (p.indexOf('breadth/data/') === 0) return;
+  /* 上证同期对比子页（/sse/）：数据 JSON 同样每天更新，必须直连网络。 */
+  if (p.indexOf('sse/data/') === 0) return;
   // sw.js 自身交给浏览器更新机制，别被自己的缓存锁住
   if (p === 'sw.js' || /\/sw\.js$/.test(p)) return;
 

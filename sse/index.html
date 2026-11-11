@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070a0f">
+<title>上证 · insum 同期对比</title>
+<link rel="stylesheet" href="assets/style.css?v=1">
+</head>
+<body>
+<div class="wrap">
+  <header class="hd">
+    <div class="hd-l">
+      <h1>上证 · insum 同期对比</h1>
+      <span class="sub" id="upd">全A股 · 数据加载中</span>
+    </div>
+    <div class="hd-r">
+      <span class="dot" id="dot"></span>
+      <span id="gen">加载中</span>
+      <button id="btnCompare" class="btn-cmp" type="button" aria-pressed="false" disabled title="加载上证数据后可开启">对比模式</button>
+      <button id="btnTheme" class="btn-ico" type="button" title="切换深浅主题">◐</button>
+      <button id="btnFull" class="btn-ico" type="button" title="全屏 / 横屏查看" aria-label="全屏查看">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="cards" id="cards">
+    <div class="card k-main">
+      <i>符合总数</i>
+      <b id="vTotal">--</b>
+      <u id="dTotal"></u>
+    </div>
+    <div class="card">
+      <i>当日家数<em class="tag" id="vDayTag"></em></i>
+      <b id="vDay">--</b>
+      <u id="dDay"></u>
+    </div>
+    <div class="card">
+      <i>当日新增</i>
+      <b id="vNew">--</b>
+      <u id="dNew"></u>
+    </div>
+    <div class="card">
+      <i>将剔除</i>
+      <b id="vRm">--</b>
+      <u id="dRm"></u>
+    </div>
+  </section>
+
+  <section class="stage" id="stage">
+    <section class="pane" id="ssePane">
+      <div class="lg sse-lg"><span>上证指数 · 前复权 · 涨红跌绿</span></div>
+      <div class="cvwrap"><canvas id="cvK"></canvas></div>
+    </section>
+    <section class="pane chartbox" id="insumPane">
+      <div class="lg" id="lg"></div>
+      <div class="cvwrap"><canvas id="cvI"></canvas></div>
+    </section>
+  </section>
+
+  <nav class="ranges" id="ranges">
+    <button data-n="30" class="on">30日</button>
+    <button data-n="60">60日</button>
+    <button data-n="120">120日</button>
+    <button data-n="0">全部</button>
+    <button id="btnFit" class="fit" title="回到全景">⤢</button>
+  </nav>
+
+  <footer class="ft" id="ft"></footer>
+</div>
+<script src="assets/app.js?v=1"></script>
+</body>
+</html>
