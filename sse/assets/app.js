@@ -193,6 +193,28 @@
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
     'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/breadth.json'
   ];
+  /* v276：上证 K 线也进云端跑批，与 breadth.json 同批成对提交。
+   * 用户实测出现过「insum 新 / 上证旧」，所以 SSE 也必须竞速远端。 */
+  var REMOTE_S = [
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/sse.json',
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/sse.json',
+    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/sse.json'
+  ];
+  function loadRemoteS() {
+    if (typeof fetch !== 'function') return Promise.reject(new Error('offline'));
+    return REMOTE_S.reduce(function (p, url) {
+      return p.catch(function () { return loadJSONTimeout(url, 6000); });
+    }, Promise.reject(new Error('start')));
+  }
+  function applyNewSse(k) {
+    if (!k || !k.dates || !k.dates.length) return false;
+    if (S.K && S.K.meta && k.meta && String(S.K.meta.to) >= String(k.meta.to)) return false;
+    S.K = k;
+    if (S.B && $('btnCompare')) $('btnCompare').disabled = false;
+    renderAll();
+    try { parent.postMessage({ mm_sse_state: (k.meta && k.meta.to) || '' }, '*'); } catch (e) {}
+    return true;
+  }
   function loadJSONTimeout(url, ms) {
     return new Promise(function (resolve, reject) {
       var done = false;
@@ -239,7 +261,10 @@
   }
   function startRemoteRefresh() {
     if (typeof fetch !== 'function') return;   /* jsdom/offline 静默跳过 */
-    function tick() { remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {}); }
+    function tick() {
+      remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {});
+      loadRemoteS().then(function (k) { applyNewSse(k); }).catch(function () {});
+    }
     tick();
     var timer = setInterval(function () {
       var bj = new Date(Date.now() + 8 * 3600 * 1000);
@@ -1187,7 +1212,7 @@
         $('dot').classList.add('old');
       });
 
-    loadJSON('data/sse.json')
+    loadRemoteS()
       .then(function (k) {
         S.K = k;
         if (S.B) cmp.disabled = false;
@@ -1196,6 +1221,15 @@
           $('ft').textContent = footText();
           if (/compare=1/.test(location.search)) setCompare(true);
         }
+        renderAll();
+      })
+      .catch(function () {
+        return loadJSON('data/sse.json').then(function (k) {
+          S.K = k;
+          if (S.B) cmp.disabled = false;
+          if (S.B) $('ft').textContent = footText();
+          renderAll();
+        });
       })
       .catch(function () {
         cmp.disabled = true;

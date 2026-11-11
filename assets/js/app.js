@@ -3511,6 +3511,12 @@
    *    取前 300，支持中文名搜索（smartbox 不支持中文）；60 分钟缓存。
    * 返回 QuoteID 直接当 secid（synthSecid 原样收下），QuoteHub 实时报价。 */
   let _sugSeq = 0;
+  /* v276：smartbox 的名称字段可能整体是字面 \\uXXXX（原生与 script 两入口同构）。
+   * 只解码合法的 Unicode 转义，保留正常反斜杠、代码和行情文本。 */
+  function decodeBoxText(s) {
+    return String(s == null ? '' : s).replace(/\\u([0-9a-fA-F]{4})/g,
+      (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+  }
   function smartboxSug(q, cb) {
     /* v275：APP 壳内走原生 Java 直连（GBK 已在 Java 侧解码）——
      * WebView 的 script 标签对该域名零响应（SCRIPT ERROR 无 HTTP 响应），
@@ -3550,6 +3556,7 @@
    *   sh~510300~沪深300ETF华泰柏瑞~...~ETF       → 1.510300
    * 美股后缀：.oq=纳斯达克→105，.n=纽交所→106，.am/.p=美交所→107 */
   function parseBox(h) {
+    h = decodeBoxText(h);
     if (!h || h === 'N') return [];
     const out = [];
     h.split('^').forEach(seg => {
@@ -3573,6 +3580,9 @@
     });
     return out;
   }
+  /* 只读测试句柄：验证全市场中文名 Unicode 解码，不参与业务状态。 */
+  w.__decodeBoxText = decodeBoxText;
+  w.__parseBox = parseBox;
   /* 沪深 ETF 名录（中文名搜索用）。按成交额降序 top300，60 分钟缓存。 */
   let _etfCN = null, _etfCNAt = 0;
   function etfCNSug(q, cb) {
@@ -3859,8 +3869,28 @@
     const kbhost = box.querySelector('#pkKb');
     const setVal = (v) => { kbin.value = v;
       kbin.dispatchEvent(new Event('input', { bubbles: true })); };
+    /* v276：inputmode=none 只适用于自绘键盘；切「中文」必须恢复 text，
+     * 再由原生层主动 showSoftInput，否则焦点有了系统键盘也不会出现。 */
+    const setSystemKeyboard = (on) => {
+      const np = w.NativePulse;
+      if (on) {
+        kbhost.innerHTML = '';
+        kbin.readOnly = false;
+        kbin.inputMode = 'text';
+        kbin.setAttribute('inputmode', 'text');
+        setTimeout(() => {
+          try { kbin.focus(); kbin.click(); } catch (e) {}
+          try { if (np && np.showSoftInput) np.showSoftInput(); } catch (e) {}
+        }, 60);
+      } else {
+        try { if (np && np.hideSoftInput) np.hideSoftInput(); } catch (e) {}
+        kbin.inputMode = 'none';
+        kbin.setAttribute('inputmode', 'none');
+      }
+    };
     const renderKb = (mode) => {
-      if (mode === 'sys') { kbhost.innerHTML = ''; kbin.focus(); return; }
+      if (mode === 'sys') { setSystemKeyboard(true); return; }
+      setSystemKeyboard(false);
       const keys = mode === 'num'
         ? [['000','1','2','3','⌫'],['600','4','5','6','清空'],['300','7','8','9','确定'],['00','ABC','0','⌨']]
         : [['Q','W','E','R','T','Y','U','I','O','P'],['A','S','D','F','G','H','J','K','L'],
@@ -4084,7 +4114,12 @@
           <span>本终端仅做信息聚合与可视化，不构成任何投资建议。行情可能延迟，交易决策请以券商/交易所数据为准。</span></div></div>
       </div>
 
+      <div id="acctHost"></div>
+
       <div class="set-foot">异动看板 · MACRO PULSE · 突发快讯 × 资产瞬时映射 × 事件追踪</div>`;
+    if (w.MPAccount && typeof w.MPAccount.refresh === 'function') {
+      try { w.MPAccount.refresh($('#acctHost')); } catch (e) {}
+    }
   }
 
   /* ---------------- 详情面板 ---------------- */
