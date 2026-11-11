@@ -96,6 +96,22 @@
   }
   /* 点色分类（与家数数字判据完全一致）：0 常规 / 1 冰点蓝 / 2 攻击橙。
    * 抽成纯函数，让「点」与「连续两日攻击的连线」共用同一把尺子。 */
+  /* v269【insum 纵轴整百关卡】只显示 100 / 200 / 300 / 400 …
+   * 步长在 100/200/500/1000 中自适应，刻度一律 100 的整数倍。 */
+  function insumAxisTicks(lo, hi) {
+    var range = Math.max(1, hi - lo);
+    var raw = range / 4;
+    var CAND = [100, 200, 500, 1000];
+    var step = CAND[CAND.length - 1];
+    for (var i = 0; i < CAND.length; i++) {
+      if (CAND[i] >= raw) { step = CAND[i]; break; }
+    }
+    var first = Math.max(step, Math.ceil(lo / step) * step);
+    var out = [];
+    for (var v = first; v <= hi + 0.001; v += step) out.push(v);
+    return out;
+  }
+
   function dotColorIdx(d, gi) {
     var dv = d.daycnt[gi];
     var pg = gi > 0 ? d.daycnt[gi - 1] : null;
@@ -418,17 +434,19 @@
     if (!isFinite(mn)) { mn = 0; mx = 1; }
     if (mx === mn) mx = mn + 1;
     var lo0 = (mn > mx * 0.3) ? mn * 0.88 : 0;
-    var lo = Math.max(0, Math.floor(lo0 / 10) * 10);
-    var hi = Math.ceil((mx + Math.max((mx - lo) * 0.14, 10)) / 10) * 10;
-    if (hi <= mx) hi = Math.ceil((mx + 10) / 10) * 10;
+    /* v269：上下界都对齐到整百，刻度才能落在 100/200/300… 上 */
+    var lo = Math.max(0, Math.floor(lo0 / 100) * 100);
+    var hi = Math.ceil((mx + Math.max((mx - lo) * 0.14, 10)) / 100) * 100;
+    if (hi <= mx) hi += 100;
     var yOf = function (val) { return P.t + ih - (val - lo) / (hi - lo) * ih; };
 
     /* 横网格 + 左刻度 */
     g.font = '9px -apple-system,BlinkMacSystemFont,sans-serif';
     g.textAlign = 'right';
     g.textBaseline = 'middle';
-    for (var t = 0; t <= 4; t++) {
-      var val = lo + (hi - lo) * t / 4;
+    var yticks = insumAxisTicks(lo, hi);
+    for (var t = 0; t < yticks.length; t++) {
+      var val = yticks[t];
       var y = yOf(val);
       if (y < P.t - 1 || y > P.t + ih + 1) continue;
       g.strokeStyle = T.grid;
@@ -438,7 +456,7 @@
       g.lineTo(W - P.r, Math.round(y) + .5);
       g.stroke();
       g.fillStyle = T.axis;
-      g.fillText(Math.round(val), P.l - 5, y);
+      g.fillText(String(val), P.l - 5, y);
     }
 
     /* 100 水位参考线 */
@@ -592,13 +610,23 @@
     g.fillStyle = T.axis;
     g.textBaseline = 'top';
     var picked = buildAxisLabels(dates, from, to, cnt);
-    var seen = {};
+    var seen = {}, lastRight = -1e9;
     for (var _k = 0; _k < picked.length; _k++) {
       var _m = picked[_k];
       if (seen[_m.lab]) continue;
-      seen[_m.lab] = 1;
-      g.textAlign = _m.pos <= cnt * 0.06 ? 'left' : (_m.pos >= cnt * 0.94 ? 'right' : 'center');
-      g.fillText(_m.lab, xOf(_m.pos), P.t + ih + 5);
+      var _x = xOf(_m.pos);
+      var _tw = g.measureText(_m.lab).width;
+      var _align = _m.pos <= cnt * 0.06 ? 'left' : (_m.pos >= cnt * 0.94 ? 'right' : 'center');
+      var _left = _align === 'left' ? _x : (_align === 'right' ? _x - _tw : _x - _tw / 2);
+      if (_left < P.l) { _align = 'left'; _left = _x; }
+      var _right = _left + _tw;
+      if (_right > W - P.r) { _align = 'right'; _left = _x - _tw; _right = _x; }
+      /* v269：相邻标签至少留 10px，挤在一起的直接丢弃（原来会连成
+       * 「2024-12025-02」这种一串） */
+      if (_left < lastRight + 10) continue;
+      seen[_m.lab] = 1; lastRight = _right;
+      g.textAlign = _align;
+      g.fillText(_m.lab, _x, P.t + ih + 5);
     }
 
     /* 十字游标（insum 侧） */
@@ -1164,7 +1192,7 @@
       xAt: xAt, sseMode: sseMode, axisTier: axisTier,
       spanDays: spanDays, buildAxisLabels: buildAxisLabels,
       dotColorIdx: dotColorIdx, hotSegs: hotSegs, nearestIdx: nearestIdx,
-      sseAxisLabel: sseAxisLabel, sseAxisTicks: sseAxisTicks
+      sseAxisLabel: sseAxisLabel, sseAxisTicks: sseAxisTicks, insumAxisTicks: insumAxisTicks
     };
   }
 })();
