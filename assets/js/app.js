@@ -3917,10 +3917,7 @@
           <button class="sw ${fw.on ? 'on' : ''}" id="swFloat"><i></i></button></div>
         ${(!fwPerm) ? `<div class="set-row"><div><b>悬浮窗权限</b><span>未授权时气泡不会显示</span></div>
           <button class="mini-btn" id="fwPerm">去授权</button></div>` : ''}
-        <div class="set-row"><div><b>盯盘股票（${fw.stocks.length}/5）</b><span>输代码或名称搜索，支持全市场 ETF（含纳指三倍这类正/负杠杆）</span></div></div>
-        <div class="set-row"><input type="search" id="fwQ" placeholder="如 513100 / TQQQ / 纳指三倍" style="flex:1;margin-right:8px;min-width:0"><button class="mini-btn" id="fwAdd">搜索</button></div>
-        <div id="fwSug"></div>
-        ${fw.stocks.map((x, i) => `<div class="set-row"><div><b>${esc(x.name)}</b><span>${esc(x.code)} · ${esc(x.secid)}</span></div><button class="mini-btn" data-fwdel="${i}">删除</button></div>`).join('')}
+        <div class="set-row"><div><b>盯盘股票与展示时间</b><span>添加 / 删除 / 排序 / 交易时段都在<b>桌面浮窗</b>里：点开气泡，右上角 ⚙ 进入设置（v1.5.26 起）</span></div></div>
       </div>
 
       <div class="set-card">

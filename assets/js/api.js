@@ -1196,7 +1196,10 @@
       if (cum) prevCum = cum;
       const seg = hm < 540 ? 'pre' : (hm <= 930 ? 'reg' : 'post');
       pts.push({
-        time: Math.floor(Date.UTC(y, mo - 1, dd, hh, mi) / 1000),
+        /* v274：Naver 分钟的时间是 KST，东财常规段是北京时间 —— 直接当 UTC 装
+         * 桶会出现「左上角 16:08」（KST）与顶部/图轴（北京）差一小时的两套钟。
+         * 统一换算成北京时间（-1h），Date.UTC 负小时自动跨日进位。 */
+        time: Math.floor(Date.UTC(y, mo - 1, dd, hh - 1, mi) / 1000),
         open: close, high: close, low: close, close: close,
         volume: vol, seg: seg,
         auction: (seg === 'post' && hm < 960) ? true : undefined
@@ -2224,7 +2227,11 @@
        * 从 724 直跳 733 的竖线（用户 11-10 20:15 英伟达截图右端那个尖峰），
        * 图例还会把盘前显示成 +0.00%。盘前/盘后价本来就由 extQuotes 单独显示在
        * 页面顶部，分钟线自己已经是最新一分钟，不需要这条补点。 */
-      if (last.seg && last.seg !== 'reg') return res;
+      /* v274：韩股盘后（Naver 段延迟可达 20 分钟）放开补实时点，
+       * 让分时线尾与顶部大价对齐；其它市场的延展时段仍按 v236 不补。 */
+      const _ka = U.get(key);
+      const _kr = !!(_ka && _ka.grp === 'krstock');
+      if (last.seg && last.seg !== 'reg' && !_kr) return res;
 
       /* 【先把时间轴对齐】各家源对「分钟」的打标签方式不一样：
        *   · 美股（Nasdaq/东财个股）按**起始**打标，最后一根 ≤ 当前分钟；
@@ -2249,7 +2256,8 @@
       if (!q || !(q.price > 0)) return res;
 
       let gap = nowMin - last.time;
-      if (gap < 0 || gap > 300) return res;   // 早就收盘 / 数据异常，不动
+      /* 韩股盘后 Naver 点延迟大，gap 上限放宽到 2 小时；其它市场维持 5 分钟 */
+      if (gap < 0 || (gap > 300 && !_kr) || gap > 7200) return res;
       if (gap === 0) {
         last.close = q.price;
         last.high = Math.max(last.high, q.price);
