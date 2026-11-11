@@ -250,8 +250,11 @@
     var m = (S.B && S.B.meta) || {};
     var g = String(m.generated || '');
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
-    var parts = [short ? '更新 ' + short + (m.generated_tz ? ' 北京' : '') : '更新时间未知'];
-    if (S.B) parts.push('有效 ' + m.valid + '/' + m.universe + ' · ' + m.days + ' 日');
+    var parts = [];
+    /* v268：补回老版完整口径「全部A股 X 只 · 有效 X 只 · X 个交易日」，
+     * 数据日期不重复写（工具条状态已有），只保留更新时间，仍强制一行。 */
+    if (S.B) parts.push('全部A股 ' + m.universe + ' 只 · 有效 ' + m.valid + ' 只 · ' + m.days + ' 个交易日');
+    parts.push(short ? '更新 ' + short + (m.generated_tz ? ' 北京' : '') : '更新时间未知');
     if (S.K) {
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
