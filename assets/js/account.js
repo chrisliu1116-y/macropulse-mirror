@@ -151,6 +151,14 @@
       const name = await ghWhoami();
       await ghEnsureGist(false);
       ui.ginfo = '已连接 @' + name + '，Gist 就绪';
+      /* 首次连接：本机没有任何自选（新手机/新装）→ 自动从云端恢复一次 */
+      const noLocal = !(store.get('mm_watch2', null) || []).length;
+      if (noLocal) {
+        try { await ghPull(true); } catch (e) { /* 云端没备份就跳过 */ }
+      } else {
+        await ghPush();          // 本机有数据 → 先备份，避免覆盖丢配置
+      }
+      startAuto();
     } catch (e) {
       store.del('mm_gh_token'); store.del('mm_gh_gist');
       throw e;
@@ -185,6 +193,27 @@
     setTimeout(() => location.reload(), 650);
   }
 
+  /* ---------------- v3 自动同步 ----------------
+   * 用户反馈：「同步给 github 还要每次输 token 点同步吗？不能自动同步？」
+   * 现在：连接成功即自动备份一次；之后每 20 秒比对配置指纹，有变化就静默 push。
+   * token 存在本机，重启 APP 仍是连接态，不用重输。 */
+  let _autoTimer = 0, _lastFP = '';
+  const fp = () => JSON.stringify(snapshot());
+  function startAuto() {
+    if (!ghConnected()) return;
+    if (!_lastFP) _lastFP = fp();
+    if (_autoTimer) return;
+    _autoTimer = setInterval(() => {
+      if (!ghConnected()) return;
+      const cur = fp();
+      if (cur !== _lastFP) {
+        _lastFP = cur;
+        ghPush().then(() => { ui.ginfo = '已自动备份到 GitHub（' + new Date().toTimeString().slice(0, 5) + '）'; })
+          .catch(() => {});
+      }
+    }, 20000);
+  }
+
   function ghDisconnect() {
     store.del('mm_gh_token'); store.del('mm_gh_gist');
     ui.glogin = ''; ui.ginfo = '已断开 GitHub（本机备份内容不受影响）';
@@ -202,8 +231,8 @@
           <button data-act="mode" data-v="signup" class="${m === 'signup' ? 'on' : ''}">注册</button>
         </div>
         <div class="acct-form">
-          <input id="acctPhone" type="tel" maxlength="11" inputmode="numeric" placeholder="手机号（11 位）" value="${esc(ui.phone)}">
-          ${m === 'signup' ? `<div class="acct-code"><input id="acctCode" type="text" maxlength="8" placeholder="短信验证码" value="${esc(ui.code)}"><button class="mini-btn" data-act="send">获取验证码</button></div>` : ''}
+          <input id="acctPhone" type="tel" maxlength="11" inputmode="numeric" placeholder="手机号（11 位）" value="${esc(ui.phone || '')}">
+          ${m === 'signup' ? `<div class="acct-code"><input id="acctCode" type="text" maxlength="8" placeholder="短信验证码" value="${esc(ui.code || '')}"><button class="mini-btn" data-act="send">获取验证码</button></div>` : ''}
           <input id="acctPwd" type="password" placeholder="${m === 'signup' ? '设置密码（≥8 位）' : '密码'}" value="">
           ${ui.err ? `<div class="acct-err">${esc(ui.err)}</div>` : ''}
           ${ui.info ? `<div class="acct-ok">${esc(ui.info)}</div>` : ''}
@@ -257,7 +286,16 @@
 
   function cardHTML(user) { return acctCard(user) + ghCard(); }
 
+  /* v3【bug 修复】重绘会重建输入框，之前没把用户已输入的值写回 ui，
+   * 于是「输手机号 → 点获取验证码 → 手机号消失」。每次重绘前先抓一遍。 */
+  function captureInputs() {
+    const ph = d.getElementById('acctPhone'); if (ph) ui.phone = ph.value || '';
+    const cd = d.getElementById('acctCode'); if (cd) ui.code = cd.value || '';
+    const gk = d.getElementById('ghTok'); if (gk) ui.ghTok = gk.value || '';
+  }
+
   function renderCard(root) {
+    captureInputs();
     const host = (root && root.nodeType === 1) ? root : d.getElementById('acctHost');
     if (!host) return;
     if (ghConnected() && !ui.glogin) { ghWhoami().catch(() => {}).finally(() => paint(host)); }
@@ -265,7 +303,8 @@
   }
   function paint(host) {
     session().then(s => { host.innerHTML = cardHTML(s && s.user); })
-      .catch(() => { host.innerHTML = cardHTML(null); });
+      .catch(() => { host.innerHTML = cardHTML(null); })
+      .finally(() => { if (ghConnected()) startAuto(); });   // 已连接则恢复自动同步
   }
 
   function bindCard(root) {
