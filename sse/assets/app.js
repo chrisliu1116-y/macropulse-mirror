@@ -206,8 +206,17 @@
       return p.catch(function () { return loadJSONTimeout(url, 6000); });
     }, Promise.reject(new Error('start')));
   }
+  /* v278：上证标的自检 —— 线上曾出现 sse.json 实为平安银行（末收盘 11.71）却标成
+   * 「上证指数」，整条 K 线画错。按点位量级拒收：宁可显示缺失，也不画错数据。 */
+  function sseOK(k) {
+    var c = (k && k.c) || [];
+    if (!c.length) return false;
+    var v = c[c.length - 1];
+    return v > 50 && v < 20000;
+  }
   function applyNewSse(k) {
     if (!k || !k.dates || !k.dates.length) return false;
+    if (!sseOK(k)) return false;
     if (S.K && S.K.meta && k.meta && String(S.K.meta.to) >= String(k.meta.to)) return false;
     S.K = k;
     if (S.B && $('btnCompare')) $('btnCompare').disabled = false;
@@ -1214,6 +1223,7 @@
 
     loadRemoteS()
       .then(function (k) {
+        if (!sseOK(k)) throw new Error('sse-symbol-check');
         S.K = k;
         if (S.B) cmp.disabled = false;
         cmp.title = '';
@@ -1225,6 +1235,7 @@
       })
       .catch(function () {
         return loadJSON('data/sse.json').then(function (k) {
+          if (!sseOK(k)) throw new Error('sse-symbol-check');
           S.K = k;
           if (S.B) cmp.disabled = false;
           if (S.B) $('ft').textContent = footText();
@@ -1233,7 +1244,9 @@
       })
       .catch(function () {
         cmp.disabled = true;
-        cmp.title = '上证数据缺失，无法对比';
+        /* v278：区分「缺数据」与「数据标的校验失败」——后者是抓错标的，必须显式提示 */
+        cmp.title = '上证数据缺失或校验失败，无法对比';
+        try { if ($('gen')) $('gen').textContent = '上证数据校验失败'; } catch (e) {}
         $('gen').textContent = '上证数据缺失';   /* v265：移动端 hover 不出 title，给可见提示 */
       });
   }
