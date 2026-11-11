@@ -26,6 +26,8 @@
       ring: 'rgba(11,16,23,.95)',
       num: ['#ff7d7d', '#ffc247', '#38bdf8'],
       dotIce: '#38bdf8', dotHot: '#ffc247',
+      /* v265：连续两日「攻击」橙之间的连线色 */
+      lineHot: 'rgba(255,194,71,.92)',
       upArrow: '#ff5c5c', upEdge: 'rgba(255,255,255,.85)',
       downArrow: '#22c55e', downEdge: 'rgba(7,10,15,.75)',
       warnDot: '#f59e0b', warnEdge: '#0b1017', warnMark: '#1a1206',
@@ -44,6 +46,7 @@
       ring: 'rgba(255,255,255,.95)',
       num: ['#dc2626', '#ea8a00', '#0369a1'],
       dotIce: '#0369a1', dotHot: '#ea8a00',
+      lineHot: 'rgba(234,138,0,.90)',
       upArrow: '#e53935', upEdge: 'rgba(127,29,29,.85)',
       downArrow: '#16a34a', downEdge: 'rgba(255,255,255,.9)',
       warnDot: '#ea8a00', warnEdge: '#ffffff', warnMark: '#ffffff',
@@ -68,6 +71,24 @@
 
   /* 折线分段：符合总数 <100 灰 / >=100 红 */
   function bandOf(v) { return v >= 100 ? 1 : 0; }
+  /* 点色分类（与家数数字判据完全一致）：0 常规 / 1 冰点蓝 / 2 攻击橙。
+   * 抽成纯函数，让「点」与「连续两日攻击的连线」共用同一把尺子。 */
+  function dotColorIdx(d, gi) {
+    var dv = d.daycnt[gi];
+    var pg = gi > 0 ? d.daycnt[gi - 1] : null;
+    if (pg != null && dv <= pg * 0.5) return 1;
+    if (dv >= 150) return 2;
+    return 0;
+  }
+  /* 连续两日「攻击」橙 → 返回需要染橙的线段起点索引（相对 from）。
+   * 纯函数，tools/test_render.js 直接复用同一份规则做断言。 */
+  function hotSegs(d, from, cnt) {
+    var out = [];
+    for (var k = 0; k < cnt - 1; k++) {
+      if (dotColorIdx(d, from + k) === 2 && dotColorIdx(d, from + k + 1) === 2) out.push(k);
+    }
+    return out;
+  }
 
   var MIN_BARS = 15;
   var P_INSUM = { l: 30, r: 9, t: 14, b: 20 };
@@ -99,6 +120,7 @@
       '<span><em style="background:' + T.dot[1] + '"></em>≥100</span>' +
       '<span><em style="background:' + T.dotIce + '"></em>冰点</span>' +
       '<span><em style="background:' + T.dotHot + '"></em>攻击≥150</span>' +
+      '<span><em class="seg" style="background:' + T.lineHot + '"></em>连攻线</span>' +
       '<span style="color:' + T.upArrow + '">▲ 转多</span>' +
       '<span style="color:' + T.downArrow + '">▼ 转空</span>' +
       '<span style="color:' + T.warnDot + '">! 预警</span>';
@@ -112,19 +134,96 @@
     });
   }
 
+  /* v265【数据不再永久静态】本地快照先渲染，随后静默竞速线上四源拿到
+   * 更新的 breadth.json；只原地换数据、保留视口，绝不整页重载。
+   * 远程全失败时静默回退本地，页面照常可用（收盘窗口每 3 分钟再查一次）。 */
+  var REMOTE_B = [
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
+    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/breadth.json'
+  ];
+  function loadJSONTimeout(url, ms) {
+    return new Promise(function (resolve, reject) {
+      var done = false;
+      var t = setTimeout(function () { if (!done) { done = true; reject(new Error('timeout')); } }, ms || 6000);
+      loadJSON(url).then(function (d) { if (!done) { done = true; clearTimeout(t); resolve(d); } },
+        function (e) { if (!done) { done = true; clearTimeout(t); reject(e); } });
+    });
+  }
+  function remoteBreadth() {
+    var t = Date.now();
+    return Promise.all(REMOTE_B.map(function (u) {
+      return loadJSONTimeout(u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + t)
+        .then(function (d) { if (!d || !d.dates || !d.dates.length) throw new Error('empty'); return d; })
+        .catch(function () { return null; });
+    })).then(function (arr) {
+      var best = null;
+      for (var i = 0; i < arr.length; i++) {
+        var d = arr[i]; if (!d) continue;
+        if (!best || d.dates[d.dates.length - 1] > best.dates[best.dates.length - 1]) best = d;
+      }
+      return best;
+    });
+  }
+  function applyNewBreadth(b) {
+    if (!S.B || !S.axis) return false;
+    var oldLast = S.B.dates[S.B.dates.length - 1];
+    if (b.dates[b.dates.length - 1] <= oldLast) return false;
+    var fromDate = S.axis[Math.max(0, Math.min(S.axis.length - 1, Math.round(S.from)))];
+    var toDate = S.axis[Math.max(0, Math.min(S.axis.length - 1, Math.round(S.to)))];
+    S.B = b;
+    S.bIndex = new Map();
+    for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
+    buildAxis();
+    var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
+    S.from = nf >= 0 ? Math.min(nf, S.axis.length - 1) : 0;
+    S.to = nt >= 0 ? Math.max(S.from, Math.min(nt, S.axis.length - 1)) : S.axis.length - 1;
+    $('upd').textContent = '全A股 · ' + updText(b);
+    $('ft').textContent = footText();
+    if (isFresh(b)) $('dot').classList.remove('old');
+    updateCards(S.cursor >= 0 ? S.cursor : S.axis.length - 1);
+    renderAll();
+    return true;
+  }
+  function startRemoteRefresh() {
+    if (typeof fetch !== 'function') return;   /* jsdom/offline 静默跳过 */
+    function tick() { remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {}); }
+    tick();
+    var timer = setInterval(function () {
+      var bj = new Date(Date.now() + 8 * 3600 * 1000);
+      var wd = bj.getUTCDay(), hh = bj.getUTCHours();
+      if (wd === 0 || wd === 6 || hh < 15 || hh >= 18) return;  /* 只在工作日 15-18 点追新 */
+      tick();
+    }, 3 * 60 * 1000);
+    try { if (timer && timer.unref) timer.unref(); } catch (e) {}
+  }
+
+  /* v265：数据陈旧不再假装实时。交易日 15:00 后若仍停在旧交易日，标「待更新」。
+   * 周末休市、15:00 前都不算陈旧（简化口径，不含节假日日历）。 */
+  function isFresh(d) {
+    var day = (d.meta && d.meta.trade_date) || d.dates[d.dates.length - 1] || '';
+    var bj = new Date(Date.now() + 8 * 3600 * 1000);
+    var today = bj.toISOString().slice(0, 10);
+    var wd = bj.getUTCDay(), hh = bj.getUTCHours();
+    if (day >= today) return true;
+    if (wd === 0 || wd === 6) return true;
+    return hh < 15;
+  }
   function updText(d) {
     var m = d.meta || {};
     var day = m.trade_date || d.dates[d.dates.length - 1] || '';
     var g = String(m.generated || '');
-    if (!g) return '数据截至 ' + day + '（无跑批时间）';
-    var short = g.replace(/^\d{4}-/, '').slice(0, 11);
-    return '数据 ' + day + ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '');
+    var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
+    var txt = '数据 ' + day + (short ? ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '')
+      : '（无跑批时间）');
+    if (!isFresh(d)) txt += ' · 待更新';
+    return txt;
   }
 
   function footText() {
     var s = '';
     if (S.B) s = '全部A股 ' + S.B.meta.universe + ' 只 · 有效 ' + S.B.meta.valid + ' 只 · ' +
-      S.B.meta.days + ' 个交易日 · ' + updText(S.B);
+      S.B.meta.days + ' 个交易日';
     if (S.K) s += ' · 上证 ' + S.K.dates.length + ' 日';
     return s;
   }
@@ -147,6 +246,18 @@
       }
     }
     S.axis = dates; S.insum = insum;
+  }
+
+  /* v265：日期 → 主轴索引，二分找「不早于该日期」的第一根；
+   * 找不到精确日期时吸附到最近交易日，而不是把视口弹回全景。 */
+  function nearestIdx(axis, date) {
+    if (!axis || !axis.length || !date) return -1;
+    var lo = 0, hi = axis.length - 1;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1;
+      if (axis[mid] < date) lo = mid + 1; else hi = mid;
+    }
+    return lo;
   }
 
   function setRange(n) {
@@ -284,16 +395,31 @@
       g.setLineDash([]);
     }
 
-    /* 折线：逐段按起点水位着色 */
+    /* 折线：逐段按起点水位着色；全量档点数远多于像素时按 stride 降采样
+     * （v265 性能修复：8816 根逐段 stroke 会在拖动时明显掉帧）。 */
     g.lineJoin = 'round';
     g.lineCap = 'round';
     g.lineWidth = 2;
-    for (var k = 0; k < cnt - 1; k++) {
-      var v0 = d.total[from + k], v1 = d.total[from + k + 1];
+    var stride = cnt > iw * 1.5 ? Math.max(1, Math.floor(cnt / (iw * 0.8))) : 1;
+    for (var k = 0; k + stride < cnt; k += stride) {
+      var v0 = d.total[from + k], v1 = d.total[from + k + stride];
       g.strokeStyle = T.line[bandOf(v0)];
       g.beginPath();
       g.moveTo(xOf(k), yOf(v0));
-      g.lineTo(xOf(k + 1), yOf(v1));
+      g.lineTo(xOf(k + stride), yOf(v1));
+      g.stroke();
+    }
+    /* v265【连续两日攻击 → 中间线段变橙】
+     * 只有「相邻两个点都是攻击橙」，连接它们的那一段才变橙：
+     * A 橙 / B 灰 / C 橙 → AB、BC 都不变色；A、B 都橙 → AB 橙。
+     * 橙段单独叠加绘制，不受 stride 降采样影响，全量档也看得到。 */
+    g.strokeStyle = T.lineHot;
+    var hs = hotSegs(d, from, cnt);
+    for (var hi = 0; hi < hs.length; hi++) {
+      var k2 = hs[hi];
+      g.beginPath();
+      g.moveTo(xOf(k2), yOf(d.total[from + k2]));
+      g.lineTo(xOf(k2 + 1), yOf(d.total[from + k2 + 1]));
       g.stroke();
     }
 
@@ -304,9 +430,9 @@
       for (var b = 0; b < cnt; b++) {
         var gi = from + b;
         var bx = xOf(b), by = yOf(d.total[gi]);
-        var dv0 = d.daycnt[gi], pg0 = gi > 0 ? d.daycnt[gi - 1] : null;
-        g.fillStyle = (pg0 != null && dv0 <= pg0 * 0.5) ? T.dotIce
-          : (dv0 >= 150 ? T.dotHot : (d.total[gi] >= 100 ? T.dot[1] : T.dot[0]));
+        var ci = dotColorIdx(d, gi);
+        g.fillStyle = ci === 1 ? T.dotIce
+          : (ci === 2 ? T.dotHot : (d.total[gi] >= 100 ? T.dot[1] : T.dot[0]));
         g.beginPath();
         g.arc(bx, by, rr, 0, Math.PI * 2);
         g.fill();
@@ -401,16 +527,7 @@
       }
     }
 
-    /* 最新点空心定位环 */
-    if (to === N - 1) {
-      var lx = xOf(cnt - 1), ly = yOf(d.total[N - 1]);
-      var lastR = (typeof rr === 'number' && isFinite(rr)) ? rr + 2.4 : 5.2;
-      g.beginPath();
-      g.arc(lx, ly, lastR, 0, Math.PI * 2);
-      g.strokeStyle = T.last;
-      g.lineWidth = 1.4;
-      g.stroke();
-    }
+    /* v265：最新点不做任何特殊标记，与其他点完全一致（同步主站 v263） */
 
     /* X 轴日期（只有 insum 底部画；上证 pane 不画） */
     g.font = '9px -apple-system,BlinkMacSystemFont,sans-serif';
@@ -580,8 +697,8 @@
         g.font = '600 10px -apple-system,BlinkMacSystemFont,sans-serif';
         var tw = g.measureText(txt).width + 14;
         var bx = 6, by = 6, bh2 = 19;
-        g.fillStyle = 'rgba(9,13,20,.92)';
-        g.strokeStyle = 'rgba(255,255,255,.12)';
+        g.fillStyle = isLight() ? 'rgba(255,255,255,.94)' : 'rgba(9,13,20,.92)';
+        g.strokeStyle = isLight() ? 'rgba(15,23,42,.14)' : 'rgba(255,255,255,.12)';
         g.lineWidth = 1;
         g.beginPath();
         if (g.roundRect) g.roundRect(bx, by, tw, bh2, 6); else g.rect(bx, by, tw, bh2);
@@ -597,6 +714,15 @@
   function renderAll() {
     drawInsum();
     if (S.compare && S.K) drawSse();
+  }
+  /* v265：拖动/缩放用 rAF 合帧，一次连续事件只重绘一帧；
+   * renderAll() 仍保持同步，启动/档位/切换/自测不受异步影响。 */
+  var rafPending = false;
+  function scheduleRender() {
+    if (typeof requestAnimationFrame === 'undefined') { renderAll(); return; }
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(function () { rafPending = false; renderAll(); });
   }
 
   /* ============ 交互（单一手势源，绑定在 stage 上） ============ */
@@ -683,6 +809,7 @@
     }
 
     function onMove(e) {
+      if (!S.axis) return;   /* v265：breadth 加载失败时双指缩放不再抛错 */
       var p = S.ptrs.get(e.pointerId);
       if (!p) {
         if (e.pointerType === 'mouse') setCursor(idxAt(e.clientX));
@@ -702,7 +829,7 @@
         S.to = S.pinch.mid + span * (1 - ratio);
         clampView();
         clearRangeBtns();
-        renderAll();
+        scheduleRender();
         return;
       }
 
@@ -726,7 +853,7 @@
         S.to = S.drag.to + dIdx;
         clampView();
         clearRangeBtns();
-        renderAll();
+        scheduleRender();
       }
     }
 
@@ -792,14 +919,16 @@
     var curDate = S.cursor >= 0 ? S.axis[S.cursor] : null;
     S.compare = on;
     buildAxis();
-    var nf = S.axis.indexOf(fromDate), nt = S.axis.indexOf(toDate);
+    var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
     S.from = nf >= 0 ? nf : 0;
     S.to = nt >= 0 ? nt : S.axis.length - 1;
     if (S.to < S.from) S.to = S.from;
-    S.cursor = (curDate != null && S.axis.indexOf(curDate) >= 0) ? S.axis.indexOf(curDate) : -1;
+    var nc = curDate != null ? nearestIdx(S.axis, curDate) : -1;
+    S.cursor = nc >= 0 ? nc : -1;
     document.body.classList.toggle('compare', on);
     $('btnCompare').classList.toggle('on', on);
     $('btnCompare').setAttribute('aria-pressed', on ? 'true' : 'false');
+    Array.prototype.forEach.call($('ranges').children, function (x) { x.classList.remove('on'); });
     updateCards(S.cursor >= 0 ? S.cursor : S.axis.length - 1);
     renderAll();
   }
@@ -898,10 +1027,12 @@
         $('upd').textContent = '全A股 · ' + updText(b);
         setRange(30);
         updateCards(S.axis.length - 1);
-        $('dot').classList.remove('old');
+        if (isFresh(b)) $('dot').classList.remove('old'); else $('dot').classList.add('old');
+        if (S.K) cmp.disabled = false;
         paintLegend();
         $('ft').textContent = footText();
         renderAll();
+        startRemoteRefresh();
       })
       .catch(function () {
         $('gen').textContent = '数据加载失败';
@@ -912,13 +1043,14 @@
     loadJSON('data/sse.json')
       .then(function (k) {
         S.K = k;
-        cmp.disabled = false;
+        if (S.B) cmp.disabled = false;
         cmp.title = '';
         if (S.B) $('ft').textContent = footText();
       })
       .catch(function () {
         cmp.disabled = true;
         cmp.title = '上证数据缺失，无法对比';
+        $('gen').textContent = '上证数据缺失';   /* v265：移动端 hover 不出 title，给可见提示 */
       });
   }
 
@@ -933,7 +1065,8 @@
     module.exports = {
       P_INSUM: P_INSUM, P_SSE: P_SSE,
       xAt: xAt, sseMode: sseMode, axisTier: axisTier,
-      spanDays: spanDays, buildAxisLabels: buildAxisLabels
+      spanDays: spanDays, buildAxisLabels: buildAxisLabels,
+      dotColorIdx: dotColorIdx, hotSegs: hotSegs, nearestIdx: nearestIdx
     };
   }
 })();

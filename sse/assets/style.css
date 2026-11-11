@@ -51,9 +51,10 @@ body{
   border:1px solid #1b2331;border-radius:11px;
   padding:8px 9px 9px;min-width:0;
 }
-.card i{display:block;font-style:normal;font-size:10px;color:#65748d;letter-spacing:.2px;white-space:nowrap}
+.card i{display:block;font-style:normal;font-size:10px;color:#65748d;letter-spacing:.2px;white-space:nowrap;overflow:hidden}
 .card i .tag{
-  font-style:normal;font-size:8.5px;margin-left:3px;padding:0 3px;border-radius:3px;
+  /* v265 同步主站：两字标签在四卡窄列不出框 */
+  font-style:normal;font-size:8px;margin-left:2px;padding:0 2px;border-radius:3px;
   background:#1e2937;color:#93a3b8;vertical-align:1px;
 }
 .card i .tag:empty{display:none}
@@ -77,7 +78,7 @@ body{
 }
 #ssePane{display:none}
 body.compare #ssePane{display:flex}
-body.compare .chartbox .lg{display:none}  /* 两窗紧连：对比态隐藏 insum 图例，把高度让给图表 */
+/* v265：对比态也保留指标图例，否则「冰点/攻击/转多/转空」无从查证 */
 
 .lg{
   display:flex;gap:11px;flex-wrap:wrap;padding:0 8px 6px;
@@ -85,6 +86,7 @@ body.compare .chartbox .lg{display:none}  /* 两窗紧连：对比态隐藏 insu
 }
 .lg span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .lg em{width:7px;height:7px;border-radius:50%;display:inline-block;font-style:normal}
+.lg em.seg{width:11px;height:3px;border-radius:2px}
 .sse-lg{padding:0 8px 5px}
 .sse-lg span{color:#5d6b82}
 .cvwrap{flex:1;min-height:0;position:relative}
