@@ -58,6 +58,17 @@
     }
   };
 
+  /* v266【浅色模式保留深色点线配色】用户喜欢深色那套亮色点线，
+   * 浅色模式只把背景/网格/坐标文字换浅，点、线、数字、箭头、K 线全部沿用 dark。 */
+  (function () {
+    var KEEP_DARK = ['line', 'dot', 'num', 'dotIce', 'dotHot', 'lineHot',
+      'upArrow', 'upEdge', 'downArrow', 'downEdge', 'warnDot', 'warnEdge', 'warnMark',
+      'sseUp', 'sseDown', 'sseLine', 'sseFillTop', 'sseFillBot'];
+    for (var q = 0; q < KEEP_DARK.length; q++) {
+      THEMES.light[KEEP_DARK[q]] = THEMES.dark[KEEP_DARK[q]];
+    }
+  })();
+
   function isLight() { return document.body.classList.contains('light'); }
   function cur() { return isLight() ? THEMES.light : THEMES.dark; }
 
@@ -71,6 +82,8 @@
 
   /* 折线分段：符合总数 <100 灰 / >=100 红 */
   function bandOf(v) { return v >= 100 ? 1 : 0; }
+  /* v266：上证数轴直接用整数点位（2800 / 3500），不再写成 3.66k */
+  function sseAxisLabel(v) { return String(Math.round(v)); }
   /* 点色分类（与家数数字判据完全一致）：0 常规 / 1 冰点蓝 / 2 攻击橙。
    * 抽成纯函数，让「点」与「连续两日攻击的连线」共用同一把尺子。 */
   function dotColorIdx(d, gi) {
@@ -224,7 +237,12 @@
     var s = '';
     if (S.B) s = '全部A股 ' + S.B.meta.universe + ' 只 · 有效 ' + S.B.meta.valid + ' 只 · ' +
       S.B.meta.days + ' 个交易日';
-    if (S.K) s += ' · 上证 ' + S.K.dates.length + ' 日';
+    if (S.K) {
+      s += ' · 上证 ' + S.K.dates.length + ' 日';
+      var kLast = S.K.dates[S.K.dates.length - 1];
+      var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
+      if (bLast && kLast < bLast) s += ' · 上证截至 ' + kLast + '（待补）';
+    }
     return s;
   }
 
@@ -232,16 +250,20 @@
   function buildAxis() {
     var dates = (S.compare && S.K) ? S.K.dates : S.B.dates;
     var insum = { total: [], daycnt: [], willrm: [], newadd: [], sig: [] };
+    var prevTotal = 0, prevDay = 0, prevRm = 0, prevNew = 0;
     for (var i = 0; i < dates.length; i++) {
       var bi = S.bIndex.get(dates[i]);
       if (bi == null) {
-        insum.total.push(0); insum.daycnt.push(0);
-        insum.willrm.push(0); insum.newadd.push(0); insum.sig.push(0);
+        /* v266：缺日不填 0（会在图上砸出一根假尖峰），沿用前一个有效值 */
+        insum.total.push(prevTotal); insum.daycnt.push(prevDay);
+        insum.willrm.push(prevRm); insum.newadd.push(prevNew); insum.sig.push(0);
       } else {
-        insum.total.push(S.B.total[bi]);
-        insum.daycnt.push(S.B.daycnt[bi]);
-        insum.willrm.push(S.B.willrm[bi]);
-        insum.newadd.push(S.B.newadd[bi]);
+        prevTotal = S.B.total[bi]; prevDay = S.B.daycnt[bi];
+        prevRm = S.B.willrm[bi]; prevNew = S.B.newadd[bi];
+        insum.total.push(prevTotal);
+        insum.daycnt.push(prevDay);
+        insum.willrm.push(prevRm);
+        insum.newadd.push(prevNew);
         insum.sig.push(S.B.sig[bi]);
       }
     }
@@ -619,7 +641,7 @@
       g.lineTo(W - P.r, Math.round(y) + .5);
       g.stroke();
       g.fillStyle = T.axis;
-      var lbl = val >= 1000 ? (val / 1000).toFixed(2) + 'k' : val.toFixed(0);
+      var lbl = sseAxisLabel(val);
       g.fillText(lbl, P.l - 5, y);
     }
 
@@ -937,6 +959,11 @@
 
   /* ============ 主题 ============ */
   function readTheme() {
+    /* v266：URL 参数优先，方便直接分享「浅色版」链接与截图验收 */
+    try {
+      var q = new URLSearchParams(location.search).get('theme');
+      if (q === 'light' || q === 'dark') return q;
+    } catch (e) {}
     try {
       var th = JSON.parse(localStorage.getItem('mm_theme') || 'null');
       if (th === 'light') return 'light';
@@ -1017,6 +1044,11 @@
     if (theme) theme.addEventListener('click', function () {
       var next = isLight() ? 'dark' : 'light';
       try { localStorage.setItem('mm_theme', JSON.stringify(next)); } catch (e) {}
+      try {
+        var u = new URL(location.href);
+        u.searchParams.delete('theme');
+        history.replaceState(null, '', u.toString());
+      } catch (e) {}
       applyTheme(next);
     });
 
@@ -1034,6 +1066,7 @@
         paintLegend();
         $('ft').textContent = footText();
         renderAll();
+        if (S.K && /compare=1/.test(location.search)) setCompare(true);
         startRemoteRefresh();
       })
       .catch(function () {
@@ -1047,7 +1080,10 @@
         S.K = k;
         if (S.B) cmp.disabled = false;
         cmp.title = '';
-        if (S.B) $('ft').textContent = footText();
+        if (S.B) {
+          $('ft').textContent = footText();
+          if (/compare=1/.test(location.search)) setCompare(true);
+        }
       })
       .catch(function () {
         cmp.disabled = true;
@@ -1068,7 +1104,8 @@
       P_INSUM: P_INSUM, P_SSE: P_SSE,
       xAt: xAt, sseMode: sseMode, axisTier: axisTier,
       spanDays: spanDays, buildAxisLabels: buildAxisLabels,
-      dotColorIdx: dotColorIdx, hotSegs: hotSegs, nearestIdx: nearestIdx
+      dotColorIdx: dotColorIdx, hotSegs: hotSegs, nearestIdx: nearestIdx,
+      sseAxisLabel: sseAxisLabel
     };
   }
 })();

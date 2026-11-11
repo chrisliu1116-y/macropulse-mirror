@@ -81,10 +81,10 @@ body.compare #ssePane{display:flex}
 /* v265：对比态也保留指标图例，否则「冰点/攻击/转多/转空」无从查证 */
 
 .lg{
-  display:flex;gap:11px;flex-wrap:wrap;padding:0 8px 6px;
+  display:flex;gap:8px;flex-wrap:wrap;padding:2px 8px 6px;
   font-size:10.5px;color:#66748c;letter-spacing:.2px;
 }
-.lg span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.lg span{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;flex:0 0 calc(25% - 8px)}
 .lg em{width:7px;height:7px;border-radius:50%;display:inline-block;font-style:normal}
 .lg em.seg{width:11px;height:3px;border-radius:2px}
 .sse-lg{padding:0 8px 5px}
