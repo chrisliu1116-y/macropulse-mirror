@@ -2927,22 +2927,22 @@
 
   // 基础标的：非个股（指数/商品/外汇/美债/加密）——「一开始加的那些」
   function baseKeys() {
-    return U.keys().filter(k => { const a = U.get(k); return a && a.kind !== 'stock'; });
+    return U.keys().filter(k => { const a = U.get(k); return a && a.kind !== 'stock' && a.kind !== 'etf'; });
   }
 
   function mktCatKeys() {
     /* v199 用户口径：「自选」= 只显示我自己添加的个股，
      * 排除设置好的默认指数/商品（那些在「全部」和各市场标签里看）。 */
     if (mktCat === 'watch') {
-      return S.watch.filter(k => { const a = U.get(k); return a && a.kind === 'stock'; });
+      return S.watch.filter(k => { const a = U.get(k); return a && (a.kind === 'stock' || a.kind === 'etf'); });
     }
     const base = baseKeys();
     if (mktCat === 'all') {
-      const own = S.watch.filter(k => { const a = U.get(k); return a && a.kind === 'stock'; });
+      const own = S.watch.filter(k => { const a = U.get(k); return a && (a.kind === 'stock' || a.kind === 'etf'); });
       return Array.from(new Set(base.concat(own)));
     }
     const inMkt = base.filter(k => mktOf(k) === mktCat);
-    const own = S.watch.filter(k => { const a = U.get(k); return a && a.kind === 'stock' && mktOf(k) === mktCat; });
+    const own = S.watch.filter(k => { const a = U.get(k); return a && (a.kind === 'stock' || a.kind === 'etf') && mktOf(k) === mktCat; });
     return inMkt.concat(own);
   }
 
@@ -3501,6 +3501,188 @@
     return out;
   }
 
+  /* ---------------- v274：搜索建议双源（全市场 ETF：国内/香港/海外杠杆反向） ----------------
+   * ① 腾讯 smartbox.gtimg.cn：美股/港股/沪深 ETF 的代码与拼音搜索。
+   *    实测 TQQQ / SOXL / 03036(港股ETF) / 510300 全部命中，不校验 token。
+   *    无 CORS（fetch 不可用）但返回 v_hint="..." 全局赋值，script 标签直连即可。
+   *    旧 searchapi.eastmoney.com 虽 curl 可用，但页面内 script 加载零响应
+   *    （SCRIPT ERROR、无 HTTP 响应，疑似 CDN 对浏览器环境拒连），实测弃用。
+   * ② 沪深 ETF 名录：push2 clist fs=b:MK0021~24（total=1660，实测）按成交额
+   *    取前 300，支持中文名搜索（smartbox 不支持中文）；60 分钟缓存。
+   * 返回 QuoteID 直接当 secid（synthSecid 原样收下），QuoteHub 实时报价。 */
+  let _sugSeq = 0;
+  function smartboxSug(q, cb) {
+    const sc = d.createElement('script');
+    let done = false;
+    const cleanup = () => {
+      if (done) return; done = true;
+      try { delete w.v_hint; } catch (e) { w.v_hint = undefined; }
+      if (sc.parentNode) sc.parentNode.removeChild(sc);
+    };
+    const timer = setTimeout(() => { cleanup(); cb(null); }, 6000);
+    sc.onload = () => {
+      clearTimeout(timer);
+      const h = w.v_hint;
+      cleanup();
+      cb(typeof h === 'string' ? h : null);
+    };
+    sc.onerror = () => { clearTimeout(timer); cleanup(); cb(null); };
+    sc.src = 'https://smartbox.gtimg.cn/s3/?v=2&q=' + encodeURIComponent(q)
+      + '&t=all&r=' + Math.random().toString(36).slice(2);
+    d.head.appendChild(sc);
+  }
+  /* 腾讯 v_hint 格式：条目用 ^ 分隔，字段用 ~ 分隔：
+   *   us~tqqq.oq~三倍做多纳斯达克100etf~拼音~GP  → 105.TQQQ
+   *   hk~03036~tr台湾~...                        → 116.03036
+   *   sh~510300~沪深300ETF华泰柏瑞~...~ETF       → 1.510300
+   * 美股后缀：.oq=纳斯达克→105，.n=纽交所→106，.am/.p=美交所→107 */
+  function parseBox(h) {
+    if (!h || h === 'N') return [];
+    const out = [];
+    h.split('^').forEach(seg => {
+      const f = seg.split('~');
+      if (f.length < 3) return;
+      const mkt = f[0], raw = f[1], nm = String(f[2] || raw);
+      let secid = null, type = 'ETF';
+      const code = String(raw).split('.')[0].toUpperCase();
+      if (mkt === 'us') {
+        const suf = (String(raw).split('.')[1] || '').toLowerCase();
+        const emm = suf === 'oq' ? 105 : (suf === 'n' ? 106 : 107);
+        secid = emm + '.' + code; type = '美股ETF';
+      } else if (mkt === 'hk') {
+        secid = '116.' + String(raw); type = '港股ETF';
+      } else if (mkt === 'sh') {
+        secid = '1.' + code; type = f[4] === 'ETF' ? '基金' : '沪A';
+      } else if (mkt === 'sz') {
+        secid = '0.' + code; type = f[4] === 'ETF' ? '基金' : '深A';
+      }
+      if (secid && code) out.push({ secid, code, name: nm, type });
+    });
+    return out;
+  }
+  /* 沪深 ETF 名录（中文名搜索用）。按成交额降序 top300，60 分钟缓存。 */
+  let _etfCN = null, _etfCNAt = 0;
+  function etfCNSug(q, cb) {
+    const done = (rows) => {
+      const t = q.trim().toLowerCase();
+      cb(!t ? [] : (_etfCN || []).filter(x =>
+        x.name.toLowerCase().indexOf(t) >= 0 || x.code.indexOf(t) >= 0).slice(0, 8));
+    };
+    if (_etfCN && Date.now() - _etfCNAt < 3600e3) { done(); return; }
+    const pages = [1, 2, 3];
+    const rows = [];
+    let left = pages.length;
+    pages.forEach(pn => {
+      /* getJSON 在 api.js 闭包内不可达，push2 有 CORS 直接 fetch */
+      fetch('https://push2.eastmoney.com/api/qt/clist/get?pn=' + pn
+        + '&pz=100&po=1&np=1&fltt=2&invt=2&fid=f6'
+        + '&fs=b:MK0021,b:MK0022,b:MK0023,b:MK0024'
+        + '&fields=f12,f13,f14&ut=fa5fd1943c7b386f172d6893dbfba10b&_=' + Date.now(), { cache: 'no-store' })
+        .then(r => r.json())
+        .then(d => {
+          ((d && d.data && d.data.diff) || []).forEach(r => {
+            if (!r.f12) return;
+            rows.push({ code: String(r.f12), name: String(r.f14 || ''),
+                        secid: (r.f13 === 1 ? '1.' : '0.') + r.f12 });
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (--left) return;
+          if (rows.length) { _etfCN = rows; _etfCNAt = Date.now(); }
+          done();
+        });
+    });
+  }
+  function sugList(q, cb) {
+    let box = null, cn = null, fin = false;
+    const merge = () => {
+      const seen = Object.create(null), out = [];
+      (cn || []).concat(box || []).forEach(x => {
+        if (!x || !x.secid || x.secid.indexOf('.') < 0 || seen[x.code]) return;
+        seen[x.code] = 1; out.push(x);
+      });
+      cb(out);
+    };
+    const done = () => { if (fin) return; fin = true; merge(); };
+    setTimeout(done, 4500);
+    smartboxSug(q, h => { box = parseBox(h); done(); });
+    etfCNSug(q, rows => { cn = rows; done(); });
+  }
+
+  /* ---------------- v273：浮窗盯盘（安卓系统悬浮窗） ----------------
+   * 配置存 localStorage 并同步给原生（NativePulse.setFloatWatch）；
+   * 原生 FloatWatchService 负责气泡/展开面板/轮询/全屏隐藏。 */
+  function floatData() {
+    const d = store.get('mm_float_watch', null);
+    return (d && typeof d === 'object')
+      ? { on: !!d.on, stocks: Array.isArray(d.stocks) ? d.stocks.slice(0, 5) : [] }
+      : { on: false, stocks: [] };
+  }
+  function floatApply(d) {
+    store.set('mm_float_watch', d);
+    try {
+      const np = w.NativePulse;
+      if (np && np.setFloatWatch) np.setFloatWatch(d.on ? 1 : 0, JSON.stringify(d.stocks));
+    } catch (e) { }
+  }
+  /* 浮窗相关 UI 的统一点击委托（设置页每次重绘都重新生成 DOM，委托最稳） */
+  d.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t.closest('#swFloat')) {
+      const np = w.NativePulse;
+      if (!np || !np.setFloatWatch) { toast('浮窗盯盘仅安卓 APP 内可用'); return; }
+      const dnow = floatData();
+      if (dnow.on) { dnow.on = false; floatApply(dnow); renderSettings(); return; }
+      if (np.floatCanDraw && !np.floatCanDraw()) {
+        toast('请先授予「显示在其他应用上层」权限');
+        try { np.openFloatPerm(); } catch (e2) { }
+        return;
+      }
+      if (!dnow.stocks.length) { toast('先在下面添加盯盘股票'); return; }
+      dnow.on = true; floatApply(dnow); renderSettings();
+      return;
+    }
+    if (t.closest('#fwPerm')) { try { w.NativePulse.openFloatPerm(); } catch (e) { } return; }
+    const del = t.closest('[data-fwdel]');
+    if (del) {
+      const dnow = floatData();
+      dnow.stocks.splice(+del.dataset.fwdel, 1);
+      floatApply(dnow); renderSettings();
+      return;
+    }
+    if (t.closest('#fwAdd')) {
+      const inp = $('#fwQ');
+      const q = inp ? inp.value.trim() : '';
+      if (!q) { toast('先输入代码或名称'); return; }
+      const btn = t.closest('#fwAdd');
+      btn.textContent = '搜索中';
+      sugList(q, (rows) => {
+        btn.textContent = '搜索';
+        const host = $('#fwSug'); if (!host) return;
+        host._rows = rows.slice(0, 6);
+        host.innerHTML = host._rows.length
+          ? host._rows.map((r, i) => `<div class="set-row"><div><b>${esc(r.name)}</b><span>${esc(r.code)} · ${esc(r.type || '')}</span></div><button class="mini-btn" data-fwpick="${i}">加入</button></div>`).join('')
+          : '<div class="set-row"><div><span>没有匹配结果</span></div></div>';
+      });
+      return;
+    }
+    const pick = t.closest('[data-fwpick]');
+    if (pick) {
+      const host = t.closest('#fwSug');
+      const rows = (host && host._rows) || [];
+      const r = rows[+pick.dataset.fwpick];
+      if (!r) return;
+      const dnow = floatData();
+      if (dnow.stocks.length >= 5) { toast('盯盘最多 5 只'); return; }
+      if (dnow.stocks.some(x => x.code === r.code)) { toast('已在盯盘列表'); return; }
+      try { U.synthSecid(r.secid, r.code, r.name); } catch (e) { }
+      dnow.stocks.push({ secid: r.secid, code: r.code, name: r.name });
+      floatApply(dnow); renderSettings();
+      return;
+    }
+  });
+
   /* ---------------- 添加品种 ---------------- */
   function openPicker() {
     const box = $('#picker');
@@ -3573,7 +3755,16 @@
            * shortName 把名称回填成「鸿海」这类真名（见 api.js intraday）。 */
           push(q, q);
         }
-        if (!found.length) return '';
+        /* v273：远程建议（ETF/基金/美股杠杆，含正两倍负两倍这类杠杆产品）。
+         * 渲染前先 synthSecid 预写进 ASSETS，点「＋」时现有委托直接能加。 */
+        const sug = (S._pkSug || []).filter(x =>
+          x && !seen[x.code] && S.watch.indexOf(String(x.code)) < 0);
+        const sugHTML = sug.map(x => {
+          try { U.synthSecid(x.secid, x.code, x.name); } catch (e) { }
+          return `<button class="pk-i" data-k="${esc(x.code)}">
+            <span>${esc(x.name)}<em>${esc(x.code)} · ${esc(x.type || 'ETF')}</em></span><i>＋</i>
+          </button>`;
+        }).join('');
         const items = found.map(f => {
           /* 6 位纯数字走 A 股合成（沪深按首位判）；4 位交给 universe 判台股/日股
            * （v64：4 位代码台日撞车，之前直接 synthGlobal 会让日码搜不到也加不进）；
@@ -3586,7 +3777,10 @@
             <span>${esc(f.nm)}<em>${esc(f.code)}</em></span><i>${on ? '已添加' : '＋'}</i>
           </button>`;
         }).join('');
-        return items ? `<div class="pk-g"><div class="pk-gh" style="color:#8b95a6">全市场匹配</div>${items}</div>` : '';
+        const main = items ? `<div class="pk-g"><div class="pk-gh" style="color:#8b95a6">全市场匹配</div>${items}</div>` : '';
+        const sugBlock = sugHTML ? `<div class="pk-g"><div class="pk-gh" style="color:#ffd43b">ETF / 全市场建议</div>${sugHTML}</div>` : '';
+        if (!main && !sugBlock) return '';
+        return sugBlock + main;
       };
       const dyn = dynHTML();
       const has = order.some(g => groups[g].some(hit));
@@ -3614,7 +3808,24 @@
     bindTapClose(box, '.pk-body', () => box.classList.remove('on'));
     box.querySelector('.pk-x').onclick = () => box.classList.remove('on');
     box.onclick = (e) => { if (e.target === box) box.classList.remove('on'); };
-    box.querySelector('#pkSearch').addEventListener('input', (e) => renderList(e.target.value));
+    /* v273：本地渲染 + 远程 suggest 双层。suggest 防抖 350ms，回来后重渲染，
+     * 「ETF / 全市场建议」区块出现在「全市场匹配」上方。 */
+    let sugT = 0, sugQ = '';
+    box.querySelector('#pkSearch').addEventListener('input', (e) => {
+      renderList(e.target.value);
+      const q = (e.target.value || '').trim();
+      clearTimeout(sugT);
+      if (!q || /^\d{1,3}$/.test(q)) { S._pkSug = []; return; }
+      sugT = setTimeout(() => {
+        sugQ = q;
+        sugList(q, (rows) => {
+          if (sugQ !== q) return;
+          S._pkSug = rows.slice(0, 8);
+          const cur = box.querySelector('#pkSearch');
+          if (cur) renderList(cur.value);
+        });
+      }, 350);
+    });
     box.querySelector('.pk-body').addEventListener('click', (e) => {
       const b = e.target.closest('.pk-i');
       if (!b) return;
@@ -3654,6 +3865,9 @@
   }
   function renderSettings() {
     const st = w.API.status;
+    /* v273：浮窗盯盘状态（仅安卓 APP 有原生桥；浏览器隐藏权限行、开关给提示） */
+    const fw = floatData();
+    const fwPerm = (w.NativePulse && w.NativePulse.floatCanDraw) ? !!w.NativePulse.floatCanDraw() : true;
     const badge = (v) => v === 'ok' ? '<span class="badge ok">在线</span>'
       : v === 'fail' ? '<span class="badge bad">异常</span>' : '<span class="badge">待连接</span>';
 
@@ -3695,6 +3909,18 @@
           <button class="mini-btn" id="btnTestDelayed">5 秒</button></div>
         <div class="set-row"><div><b>后台防杀</b><span>跳转系统电池优化，把本 APP 设为「无限制」避免后台被清理</span></div>
           <button class="mini-btn" id="btnBattery">去设置</button></div>
+      </div>
+
+      <div class="set-card">
+        <div class="set-card-h">浮窗盯盘（安卓）</div>
+        <div class="set-row"><div><b>悬浮窗盯盘</b><span>桌面悬浮气泡显示盯盘股票涨跌，点气泡展开列表；APP 全屏时自动隐藏。需授予「显示在其他应用上层」权限</span></div>
+          <button class="sw ${fw.on ? 'on' : ''}" id="swFloat"><i></i></button></div>
+        ${(!fwPerm) ? `<div class="set-row"><div><b>悬浮窗权限</b><span>未授权时气泡不会显示</span></div>
+          <button class="mini-btn" id="fwPerm">去授权</button></div>` : ''}
+        <div class="set-row"><div><b>盯盘股票（${fw.stocks.length}/5）</b><span>输代码或名称搜索，支持全市场 ETF（含纳指三倍这类正/负杠杆）</span></div></div>
+        <div class="set-row"><input type="search" id="fwQ" placeholder="如 513100 / TQQQ / 纳指三倍" style="flex:1;margin-right:8px;min-width:0"><button class="mini-btn" id="fwAdd">搜索</button></div>
+        <div id="fwSug"></div>
+        ${fw.stocks.map((x, i) => `<div class="set-row"><div><b>${esc(x.name)}</b><span>${esc(x.code)} · ${esc(x.secid)}</span></div><button class="mini-btn" data-fwdel="${i}">删除</button></div>`).join('')}
       </div>
 
       <div class="set-card">

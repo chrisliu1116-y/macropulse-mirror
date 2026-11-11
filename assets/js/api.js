@@ -311,6 +311,24 @@
     while ((m = re.exec(txt))) {
       const k = map[m[1]];
       if (!k) continue;
+      /* v274：日/韩股（jp/kr 前缀）—— 腾讯返回 ~ 分隔、f[3]=现价 f[4]=昨收，
+       * 与商品的逗号格式完全不同。东财对 176/177 市场行情滞后 20 分钟
+       * （实测海力士：东财 13:52:54 报 1278000，腾讯同刻 1280000 且仍在跳），
+       * 所以这批品种 rt:'tx' 走腾讯实时，东财只当锚点。 */
+      if (m[2].indexOf('~') >= 0) {
+        const f2 = m[2].split('~');
+        const price2 = +f2[3], prev2 = +f2[4];
+        if (!(price2 > 0)) continue;
+        const pct2 = prev2 ? (price2 - prev2) / prev2 * 100 : 0;
+        out[k] = {
+          price: price2, pct: pct2,
+          chg: prev2 ? price2 - prev2 : null,
+          prev: prev2 || null,
+          high: null, low: null, open: null,
+          at: Date.now(), src: 'tx'
+        };
+        continue;
+      }
       const f = m[2].split(',');
       const price = +f[0];
       if (!(price > 0)) continue;

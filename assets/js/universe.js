@@ -182,14 +182,14 @@
      * 东财市场号：177=韩股(KRX)、176=日股(JPX)、178=台股(TWSE)
      * 用户可直接在「添加品种」搜索框输代码/名称加入自选 */
     // 韩股
-    '000660': { name: 'SK海力士',   short: 'SK海力士', src: 'em', secid: '177.000660', dec: 2, grp: 'krstock', kind: 'stock', unit: '韩元', tv: 'KRX:000660' },
-    '005930': { name: '三星电子',   short: '三星电子', src: 'em', secid: '177.005930', dec: 2, grp: 'krstock', kind: 'stock', unit: '韩元', tv: 'KRX:005930' },
-    '005380': { name: '现代汽车',   short: '现代汽车', src: 'em', secid: '177.005380', dec: 2, grp: 'krstock', kind: 'stock', unit: '韩元', tv: 'KRX:005380' },
+    '000660': { name: 'SK海力士',   short: 'SK海力士', src: 'em', secid: '177.000660', dec: 2, grp: 'krstock', kind: 'stock', unit: '韩元', tv: 'KRX:000660', rt: 'tx', txSym: 'kr000660' },
+    '005930': { name: '三星电子',   short: '三星电子', src: 'em', secid: '177.005930', dec: 2, grp: 'krstock', kind: 'stock', unit: '韩元', tv: 'KRX:005930', rt: 'tx', txSym: 'kr005930' },
+    '005380': { name: '现代汽车',   short: '现代汽车', src: 'em', secid: '177.005380', dec: 2, grp: 'krstock', kind: 'stock', unit: '韩元', tv: 'KRX:005380', rt: 'tx', txSym: 'kr005380' },
     // 日股
-    '7203':   { name: '丰田汽车',   short: '丰田',     src: 'em', secid: '176.7203',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:7203' },
-    '9984':   { name: '软银集团',   short: '软银',     src: 'em', secid: '176.9984',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:9984' },
-    '285A':   { name: '铠侠',       short: '铠侠',     src: 'em', secid: '176.285A',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:285A' },
-    '6857':   { name: '爱德万测试', short: '爱德万',   src: 'em', secid: '176.6857',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:6857' },
+    '7203':   { name: '丰田汽车',   short: '丰田',     src: 'em', secid: '176.7203',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:7203', rt: 'tx', txSym: 'jp7203' },
+    '9984':   { name: '软银集团',   short: '软银',     src: 'em', secid: '176.9984',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:9984', rt: 'tx', txSym: 'jp9984' },
+    '285A':   { name: '铠侠',       short: '铠侠',     src: 'em', secid: '176.285A',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:285A', rt: 'tx', txSym: 'jp285A' },
+    '6857':   { name: '爱德万测试', short: '爱德万',   src: 'em', secid: '176.6857',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:6857', rt: 'tx', txSym: 'jp6857' },
     // 台股
     '2330':   { name: '台积电',     short: '台积电',   src: 'em', secid: '178.2330',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2330' },
     '2327':   { name: '国巨',       short: '国巨',     src: 'em', secid: '178.2327',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2327' },
@@ -444,6 +444,27 @@
     if (/^\d{4}$/.test(s)) return synthTW(s);
     return null;
   }
+  /* v273：ETF / 全市场 suggest 合成 —— 东财搜索建议返回 QuoteID（=secid），
+   * 任意市场通用（沪深基金 1./0.、美股 105/106/107、港股 116…）。
+   * A股 ETF/基金价格 3 位小数（如 0.707），美股/港股 2 位。
+   * kind='etf' 仅作标记；grp 借用现有分组键，行情列表无需新增分组。 */
+  function synthSecid(secid, code, name) {
+    code = String(code || secid.replace('.', '_'));
+    if (ASSETS[code]) return ASSETS[code];
+    const mkt = String(secid).split('.')[0];
+    const us = mkt === '105' || mkt === '106' || mkt === '107';
+    const hk = mkt === '116';
+    const nm = String(name || code);
+    const a = {
+      name: nm, short: nm, src: 'em',
+      secid: String(secid), dec: us || hk ? 2 : 3,
+      grp: us ? 'usstock' : (hk ? 'hkstock' : 'cnstock'),
+      kind: 'etf', unit: us ? 'USD' : (hk ? '港元' : '元'),
+      _synth: true
+    };
+    ASSETS[code] = a;
+    return a;
+  }
   function name(key) { const a = get(key); return a ? (a.short || a.name) : key; }
   function fullName(key) { const a = get(key); return a ? a.name : key; }
   function grp(key) { const a = get(key); return a ? (GROUPS[a.grp] || { label: '', color: '#8b95a6', order: 99 }) : { label: '', color: '#8b95a6', order: 99 }; }
@@ -504,7 +525,7 @@
     get, name, fullName, grp, decimals, fmt, pct, changeLabel, keys, orderOf,
     cnName, shortNames: GLOBAL_SHORT,
     /* v149：全市场名录搜索命中后现场合成品种用（synthCN 写 ASSETS，后续照常取报价） */
-    synthCN, synthGlobal,
+    synthCN, synthGlobal, synthSecid,
     adrOf
   };
 })(window);
