@@ -5701,6 +5701,12 @@
       if (np && np.setLandscape) np.setLandscape(false);
     } catch (e) {}
     _fsResizeSoon();
+    /* v272：退出全屏必须回收/重算 history 哨兵。
+     * v197 把配对逻辑挪进 bkSync 后，只在 click/Esc/popstate 触发；
+     * 原生返回键走 handleBack() 直接退全屏（无 click、无 popstate），
+     * 哨兵就残留在 history 里，第二次返回空转 —— 这里补上配对。
+     * 延迟 60ms：等 fullscreenchange 把 fullscreenElement 清空再重算。 */
+    setTimeout(() => { try { bkSync(); } catch (e) {} }, 60);
   }
 
   function toggleChartFS() {
@@ -5730,6 +5736,12 @@
     const pk = $('#picker'); if (pk && pk.classList.contains('on')) return () => pk.classList.remove('on');
     const sm = $('#sModal'); if (sm && sm.classList.contains('on')) return () => sm.classList.remove('on');
     if (d.body.classList.contains('chart-fs')) return exitChartFS;
+    /* v272【全屏返回按两次 · 网页侧配对】系统全屏（赚钱效应 iframe 全屏等）
+     * 也要算一层。原来 bkTop 只认 chart-fs，iframe 全屏时顶层是 null、不压哨兵，
+     * H5 层级与原生/浏览器的全屏状态对不齐。 */
+    if (d.fullscreenElement || d.webkitFullscreenElement) {
+      return function exitSysFs() { try { if (w.__exitFs) w.__exitFs(); } catch (e) {} };
+    }
     const ns = $('#newsSheet'); if (ns && ns.classList.contains('on')) return closeNews;
     const sh = $('#sheet'); if (sh && sh.classList.contains('on')) return closeSheet;
     if (S.eventOpen) return () => { S.eventOpen = null; renderEvent(); };
@@ -5786,8 +5798,20 @@
       if (f && f.contentWindow) f.contentWindow.postMessage({ mm_exit_fs: 1 }, '*');
     } catch (e) {}
     const fb = $('#effFull'); if (fb) fb.textContent = '全屏';
+    /* v272：原生返回键调这里退全屏，同样要重算哨兵（无 click / 无 popstate） */
+    setTimeout(() => { try { bkSync(); } catch (e) {} }, 60);
   };
   w.__bkSync = bkSync;
+  /* 返回栈调试/测试句柄：只读，不参与业务逻辑（供 tools/check_back_fullscreen.py 实测） */
+  w.__bkDebug = function () {
+    const f = bkTop();
+    return {
+      guard: bkGuard, ignore: bkIgnore, top: f ? (f.name || 'anon') : null,
+      fs: !!(d.fullscreenElement || d.webkitFullscreenElement),
+      chartfs: d.body.classList.contains('chart-fs'),
+      state: w.history.state || null
+    };
+  };
 
   function closeSheet() {
     try { closeDrawPanel(); } catch (e) {}
@@ -7975,6 +7999,8 @@
       if (!on) {
         try { if (w.NativePulse && w.NativePulse.setLandscape) w.NativePulse.setLandscape(false); } catch (e) {}
       }
+      /* v272：系统全屏进出都重算哨兵，保证返回键按一次层级就对齐 */
+      setTimeout(() => { try { bkSync(); } catch (e) {} }, 60);
     });
   }
 
