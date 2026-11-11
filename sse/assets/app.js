@@ -286,7 +286,7 @@
     if (S.K) {
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
-      if (bLast && kLast < bLast) parts.push('上证截至 ' + kLast + '（待补）');
+      if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
     }
     if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');

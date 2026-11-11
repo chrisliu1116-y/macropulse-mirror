@@ -3512,6 +3512,19 @@
    * 返回 QuoteID 直接当 secid（synthSecid 原样收下），QuoteHub 实时报价。 */
   let _sugSeq = 0;
   function smartboxSug(q, cb) {
+    /* v275：APP 壳内走原生 Java 直连（GBK 已在 Java 侧解码）——
+     * WebView 的 script 标签对该域名零响应（SCRIPT ERROR 无 HTTP 响应），
+     * 浏览器/PWA（无壳）仍走 script 标签。 */
+    const np = w.NativePulse;
+    if (np && typeof np.nativeFetch === 'function') {
+      try {
+        const raw = np.nativeFetch('https://smartbox.gtimg.cn/s3/?v=2&q='
+          + encodeURIComponent(q) + '&t=all&r=' + Math.random().toString(36).slice(2));
+        const a = raw.indexOf('"'), b = raw.lastIndexOf('"');
+        cb(a >= 0 && b > a ? raw.slice(a + 1, b) : null);
+      } catch (e) { cb(null); }
+      return;
+    }
     const sc = d.createElement('script');
     let done = false;
     const cleanup = () => {
@@ -3799,8 +3812,9 @@
     };
     box.innerHTML = `<div class="pk-panel">
       <div class="pk-h"><b>添加 / 移除品种</b><button class="pk-x">✕</button></div>
-      <div class="pk-search"><input type="search" id="pkSearch" placeholder="输代码或名称搜索：SK海力士 / 铠侠 / 国巨 / 000660 / 285A…" autocomplete="off"></div>
+      <div class="pk-search"><input type="text" id="pkSearch" placeholder="输代码或名称搜索：SK海力士 / 铠侠 / 国巨 / 000660 / 285A…" autocomplete="off" inputmode="none"></div>
       <div class="pk-body"></div>
+      <div id="pkKb"></div>
     </div>`;
     box.classList.add('on');
     renderList('');
@@ -3838,6 +3852,50 @@
       if (it) it.textContent = S.watch.indexOf(k) >= 0 ? '已添加' : '＋';
       renderMarket();
     });
+
+    /* v275：自定义股票键盘（照同花顺 123 / ABC / 中文 三键）。
+     * 「中文」= 收起键盘、唤起系统输入法；123/ABC 用本键盘输入。 */
+    const kbin = box.querySelector('#pkSearch');
+    const kbhost = box.querySelector('#pkKb');
+    const setVal = (v) => { kbin.value = v;
+      kbin.dispatchEvent(new Event('input', { bubbles: true })); };
+    const renderKb = (mode) => {
+      if (mode === 'sys') { kbhost.innerHTML = ''; kbin.focus(); return; }
+      const keys = mode === 'num'
+        ? [['000','1','2','3','⌫'],['600','4','5','6','清空'],['300','7','8','9','确定'],['00','ABC','0','⌨']]
+        : [['Q','W','E','R','T','Y','U','I','O','P'],['A','S','D','F','G','H','J','K','L'],
+           ['Aa','Z','X','C','V','B','N','M','⌫'],['123','空格','确定']];
+      const tabs = `<div class="pk-kb-tabs">
+        <button data-m="num" class="${mode==='num'?'on':''}">123</button>
+        <button data-m="abc" class="${mode==='abc'?'on':''}">ABC</button>
+        <button data-m="sys">中文</button>
+        <button data-m="close" style="margin-left:auto">关闭</button></div>`;
+      const grid = `<div class="pk-kb-grid">${keys.map(row =>
+        `<div class="pk-kb-row">${row.map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`).join('')}</div>`;
+      kbhost.innerHTML = tabs + grid;
+      kbhost.querySelectorAll('[data-m]').forEach(btn => {
+        btn.onclick = () => {
+          const m = btn.dataset.m;
+          if (m === 'close') { kbhost.innerHTML = ''; return; }
+          renderKb(m);
+        };
+      });
+      kbhost.querySelectorAll('[data-k]').forEach(btn => {
+        btn.onclick = () => {
+          const k = btn.dataset.k;
+          let v = kbin.value;
+          if (k === '⌫') v = v.slice(0, -1);
+          else if (k === '清空') v = '';
+          else if (k === '空格') v += ' ';
+          else if (k === '确定') { kbhost.innerHTML = ''; return; }
+          else if (k === 'ABC') { renderKb('abc'); return; }
+          else if (k === '123' || k === 'Aa' || k === '⌨') { renderKb(mode === 'num' ? 'abc' : 'num'); return; }
+          else v += (mode === 'abc' && k.length === 1 && k === 'Aa' ? '' : k);
+          setVal(v);
+        };
+      });
+    };
+    renderKb('num');
   }
 
   /* ---------------- 设置 ---------------- */

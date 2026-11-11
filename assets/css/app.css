@@ -3430,3 +3430,12 @@ body.chart-fs.draw-open .sh-chartbar{right:auto}
  * 这里显式带上父级与标签，特异性 (0,2,1) 稳赢。 */
 .set-row span.fix-btns{display:inline-flex;gap:6px;flex-shrink:0;align-items:center}
 .fix-btns .mini-btn{white-space:nowrap}
+
+/* v275：股票键盘（123 / ABC / 中文 三键，照同花顺） */
+.pk-kb-tabs{display:flex;gap:6px;padding:7px 8px 4px;border-top:1px solid var(--line2);align-items:center}
+.pk-kb-tabs button{padding:5px 12px;border-radius:14px;border:1px solid var(--line2);background:transparent;color:var(--tx3);font-size:12px}
+.pk-kb-tabs button.on{color:var(--tx);border-color:var(--accent,currentColor);font-weight:600}
+.pk-kb-grid{padding:2px 8px 8px}
+.pk-kb-row{display:flex;gap:4px;margin-bottom:4px}
+.pk-kb-row button{flex:1;padding:10px 0;text-align:center;background:var(--card,rgba(127,127,127,.14));border:1px solid var(--line2);border-radius:6px;color:var(--tx);font-size:14px}
+.pk-kb-row button:active{background:var(--line2,rgba(127,127,127,.3))}
