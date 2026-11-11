@@ -6346,9 +6346,96 @@
       const tt = String(title || '').toLowerCase();
       return (e.newsKeys || []).some(k => tt.indexOf(String(k).toLowerCase()) >= 0);
     };
-    return S.news.filter(n => m(ev, n.title))
-      .sort((a, b) => b.ts - a.ts).slice(0, 6);
+    const live = S.news.filter(n => m(ev, n.title));
+    /* v271【相关资讯兜底】实时快讯源可能因 CORS / 代理限流一条都抓不到，
+     * 这时用卡片内置的「人工核实」条目顶上，保证卡片不空。
+     * ts 只用于排序（按当天 08:00 北京），对外只显示 dateLabel，
+     * 绝不编造具体分钟。实时优先，同标题去重。 */
+    const yr = new Date().getFullYear();
+    const seed = (ev.seedNews || []).filter(n => m(ev, n.title)).map(n => {
+      const dl = String(n.dateLabel || '').replace(/[^\d-]/g, '');
+      const ts = Date.parse(yr + '-' + dl + 'T08:00:00+08:00');
+      return {
+        id: n.id, title: n.title, level: n.level || 'A', cat: n.cat || '快讯',
+        src: n.src || '人工核实', dateLabel: n.dateLabel || '', seed: true,
+        ts: isFinite(ts) ? ts : 0
+      };
+    });
+    const seen = Object.create(null), out = [];
+    live.concat(seed).sort((a, b) => (b.ts || 0) - (a.ts || 0)).forEach(n => {
+      const key = String(n.title || '').replace(/\s+/g, '');
+      if (!key || seen[key]) return;
+      seen[key] = 1; out.push(n);
+    });
+    return out.slice(0, 8);
   }
+
+  /* v271【自动更新 · 状态/头条】按快讯标题推进事件阶段。
+   * 只作用在配了 autoProgress 的事件上，其它卡片完全不受影响。
+   * 规则按优先级从高到低匹配；neg 是防误判闸门（「不会同意停火」不算达成）。
+   * 返回浅拷贝，绝不污染 events.js 里的原始数据。 */
+  const EV_STAGE_KEY = 'mm_ev_stage_v1';
+  let _evStage = null;
+  function evStageMap() {
+    if (!_evStage) {
+      try { _evStage = store.get(EV_STAGE_KEY, {}) || {}; } catch (e) { _evStage = {}; }
+    }
+    return _evStage;
+  }
+  function eventAutoView(ev, news) {
+    const rules = ev.autoProgress || [];
+    if (!rules.length) return ev;
+    const win = (ev.autoWindowH || 72) * 3600 * 1000;
+    const titles = (news || []).filter(n => (n.ts || 0) >= Date.now() - win)
+      .map(n => String(n.title || ''));
+    let idx = -1;
+    for (let i = 0; i < rules.length; i++) {
+      const r = rules[i];
+      let re, neg = null;
+      try {
+        re = new RegExp(r.re);
+        if (r.neg) neg = new RegExp(r.neg);
+      } catch (e) { continue; }
+      if (titles.some(t => re.test(t) && !(neg && neg.test(t)))) { idx = i; break; }
+    }
+    /* v271【单调推进】快讯池每 25 秒刷新、前 8 条会变，若每次都按当下
+     * 的匹配结果取阶段，卡片页与详情页会显示两个不同状态（实测复现）。
+     * 阶段一旦推进到更高优先级就锁住不回退，并持久化到 localStorage，
+     * 刷新页面也保持同一阶段；只有出现更高阶段的新快讯才继续推进。 */
+    const memo = evStageMap();
+    if (memo[ev.id]) {
+      const saved = rules.findIndex(r => r.status === memo[ev.id]);
+      if (saved >= 0 && (idx < 0 || saved < idx)) idx = saved;
+    }
+    if (idx < 0) return ev;
+    const hit = rules[idx];
+    if (memo[ev.id] !== hit.status) {
+      memo[ev.id] = hit.status;
+      try { store.set(EV_STAGE_KEY, memo); } catch (e) { /* 隐私模式下只保内存 */ }
+    }
+    return Object.assign({}, ev, {
+      status: hit.status || ev.status,
+      statusCls: hit.statusCls || ev.statusCls,
+      headline: Object.assign({}, ev.headline || {}, { value: hit.value || (ev.headline || {}).value })
+    });
+  }
+
+  /* v271【自动更新 · 进度指标】auto.daysSince 按日期自动推算「已进行 N 天」，
+   * 每天自己 +1，不需要人工改 events.js。 */
+  function eventAutoMetric(m) {
+    if (!m || !m.auto || m.auto.type !== 'daysSince') return m;
+    const d = Date.parse(String(m.auto.date) + 'T00:00:00+08:00');
+    if (!isFinite(d)) return m;
+    const days = Math.max(1, Math.floor((Date.now() - d) / 86400000) + 1);
+    return Object.assign({}, m, { value: days, max: Math.max(m.max || 7, days + 2) });
+  }
+  /* 兜底资讯不标「示例」（那是编造数据的角标），改成在副行写明来源与口径 */
+  function evNewsWhen(n) {
+    return n.seed ? (esc(n.dateLabel || '') + ' · 人工核实') : hhmm(n.ts);
+  }
+  /* 自动化实测句柄：不参与业务渲染，只用来验证阶段推进与进度推算 */
+  w.evAutoView = eventAutoView;
+  w.evAutoMetric = eventAutoMetric;
 
   /* 事件里所有能绑定到实时行情的键：相关标的 + 带 asset 的指标 + headline */
   function eventQuoteKeys() {
@@ -6517,7 +6604,8 @@
 
   function eventDetailHTML(ev) {
     const news = eventNews(ev);
-    const metrics = (ev.metrics || []).map(eventMetricBar).join('');
+    const view = eventAutoView(ev, news);
+    const metrics = (view.metrics || []).map(eventAutoMetric).map(eventMetricBar).join('');
     const battleground = (ev.battleground || []).map(x => `<span class="ev-chip">${esc(x)}</span>`).join('');
     // 时间线节点区分「已报道的既成事实」与「预期/关键节点」，避免把预测读成已发生
     const timeline = (ev.timeline || []).map(x => {
@@ -6529,18 +6617,19 @@
     /* 自动进展：把该事件匹配到的 24 小时内快讯挂到人工时间线上方。
      * 用户要的是「俄乌和谈的进展能自己动」—— 人工时间线是叙事，不能天天手改，
      * 所以新进展直接由快讯池流入，标注「自动」，与人工节点分开。 */
-    const fresh = news.filter(n => Date.now() - (n.ts || 0) < 24 * 3600 * 1000).slice(0, 4);
+    const winMs = (ev.autoWindowH || 72) * 3600 * 1000;
+    const fresh = news.filter(n => Date.now() - (n.ts || 0) < winMs).slice(0, 6);
     const autoTl = fresh.map(n =>
-      `<div class="ev-tl-i is-auto"><em>${hhmm(n.ts)}</em>`
-      + `<i class="ev-tl-k auto">自动</i><p>${esc(n.title)}</p></div>`).join('');
+      `<div class="ev-tl-i is-auto"><em>${n.seed ? esc(n.dateLabel || '') : hhmm(n.ts)}</em>`
+      + `<i class="ev-tl-k auto">${n.seed ? '核实' : '自动'}</i><p>${esc(n.title)}</p></div>`).join('');
     const themes = (ev.themes || []).map(x => `<span class="ev-chip t">${esc(x)}</span>`).join('');
     const assets = (ev.assets || []).filter(k => U.get(k)).map(eventAssetBtn).join('');
     const newsHTML = news.length
-      ? news.map(n => `<div class="ev-news" data-evn="${esc(n.id)}"><span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>${liveBadge(n)}<div><b>${esc(n.title)}</b><em>${hhmm(n.ts)} · ${esc(n.cat)}</em></div></div>`).join('')
+      ? news.map(n => `<div class="ev-news" data-evn="${esc(n.id)}"><span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>${n.seed ? '' : liveBadge(n)}<div><b>${esc(n.title)}</b><em>${evNewsWhen(n)} · ${esc(n.cat)}${n.src ? ' · ' + esc(n.src) : ''}</em></div></div>`).join('')
       : '<div class="empty sm">暂无匹配快讯（快讯源连通后自动归集）</div>';
 
     /* headline —— 与卡片页共用同一个渲染函数，两处绝不会显示成两个值 */
-    const headline = eventHeadlineHTML(ev, 'ev-hl');
+    const headline = eventHeadlineHTML(view, 'ev-hl');
 
     const liveAt = evLastQuoteAt();
 
@@ -6548,27 +6637,28 @@
       <div class="ev-hd">
         <div class="ev-icon">${esc(ev.icon || '◉')}</div>
         <div class="ev-hdt">
-          <div class="ev-tit">${esc(ev.title)}<span class="ev-st ${esc(ev.statusCls || 'watch')}">${esc(ev.status || '')}</span></div>
-          <div class="ev-cat">${esc(ev.cat || '')} · 叙事维护于 ${esc(ev.updated || '--')}${ev.hot ? ' · 热度 ' + '★'.repeat(ev.hot) : ''}</div>
+          <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
+          <div class="ev-cat">${esc(view.cat || '')} · 叙事维护于 ${esc(view.updated || '--')}${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}${view.autoProgress ? ' · 进度自动跟随快讯' : ''}</div>
         </div>
       </div>
       <div class="ev-sum">${esc(ev.summary || '')}</div>
       ${headline}
       ${metrics ? `<div class="ev-sec"><div class="ev-sec-h">关键指标<span class="ev-hint-inline">标「实时」= 当前报价；其余为人工快照</span></div>${metrics}</div>` : ''}
       ${eventSeats(ev)}
-      ${autoTl ? `<div class="ev-sec"><div class="ev-sec-h">最新进展（自动抓取 · 每 25 秒更新）</div><div class="ev-tlx">${autoTl}</div></div>` : ''}
+      ${autoTl ? `<div class="ev-sec"><div class="ev-sec-h">${(view.seedNews || []).length ? '最新进展（快讯自动归集 · 人工核实兜底）' : '最新进展（自动抓取 · 每 25 秒更新）'}</div><div class="ev-tlx">${autoTl}</div></div>` : ''}
       ${timeline ? `<div class="ev-sec"><div class="ev-sec-h">时间线（已报道 = 事实转述 · 预期 = 预测/关键节点）</div><div class="ev-tlx">${timeline}</div></div>` : ''}
       ${battleground ? `<div class="ev-sec"><div class="ev-sec-h">关键变量 / 战场</div><div class="ev-chips">${battleground}</div></div>` : ''}
       ${themes ? `<div class="ev-sec"><div class="ev-sec-h">主题</div><div class="ev-chips">${themes}</div></div>` : ''}
       ${assets ? `<div class="ev-sec"><div class="ev-sec-h">相关标的（点击看行情）</div><div class="ev-assets">${assets}</div></div>` : ''}
-      <div class="ev-sec"><div class="ev-sec-h">相关报道（实时抓取，每 25 秒更新）</div>${newsHTML}</div>
-      <div class="ev-src"><b>行情与报道实时更新</b>（每 30 秒刷新报价 · 每 25 秒刷新快讯${liveAt ? ' · 最近报价 ' + liveAt : ''}）；<b>叙事部分为人工维护快照</b>，非本终端核验。<b>预测概率已接 Polymarket 合约价</b>（标「预测市场」，每 5 分钟刷新，并显示较昨日变化）；人工估算类指标仍为维护时点值。参考来源：${esc(ev.src || '--')}</div>
+      <div class="ev-sec"><div class="ev-sec-h">${(view.seedNews || []).length ? '相关报道（实时抓取 · 人工核实兜底）' : '相关报道（实时抓取，每 25 秒更新）'}</div>${newsHTML}</div>
+      <div class="ev-src"><b>行情与报道实时更新</b>（每 30 秒刷新报价 · 每 25 秒刷新快讯${liveAt ? ' · 最近报价 ' + liveAt : ''}）；<b>叙事部分为人工维护快照</b>，非本终端核验。${(view.metrics || []).some(mm => mm.pred) ? '<b>预测概率已接 Polymarket 合约价</b>（标「预测市场」，每 5 分钟刷新，并显示较昨日变化）' : '<b>本卡片不接预测市场概率</b>；状态与进度由归集快讯自动推进，标「核实」的条目为人工核实后内置、只标日期'}；人工估算类指标仍为维护时点值。参考来源：${esc(view.src || '--')}</div>
       <div class="ev-tapback">轻点页面任意处返回事件列表</div>
     </div>`;
   }
 
   function eventCardHTML(ev) {
     const news = eventNews(ev);
+    const view = eventAutoView(ev, news);
     /* 卡片上挑 2 个可实时报价的标的，直接显示当前价格 */
     const picks = (ev.assets || []).filter(k => U.get(k) && evLive(k)).slice(0, 3);
     const strip = picks.length
@@ -6583,9 +6673,9 @@
     return `<button class="ev-card" data-evid="${esc(ev.id)}">
       <div class="ev-icon">${esc(ev.icon || '◉')}</div>
       <div class="ev-card-bd">
-        <div class="ev-tit">${esc(ev.title)}<span class="ev-st ${esc(ev.statusCls || 'watch')}">${esc(ev.status || '')}</span></div>
+        <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
         <div class="ev-card-sum">${esc(ev.summary || '')}</div>
-        ${eventHeadlineHTML(ev, 'ev-card-hl')}
+        ${eventHeadlineHTML(view, 'ev-card-hl')}
         ${strip}
         <div class="ev-card-ft">${esc(ev.cat || '')} · 叙事维护于 ${esc(ev.updated || '--')}${news.length ? ` · 相关快讯 ${news.length}` : ''}</div>
       </div>
