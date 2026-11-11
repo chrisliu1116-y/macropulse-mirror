@@ -5775,10 +5775,17 @@
    * 父页面 document.exitFullscreen() 管不到），否则竖屏回来了但页面还是全屏态。 */
   w.__exitFs = () => {
     if (d.body.classList.contains('chart-fs')) exitChartFS();
+    /* v266：赚钱效应 iframe 的全屏由顶层文档发起，返回键要同时退全屏 + 回竖屏 */
+    try {
+      if (d.fullscreenElement || d.webkitFullscreenElement)
+        (d.exitFullscreen || d.webkitExitFullscreen || function () {}).call(d);
+    } catch (e) {}
+    try { if (w.NativePulse && w.NativePulse.setLandscape) w.NativePulse.setLandscape(false); } catch (e) {}
     try {
       const f = $('#effectFrame');
-      if (f && f.contentWindow) f.contentWindow.postMessage({ mm_exit_fs: 1 }, location.origin);
+      if (f && f.contentWindow) f.contentWindow.postMessage({ mm_exit_fs: 1 }, '*');
     } catch (e) {}
+    const fb = $('#effFull'); if (fb) fb.textContent = '全屏';
   };
   w.__bkSync = bkSync;
 
@@ -7812,6 +7819,70 @@
     }
   }
 
-  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  /* ============ v266：赚钱效应工具条（主站原生控制，iframe 只出内容） ============ */
+  function effectPost(msg) {
+    try {
+      const f = $('#effectFrame');
+      if (f && f.contentWindow) f.contentWindow.postMessage(msg, '*');
+    } catch (e) {}
+  }
+  let _effCompareOn = false;
+  function toggleEffectFS() {
+    const f = $('#effectFrame');
+    if (!f) return;
+    if (d.fullscreenElement || d.webkitFullscreenElement) {
+      try { (d.exitFullscreen || d.webkitExitFullscreen || function () {}).call(d); } catch (e) {}
+      return;
+    }
+    /* 顶层文档对 iframe 元素发起全屏 → WebView 走 onShowCustomView，
+     * 比 iframe 内部自己 requestFullscreen 可靠；同时锁横屏。 */
+    try {
+      const req = f.requestFullscreen || f.webkitRequestFullscreen;
+      if (req) req.call(f);
+    } catch (e) {}
+    try { if (w.NativePulse && w.NativePulse.setLandscape) w.NativePulse.setLandscape(true); } catch (e) {}
+    _tryLockLandscape(2);
+    const fb = $('#effFull'); if (fb) fb.textContent = '退出';
+  }
+  /* 底栏高度写死 64 会多留 20px 空白：直接量 tabbar 顶边，
+   * 把「视口高 - 顶边」写进 --tabHReal，含安全区，一次算准。 */
+  function syncEffectH() {
+    try {
+      const t = $('#tabs');
+      if (!t) return;
+      const h = Math.max(44, Math.round(w.innerHeight - t.getBoundingClientRect().top));
+      d.documentElement.style.setProperty('--tabHReal', h + 'px');
+    } catch (e) {}
+  }
+  function initEffectBar() {
+    syncEffectH();
+    setTimeout(syncEffectH, 300);
+    w.addEventListener('resize', syncEffectH);
+    try { if (w.visualViewport) w.visualViewport.addEventListener('resize', syncEffectH); } catch (e) {}
+    const cmp = $('#effCompare'), full = $('#effFull');
+    if (cmp) cmp.onclick = () => {
+      _effCompareOn = !_effCompareOn;
+      effectPost({ mm_compare: _effCompareOn });
+      cmp.classList.toggle('on', _effCompareOn);
+    };
+    if (full) full.onclick = toggleEffectFS;
+    w.addEventListener('message', (e) => {
+      const m = e.data || {};
+      if (typeof m.mm_compare_state === 'boolean') {
+        _effCompareOn = m.mm_compare_state;
+        if (cmp) cmp.classList.toggle('on', _effCompareOn);
+      }
+      if (m.mm_theme_req) effectPost({ mm_theme: S.theme });
+    });
+    d.addEventListener('fullscreenchange', () => {
+      const on = !!(d.fullscreenElement || d.webkitFullscreenElement);
+      if (full) full.textContent = on ? '退出' : '全屏';
+      if (!on) {
+        try { if (w.NativePulse && w.NativePulse.setLandscape) w.NativePulse.setLandscape(false); } catch (e) {}
+      }
+    });
+  }
+
+  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', () => { boot(); initEffectBar(); });
+  else { boot(); initEffectBar(); }
 })(window, document);

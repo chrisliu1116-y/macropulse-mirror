@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=265">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=265">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=265">
-<link rel="stylesheet" href="assets/css/app.css?v=265">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=266">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=266">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=266">
+<link rel="stylesheet" href="assets/css/app.css?v=266">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -40,7 +40,7 @@
     <div class="brand">
       <span class="bdot"></span>
       <span class="bname">异动<em>看板</em></span>
-      <span class="ver-pill" id="verPill" title="版本号自动取自 sw.js 的缓存版本，不再手写">v265</span>
+      <span class="ver-pill" id="verPill" title="版本号自动取自 sw.js 的缓存版本，不再手写">v266</span>
       <span class="shell-pill" id="shellPill" title="原生 App 壳版本（网页加载自线上，和壳版本独立）">壳?</span>
     </div>
     <div class="hdr-right">
@@ -146,6 +146,12 @@
 
   <!-- ==================== 赚钱效应指标（insum 市场宽度，iframe 嵌入） ==================== -->
   <section id="view-effect" class="view">
+    <!-- v266：控制条由主站提供（与行情页同款 mini-btn），iframe 内不再自带 header -->
+    <div class="eff-bar" id="effBar">
+      <button class="mini-btn" id="effCompare" type="button">对比模式</button>
+      <button class="mini-btn" id="effFull" type="button">全屏</button>
+      <span class="eff-hint">上证同期对比</span>
+    </div>
     <iframe id="effectFrame" src="about:blank" data-src="./sse/index.html?embed=1"
             allow="fullscreen" allowfullscreen scrolling="no"
             title="上证 · insum 同期对比"></iframe>
@@ -185,7 +191,7 @@
   <button data-tab="feed" class="on"><i>◎</i><span>快讯</span><em class="tab-dot" hidden>0</em></button>
   <button data-tab="event"><i>◉</i><span>事件</span></button>
   <button data-tab="radar"><i>◈</i><span>矩阵</span></button>
-  <button data-tab="effect"><i>▤</i><span>上证对比</span></button>
+  <button data-tab="effect"><i>▤</i><span>赚钱效应</span></button>
   <button data-tab="market"><i>≡</i><span>行情</span></button>
   <button data-tab="set"><i>⚙</i><span>设置</span></button>
 </nav>
@@ -200,32 +206,32 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=265">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=265">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=265">
-  <link rel="preload" as="script" href="assets/js/app.js?v=265">
-  <link rel="preload" as="script" href="assets/js/api.js?v=265">
-<script src="vendor/lightweight-charts.standalone.production.js?v=265"></script>
-<script src="assets/js/cn-stocks.js?v=265"></script>
-<script src="assets/js/universe.js?v=265"></script>
-<script src="assets/js/session.js?v=265"></script>
-<script src="assets/js/topics.js?v=265"></script>
-<script src="assets/js/news-crypto.js?v=265"></script>
-<script src="assets/js/news-zh.js?v=265"></script>
-<script src="assets/js/pool.js?v=265"></script>
-<script src="assets/js/news-live-client.js?v=265"></script>
-<script src="assets/js/api.js?v=265"></script>
-<script src="assets/js/alert.js?v=265"></script>
-<script src="assets/js/indicator.js?v=265"></script>
-<script src="assets/js/drawing.js?v=265"></script>
-<script src="assets/js/charts.js?v=265"></script>
-<script src="assets/js/news-spike.js?v=265"></script>
-<script src="assets/js/anomaly.js?v=265"></script>
-<script src="assets/js/volprofile.js?v=265"></script>
-<script src="assets/js/verify.js?v=265"></script>
-<script src="assets/js/predict.js?v=265"></script>
-<script src="assets/js/hot-events.js?v=265"></script>
-<script src="assets/js/events.js?v=265"></script>
-<script src="assets/js/app.js?v=265"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=266">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=266">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=266">
+  <link rel="preload" as="script" href="assets/js/app.js?v=266">
+  <link rel="preload" as="script" href="assets/js/api.js?v=266">
+<script src="vendor/lightweight-charts.standalone.production.js?v=266"></script>
+<script src="assets/js/cn-stocks.js?v=266"></script>
+<script src="assets/js/universe.js?v=266"></script>
+<script src="assets/js/session.js?v=266"></script>
+<script src="assets/js/topics.js?v=266"></script>
+<script src="assets/js/news-crypto.js?v=266"></script>
+<script src="assets/js/news-zh.js?v=266"></script>
+<script src="assets/js/pool.js?v=266"></script>
+<script src="assets/js/news-live-client.js?v=266"></script>
+<script src="assets/js/api.js?v=266"></script>
+<script src="assets/js/alert.js?v=266"></script>
+<script src="assets/js/indicator.js?v=266"></script>
+<script src="assets/js/drawing.js?v=266"></script>
+<script src="assets/js/charts.js?v=266"></script>
+<script src="assets/js/news-spike.js?v=266"></script>
+<script src="assets/js/anomaly.js?v=266"></script>
+<script src="assets/js/volprofile.js?v=266"></script>
+<script src="assets/js/verify.js?v=266"></script>
+<script src="assets/js/predict.js?v=266"></script>
+<script src="assets/js/hot-events.js?v=266"></script>
+<script src="assets/js/events.js?v=266"></script>
+<script src="assets/js/app.js?v=266"></script>
 </body>
 </html>

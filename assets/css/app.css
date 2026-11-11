@@ -396,15 +396,20 @@ b,strong{font-weight:600}
 /* ---------------- 赚钱效应指标（iframe） ---------------- */
 /* 该视图不吃主站的文档滚动：iframe 撑满「顶栏→底栏」之间的可视高度，
  * 内部由 breadth 页自己滚。height 用 100dvh 扣掉顶栏/底栏，避免双滚动条。 */
-#view-effect{padding:0}
-#view-effect iframe{
-  display:block;width:100%;border:0;
-  height:calc(100dvh - var(--topH,86px) - var(--tabH,64px) - env(safe-area-inset-bottom));
-  background:var(--bg);
-}
-/* 高度兜底：老 WebView 不认识 dvh 时退回 vh（差别只在地址栏那几像素） */
+/* v266：整块 view 用 flex 精确铺满「顶栏→底栏」，工具条 + iframe 两层，
+ * iframe flex:1 撑到最后一像素，消除底部露出的空白主站背景。 */
+#view-effect{display:none;padding:0}
+#view-effect.on{display:flex;flex-direction:column;
+  height:calc(100dvh - var(--topH,86px) - var(--tabHReal,64px))}
+.eff-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:7px 12px;border-bottom:1px solid var(--hair);background:var(--bar2)}
+.eff-bar .eff-hint{margin-left:auto;font-size:10.5px;color:var(--dim);letter-spacing:.2px}
+.eff-bar .mini-btn.on{border-color:var(--blue,#4c8dff);color:var(--blue,#4c8dff);
+  background:rgba(76,141,255,.10)}
+#view-effect iframe{flex:1 1 auto;display:block;width:100%;min-height:0;height:auto;
+  border:0;background:var(--bg)}
 @supports not (height: 1dvh) {
-  #view-effect iframe{height:calc(100vh - var(--topH,86px) - var(--tabH,64px) - env(safe-area-inset-bottom))}
+  #view-effect.on{height:calc(100vh - var(--topH,86px) - var(--tabHReal,64px))}
 }
 
 /* 筛选（级别 / 类别 两行） */

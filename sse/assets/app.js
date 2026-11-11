@@ -965,10 +965,21 @@
     Array.prototype.forEach.call($('ranges').children, function (x) { x.classList.remove('on'); });
     updateCards(S.cursor >= 0 ? S.cursor : S.axis.length - 1);
     renderAll();
+    try { parent.postMessage({ mm_compare_state: !!S.compare }, '*'); } catch (e) {}
   }
 
   /* ============ 主题 ============ */
+  function isEmbed() { return document.body.classList.contains('embed'); }
+  /* 同源 iframe 直接读父页面 body.light，不依赖 postMessage 时序；
+   * 主站点 ◐ 时 MutationObserver 立刻同步，杜绝「主站浅色 / 内页深色」。 */
+  function parentTheme() {
+    try {
+      if (parent === window || !parent.document || !parent.document.body) return null;
+      return parent.document.body.classList.contains('light') ? 'light' : 'dark';
+    } catch (e) { return null; }
+  }
   function readTheme() {
+    if (isEmbed()) { var pt = parentTheme(); if (pt) return pt; }
     /* v266：URL 参数优先，方便直接分享「浅色版」链接与截图验收 */
     try {
       var q = new URLSearchParams(location.search).get('theme');
@@ -1036,7 +1047,8 @@
     if (/embed=1/.test(location.search)) document.body.classList.add('embed');
     applyTheme(readTheme());
     window.addEventListener('message', function (e) {
-      if (e.data && typeof e.data.mm_theme === 'string') applyTheme(e.data.mm_theme);
+      if (e.data && typeof e.data.mm_theme === 'string' && !isEmbed()) applyTheme(e.data.mm_theme);
+      if (e.data && typeof e.data.mm_compare === 'boolean') setCompare(e.data.mm_compare);
       if (e.data && e.data.mm_exit_fs) {
         var cur = document.fullscreenElement || document.webkitFullscreenElement;
         if (cur) { try { (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document); } catch (err) {} }
@@ -1049,6 +1061,17 @@
 
     var cmp = $('btnCompare');
     cmp.addEventListener('click', function () { setCompare(!S.compare); });
+
+    if (isEmbed()) {
+      try {
+        new MutationObserver(function () {
+          var t = parentTheme(); if (t) applyTheme(t);
+        }).observe(parent.document.body, { attributes: true, attributeFilter: ['class'] });
+      } catch (e) {}
+      try { parent.postMessage({ mm_theme_req: 1 }, '*'); } catch (e) {}
+      document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+      document.addEventListener('selectstart', function (e) { e.preventDefault(); });
+    }
 
     var theme = $('btnTheme');
     if (theme) theme.addEventListener('click', function () {
@@ -1077,6 +1100,7 @@
         $('ft').textContent = footText();
         renderAll();
         if (S.K && /compare=1/.test(location.search)) setCompare(true);
+        try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
         startRemoteRefresh();
       })
       .catch(function () {
