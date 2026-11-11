@@ -206,6 +206,7 @@
     if (isFresh(b)) $('dot').classList.remove('old');
     updateCards(S.cursor >= 0 ? S.cursor : S.axis.length - 1);
     renderAll();
+    postStatus();
     return true;
   }
   function startRemoteRefresh() {
@@ -243,17 +244,36 @@
     return txt;
   }
 
+  /* v267【底部只一行】老版「数据日期 + 更新时间」折成两行浪费一行，
+   * 数据日期已放在主站工具条状态里，这里只写更新时间 + 精简统计。 */
   function footText() {
-    var s = '';
-    if (S.B) s = '全部A股 ' + S.B.meta.universe + ' 只 · 有效 ' + S.B.meta.valid + ' 只 · ' +
-      S.B.meta.days + ' 个交易日';
+    var m = (S.B && S.B.meta) || {};
+    var g = String(m.generated || '');
+    var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
+    var parts = [short ? '更新 ' + short + (m.generated_tz ? ' 北京' : '') : '更新时间未知'];
+    if (S.B) parts.push('有效 ' + m.valid + '/' + m.universe + ' · ' + m.days + ' 日');
     if (S.K) {
-      s += ' · 上证 ' + S.K.dates.length + ' 日';
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
-      if (bLast && kLast < bLast) s += ' · 上证截至 ' + kLast + '（待补）';
+      if (bLast && kLast < bLast) parts.push('上证截至 ' + kLast + '（待补）');
     }
-    return s;
+    if (S.B && !isFresh(S.B)) parts.push('待更新');
+    return parts.join(' · ');
+  }
+  /* 把「日期 周X 收盘 + 新鲜度」推给主站工具条（老版 header 里那颗绿点） */
+  function postStatus() {
+    if (!isEmbed()) return;
+    try {
+      var i = S.cursor >= 0 ? S.cursor : (S.axis ? S.axis.length - 1 : -1);
+      var date = (S.axis && i >= 0) ? S.axis[i]
+        : ((S.B && S.B.dates[S.B.dates.length - 1]) || '');
+      var last = !S.axis || i >= S.axis.length - 1;
+      var wk = wkOf(date);
+      parent.postMessage({ mm_status: {
+        text: date + (wk ? ' 周' + wk : '') + (last ? ' 收盘' : ''),
+        fresh: S.B ? isFresh(S.B) : true
+      } }, '*');
+    } catch (e) {}
   }
 
   /* ============ 主轴对齐（按日期 Map，不按下标硬对齐） ============ */
@@ -330,6 +350,7 @@
     var isLast = i === S.axis.length - 1;
     $('gen').textContent = S.axis[i] + ' 周' + wkOf(S.axis[i]) + (isLast ? ' 收盘' : '');
     $('gen').style.color = isLast ? '' : T.num[2];
+    postStatus();
   }
 
   /* ============ X 轴刻度（对齐 breadth v257 自适应三档） ============ */
@@ -1101,6 +1122,7 @@
         renderAll();
         if (S.K && /compare=1/.test(location.search)) setCompare(true);
         try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
+        postStatus();
         startRemoteRefresh();
       })
       .catch(function () {

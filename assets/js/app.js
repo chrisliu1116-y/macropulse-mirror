@@ -7873,6 +7873,11 @@
         if (cmp) cmp.classList.toggle('on', _effCompareOn);
       }
       if (m.mm_theme_req) effectPost({ mm_theme: S.theme });
+      if (m.mm_status) {
+        const st = $('#effStatusText'), dot = $('#effDot');
+        if (st) st.textContent = m.mm_status.text || '';
+        if (dot) dot.classList.toggle('old', !m.mm_status.fresh);
+      }
     });
     d.addEventListener('fullscreenchange', () => {
       const on = !!(d.fullscreenElement || d.webkitFullscreenElement);

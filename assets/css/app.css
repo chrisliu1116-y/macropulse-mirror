@@ -403,7 +403,14 @@ b,strong{font-weight:600}
   height:calc(100dvh - var(--topH,86px) - var(--tabHReal,64px))}
 .eff-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;
   padding:7px 12px;border-bottom:1px solid var(--hair);background:var(--bar2)}
-.eff-bar .eff-hint{margin-left:auto;font-size:10.5px;color:var(--dim);letter-spacing:.2px}
+/* v267：状态信息在左、两个按钮靠右，去掉无意义的「上证同期对比」文字 */
+.eff-bar .eff-status{display:inline-flex;align-items:center;gap:5px;min-width:0;
+  font-size:10.5px;color:var(--dim);white-space:nowrap}
+.eff-bar .eff-status #effStatusText{overflow:hidden;text-overflow:ellipsis}
+.eff-dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;background:#22c55e;
+  box-shadow:0 0 0 3px rgba(34,197,94,.14)}
+.eff-dot.old{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.14)}
+#effCompare{margin-left:auto}
 .eff-bar .mini-btn.on{border-color:var(--blue,#4c8dff);color:var(--blue,#4c8dff);
   background:rgba(76,141,255,.10)}
 #view-effect iframe{flex:1 1 auto;display:block;width:100%;min-height:0;height:auto;
