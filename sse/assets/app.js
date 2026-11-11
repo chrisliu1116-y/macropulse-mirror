@@ -415,8 +415,10 @@
      * 橙段单独叠加绘制，不受 stride 降采样影响，全量档也看得到。 */
     g.strokeStyle = T.lineHot;
     var hs = hotSegs(d, from, cnt);
-    for (var hi = 0; hi < hs.length; hi++) {
-      var k2 = hs[hi];
+    /* 注意：循环变量绝不能叫 hi —— drawInsum 里 hi 是 Y 轴上界，
+     * var 是函数作用域，覆盖后 yOf() 会把点全算到画布外（v265 事故）。 */
+    for (var si = 0; si < hs.length; si++) {
+      var k2 = hs[si];
       g.beginPath();
       g.moveTo(xOf(k2), yOf(d.total[from + k2]));
       g.lineTo(xOf(k2 + 1), yOf(d.total[from + k2 + 1]));
