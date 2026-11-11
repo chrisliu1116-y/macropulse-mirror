@@ -112,6 +112,18 @@
     return out;
   }
 
+  /* v270【上下两窗格子数统一】给定上证窗的刻度数 need，
+   * 生成 need 条等距、全整百的 insum 刻度，并把上界抬到能覆盖 mx。
+   * 例：mx=1100 / need=4 → [0,400,800,1200]；mx=160 / need=3 → [0,100,200] */
+  function alignedInsumTicks(mx, need) {
+    if (!(need > 1)) return null;
+    var st = 100;
+    while ((need - 1) * st < mx) st += 100;
+    var out = [];
+    for (var q = 0; q < need; q++) out.push(q * st);
+    return out;
+  }
+
   function dotColorIdx(d, gi) {
     var dv = d.daycnt[gi];
     var pg = gi > 0 ? d.daycnt[gi - 1] : null;
@@ -444,7 +456,15 @@
     g.font = '9px -apple-system,BlinkMacSystemFont,sans-serif';
     g.textAlign = 'right';
     g.textBaseline = 'middle';
-    var yticks = insumAxisTicks(lo, hi);
+    var aligned = (S.gridN > 1) ? alignedInsumTicks(mx, S.gridN) : null;
+    var yticks;
+    if (aligned) {
+      /* 对比态：上界抬到整百关卡顶，网格线数量与上证窗严格一致 */
+      lo = 0; hi = aligned[aligned.length - 1];
+      yticks = aligned;
+    } else {
+      yticks = insumAxisTicks(lo, hi);
+    }
     for (var t = 0; t < yticks.length; t++) {
       var val = yticks[t];
       var y = yOf(val);
@@ -693,10 +713,12 @@
     g.textAlign = 'right';
     g.textBaseline = 'middle';
     var ticks = sseAxisTicks(lo, hi);
+    var drawn = 0;
     for (var t = 0; t < ticks.length; t++) {
       var val = ticks[t];
       var y = yOf(val);
       if (y < P.t - 1 || y > P.t + ih + 1) continue;
+      drawn++;
       g.strokeStyle = T.grid;
       g.lineWidth = 1;
       g.beginPath();
@@ -706,6 +728,7 @@
       g.fillStyle = T.axis;
       g.fillText(sseAxisLabel(val), P.l - 5, y);
     }
+    S.gridN = drawn;   /* 供 insum 窗对齐格子数 */
 
     var mode = sseMode(cnt, iw);
     if (mode === 'candle') {
@@ -798,8 +821,10 @@
   }
 
   function renderAll() {
-    drawInsum();
+    /* v270：上证窗先画并登记实际网格条数，insum 窗再按同一数量画格子 */
+    S.gridN = 0;
     if (S.compare && S.K) drawSse();
+    drawInsum();
   }
   /* v265：拖动/缩放用 rAF 合帧，一次连续事件只重绘一帧；
    * renderAll() 仍保持同步，启动/档位/切换/自测不受异步影响。 */
@@ -1192,7 +1217,8 @@
       xAt: xAt, sseMode: sseMode, axisTier: axisTier,
       spanDays: spanDays, buildAxisLabels: buildAxisLabels,
       dotColorIdx: dotColorIdx, hotSegs: hotSegs, nearestIdx: nearestIdx,
-      sseAxisLabel: sseAxisLabel, sseAxisTicks: sseAxisTicks, insumAxisTicks: insumAxisTicks
+      sseAxisLabel: sseAxisLabel, sseAxisTicks: sseAxisTicks,
+      insumAxisTicks: insumAxisTicks, alignedInsumTicks: alignedInsumTicks
     };
   }
 })();
