@@ -3829,10 +3829,15 @@
     emSearchSug(q, rows => { em = rows; done(); });
     yahooSug(q, rows => { yh = rows; done(); });
     if (isOptQ) {
-      try {
-        w.API.optionChain(q).then(rows => { opt = rows || []; done(); })
-          .catch(() => { opt = []; done(); });
-      } catch (e) { opt = []; done(); }
+      /* v304：国内期权（东财 clist）+ 美股期权（Yahoo v7 options）并行。
+       * 「SPY期权」→ 提取 ticker=SPY 走 Yahoo；「50ETF期权」→ 国内 clist。 */
+      const tk = String(q).replace(/期权|option/gi, '').trim().toUpperCase();
+      const usTask = /^[A-Z.\-]{1,6}$/.test(tk)
+        ? w.API.usOptionChain(tk).catch(() => [])
+        : Promise.resolve([]);
+      Promise.all([w.API.optionChain(q).catch(() => []), usTask])
+        .then(([cn, us]) => { opt = (cn || []).concat(us || []); done(); })
+        .catch(() => { opt = []; done(); });
     }
     if (q2) {
       smartboxSug(q2, h => { box2 = parseBox(h); done(); });
@@ -3923,7 +3928,10 @@
         const sug = (S._pkSug || []).filter(x =>
           x && x.secid && S.watch.indexOf(String(x.code)) < 0);
         const sugHTML = sug.map(x => {
-          try { U.synthSecid(x.secid, x.code, x.name); } catch (e) { }
+          try {
+            if (x.secid) U.synthSecid(x.secid, x.code, x.name);
+            else if (x.yh && U.regYahooSym) U.regYahooSym(x.code, x.name, x.yh, x.grp || 'option', 'option');
+          } catch (e) { }
           return `<button class="pk-i" data-k="${esc(x.code)}">
             <span>${esc(x.name)}<em>${esc(x.code)} · ${esc(x.type || 'ETF')}</em></span><i>＋</i>
           </button>`;

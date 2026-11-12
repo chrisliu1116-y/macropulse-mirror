@@ -403,6 +403,45 @@
     }));
   }
 
+  /* ---------------- 美股期权链（v304 · Yahoo v7） ----------------
+   * 搜「SPY期权 / NVDA期权」→ 最近到期日的 Call/Put 主力合约 →
+   * 点任一合约看报价 + 分时 + K线。Yahoo 返回 contractSymbol（SPY260116C00500000），
+   * 用 regYahooSym 注册（src='yahoo'），三条链路自动可用；Yahoo 限流时如实返回空。 */
+  const YAHOO_OPT = 'https://query2.finance.yahoo.com/v7/finance/options/';
+  async function usOptionChain(ticker) {
+    const t = String(ticker || '').toUpperCase().replace(/[^A-Z.\-]/g, '');
+    if (!/^[A-Z.\-]{1,6}$/.test(t)) return [];
+    let txt = '';
+    try {
+      txt = await proxyText(YAHOO_OPT + encodeURIComponent(t),
+        'https://finance.yahoo.com/quote/' + t + '/options');
+    } catch (e) { return []; }
+    const cut = String(txt || '').indexOf('{');
+    if (cut < 0) return [];
+    let d;
+    try { d = JSON.parse(String(txt).slice(cut)); } catch (e) { return []; }
+    const res = (((d.optionChain || {}).result || [])[0]) || {};
+    const opt = ((res.options || [])[0]) || {};
+    const exp = (res.expirationDates && res.expirationDates[0])
+      ? new Date(res.expirationDates[0] * 1000).toISOString().slice(0, 10) : '';
+    const rows = [];
+    const pushRows = (list, side) => {
+      (list || []).slice(0, 10).forEach(o => {
+        const cs = String(o.contractSymbol || '');
+        if (!cs) return;
+        rows.push({
+          code: cs,
+          name: t + ' ' + exp + ' ' + side + ' ' + (o.strike != null ? o.strike : ''),
+          secid: '', yh: cs, grp: 'option', type: '美股期权',
+          px: o.lastPrice, pct: o.percentChange
+        });
+      });
+    };
+    pushRows(opt.calls, 'C');
+    pushRows(opt.puts, 'P');
+    return rows;
+  }
+
   /* ---------------- 新浪国内期货（v302） ----------------
    * 用户点名：IF/IH/IC/IM、TL/T/TF/TS 此前只挂了东财 8. 段，东财一断全瞎。
    * 新浪这三条接口免费、无需 key、字段稳定：
@@ -3243,7 +3282,7 @@
 
   w.API = {
     candles, intraday, minutes, quote, batchQuote, dexQuote, extQuote, extQuotes, hlQuote, hlMids, jpPtsQuote, krNaverMinutes,
-    status, tradingViewURL, tMin, tDay, flash, news, newsSoft, optionChain,
+    status, tradingViewURL, tMin, tDay, flash, news, newsSoft, optionChain, usOptionChain,
     probeSources, altTickers, bnJSON, cboeQuote, cboeMinutes, cboeDaily,
     cachedQuote,
     /* v286：行情可信白名单与校验器（供回归测试 / 外部校验复用） */

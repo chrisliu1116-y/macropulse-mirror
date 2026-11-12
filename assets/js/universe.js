@@ -513,6 +513,20 @@
     ASSETS[code] = a;
     return a;
   }
+  /* v304【动态注册 Yahoo 源品种】美股期权合约没有东财 secid，只有 Yahoo 合约符
+   * （如 SPY260116C00500000）。注册后 candles/intraday 的 yahoo 分支可直接用。 */
+  function regYahooSym(code, name, sym, grp, kind) {
+    const c = String(code || sym);
+    if (ASSETS[c]) return ASSETS[c];
+    const nm = String(name || c);
+    const a = {
+      name: nm, short: nm, src: 'yahoo', sym: String(sym || c),
+      dec: 2, grp: grp || 'option', kind: kind || 'option', unit: 'USD',
+      _synth: true
+    };
+    ASSETS[c] = a;
+    return a;
+  }
   function name(key) { const a = get(key); return a ? (a.short || a.name) : key; }
   function fullName(key) { const a = get(key); return a ? a.name : key; }
   function grp(key) { const a = get(key); return a ? (GROUPS[a.grp] || { label: '', color: '#8b95a6', order: 99 }) : { label: '', color: '#8b95a6', order: 99 }; }
@@ -573,7 +587,7 @@
     get, name, fullName, grp, decimals, fmt, pct, changeLabel, keys, orderOf,
     cnName, shortNames: GLOBAL_SHORT,
     /* v149：全市场名录搜索命中后现场合成品种用（synthCN 写 ASSETS，后续照常取报价） */
-    synthCN, synthGlobal, synthSecid,
+    synthCN, synthGlobal, synthSecid, regYahooSym,
     adrOf
   };
 })(window);

@@ -24,7 +24,7 @@
     ['商品期货', [['WTI', '原油'], ['GOLD', '黄金'], ['NG', '天然气'], ['COPPER', null]]],
     ['股指期货', [['IF', null], ['NQ', null], ['A50', null]]],
     ['国债期货', [['TL', null], ['T', null], ['511260', null], ['511090', null]]],
-    ['期权', [['50ETF期权', null], ['沪深300期权', null]]]
+    ['期权', [['50ETF期权', null], ['沪深300期权', null], ['SPY期权', null], ['NVDA期权', null]]]
   ];
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
