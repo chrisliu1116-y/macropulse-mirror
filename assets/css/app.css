@@ -25,6 +25,7 @@
   /* 语义色：红涨绿跌（A股口径） */
   --up:#f6465d;
   --down:#0ecb81;
+  --flat:#8a94a6;
   --s:#ff2d55;
   --a:#ffa726;
   --accent:#4f9dff;
@@ -72,6 +73,7 @@ body.light{
   --tx3:#7d8aa0;
   --up:#d92b3f;
   --down:#088f5c;
+  --flat:#8791a3;
   --s:#d81b36;
   --a:#a9620a;
   --accent:#2b6fd6;
@@ -774,6 +776,9 @@ body.light .c-review-void{background:#f7f9fc;border-color:rgba(16,24,40,.12)}
 .chip .qp{font-size:11px;color:var(--tx3)}
 .chip .qp.up{color:var(--up)}
 .chip .qp.down{color:var(--down)}
+.chip .qp.flat{color:var(--flat)}
+/* v288：0.00% 的涨跌幅徽章给灰底（对齐目标自选页澜起科技 0.00%） */
+.qp.flat{color:var(--flat);background:color-mix(in srgb,var(--flat) 16%,transparent);border-radius:3px;padding:1px 5px}
 /* 消息 → 实际影响：卡片真正的信息主体 */
 .c-imp{
   margin:0 0 9px;padding:7px 9px 6px;border-radius:9px;
@@ -1028,8 +1033,12 @@ body.light .run-tag.exp{color:#b4530c;background:#fff3e6;border-color:rgba(180,8
 .mkt-cat.on{background:color-mix(in srgb,var(--a) 15%,transparent);color:var(--a);font-weight:700}
 .mk-sp{
   flex:0 0 68px;width:68px;height:30px;align-self:center;
-  background:color-mix(in srgb,var(--tx3) 5%,transparent);border-radius:4px;
+  border-radius:4px;
 }
+/* v288：涨红 / 跌绿 / 0% 灰，三态都用主题语义变量，深浅主题自动适配 */
+.mk-sp.up{color:var(--up)}
+.mk-sp.down{color:var(--down)}
+.mk-sp.flat{color:var(--flat)}
 .mk-sp-ph{flex:0 0 68px;width:68px;height:30px;align-self:center;border-radius:4px;background:var(--wash)}
 .mk-row.no-sp .mk-sp,.mk-row.no-sp .mk-sp-ph{display:none}
 .mk-row.no-sp .mk-l{flex:1 1 auto}
@@ -2296,6 +2305,7 @@ body.light{
   --tx3:#7c889c;
   --up:#d3243b;
   --down:#07855a;
+  --flat:#8791a3;
   --s:#d3122f;
   --a:#a25f08;
   --accent:#2b6fd6;

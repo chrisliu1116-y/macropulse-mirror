@@ -221,6 +221,8 @@
     var g = String(m.generated || '');
     if (!g) return '数据截至 ' + day + '（无跑批时间）';
     var short = g.replace(/^\d{4}-/, '').slice(0, 11);
+    /* v288 方案1：跑批上游失败时保留上一份成功数据，明确标注停留日期，不假装今天 */
+    if (m.stale) return '数据停留在 ' + day + '（跑批未更新' + (m.stale_reason ? ' · ' + m.stale_reason : '') + '）';
     return '数据 ' + day + ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '');
   }
 

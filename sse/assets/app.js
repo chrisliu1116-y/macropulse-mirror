@@ -302,7 +302,8 @@
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
     var txt = '数据 ' + day + (short ? ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '')
       : '（无跑批时间）');
-    if (!isFresh(d)) txt += ' · 待更新';
+    if (d.meta && d.meta.stale) txt += ' · 跑批未更新，数据停留在 ' + day;
+    else if (!isFresh(d)) txt += ' · 待更新';
     return txt;
   }
 
@@ -322,7 +323,8 @@
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
       if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
     }
-    if (S.B && !isFresh(S.B)) parts.push('待更新');
+    if (S.B && S.B.meta && S.B.meta.stale) parts.push('跑批未更新');
+    else if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');
   }
   /* 把「日期 周X 收盘 + 新鲜度」推给主站工具条（老版 header 里那颗绿点） */

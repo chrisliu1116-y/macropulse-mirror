@@ -1,5 +1,5 @@
 /* ============================================================
- * account.js — 账号与设置同步（v6：WorkBuddy 主 / CF KV 备 / GitHub 备（待启用）/ 本机哈希兜底）
+ * account.js — 账号与设置同步（v7：WorkBuddy 云账号主通道 / 本地文件备份主保底 / 本机哈希兜底）
  * ------------------------------------------------------------
  * 核实结论（cloud-service skill references/auth/code-generation.md）：
  *   · auth.signUp 强制 verificationToken —— 注册建号必须一次性 OTP；
@@ -9,9 +9,13 @@
  * 身份（wbId）+ PBKDF2 哈希派生值」写进凭据；之后（含换设备）仅用
  * signInWithPassword 重建会话，无需再 OTP。
  *   · 主通道 = WorkBuddy Cloud Service（user_profiles，读写需 WorkBuddy 会话）
- *   · 备通道 = Cloudflare Worker 的 /account/*（Workers KV）
- *   · 备通道 = GitHub（可配置开关；未拿到可写 token 前默认「未启用」）
+ *   · 主保底 = 本地文件「备份 / 还原」：把全部 mm_* 设置导出为 JSON 存到本机，
+ *     WorkBuddy 云应用不可用时也能用它还原；不依赖任何云端通道。
  *   · 兜底 = 本机 PBKDF2 哈希缓存（云通道全挂也能离线登录）
+ *   · 已停用：Cloudflare Worker /account/* 云备份通道与 GitHub 备份通道
+ *     （/account/restore 无鉴权 GET 返回 conf:global 全站账号哈希，P0 风险；
+ *      public 仓放 PBKDF2 哈希有离线爆破风险）。不再向该 Worker 写入任何数据，
+ *      风险因「不再写入」而收敛。
  * 密码绝不落明文：本地 Web Crypto PBKDF2(100000 轮 / SHA-256 / 16B 随机 salt)
  *   生成 pwd_hash = "pbkdf2$100000$<salt_base64>$<hash_base64>"。
  *   明文密码与一次性验证码只在函数局部变量中，绝不写入 localStorage /
@@ -21,26 +25,19 @@
 (function (w, d) {
   'use strict';
 
-  /* ACCT_API：Cloudflare Worker 备选通道统一入口（/account/* 五路由 + Workers KV）。
-   * 前端不发任何鉴权头；Worker 在服务端持有密钥。 */
-  const ACCT_API = 'https://macropulse-edge.mp-7962af18.workers.dev';
-
   const CFG = {
     endpoint: 'https://macro-pulse.app.workbuddy.host',
     oauthRelayBaseUrl: 'https://www.workbuddy.cn/v2/as/genie-baas/oauth',
     publishableKey: 'wbpk_0KlILo2qQICjppvJ4EqFwd_YhyfNxuv5UrKlFyAJvLBkSgbjkweKW3j'
   };
 
-  /* GitHub 备份通道开关：默认「未启用」，绝不假装可用。
-   * 阻塞原因：现有 PAT 无 Gist 写权限（POST /gists 403）、两仓库均 public，
-   * 不能落盘账号凭据。要启用需用户先提供其一：
-   *   classic PAT 的 gist scope；
-   *   fine-grained PAT 的 Gists: Read and write；
-   *   私有仓的 Contents: Read and write（并配置 Worker 侧 GH_BACKUP_*）。
-   * 未启用时健康状态如实显示「未启用 + 所需权限」。 */
+  /* 云备份 / GitHub 备份通道已停用：/account/restore 为无鉴权 GET 且返回
+   * conf:global（含全站账号哈希），public 仓放 PBKDF2 哈希又有离线爆破风险。
+   * 保留该常量仅为兼容遗留工具脚本的只读状态查询；运行时不再发起任何请求、
+   * 不再写入任何云端备份。设置保底统一走本地文件「备份 / 还原」。 */
   const GH_BACKUP = {
     enabled: false,
-    reason: '未拿到可写 token：需 classic gist / fine-grained Gists: Read and write / 私有仓 Contents: Read and write'
+    reason: '已停用：云备份 / GitHub 备份通道下线，请用本地文件备份 / 还原'
   };
 
   const CRED_KEY = 'mm_account_cred';   // 本机哈希凭据缓存（仅哈希，绝无明文）
@@ -48,7 +45,7 @@
   const PBKDF2_ITER = 100000;
   const SALT_BYTES = 16;
   const WB_TIMEOUT = 8000;             // 主通道超时（ms）
-  const API_TIMEOUT = 8000;            // 备选通道超时（ms）
+  const API_TIMEOUT = 8000;            // OTP 等辅助请求超时（ms）
 
   let cloud = null;
   function sdk() {
@@ -67,29 +64,125 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
     del(k) { try { localStorage.removeItem(k); } catch (e) {} }
   };
-  /* token / 临时阶段 / 凭据哈希缓存 / 登录态 / 一次性验证码不进设置备份。
-   * 历史遗留的 GitHub / Gist 键同样排除，确保任何密钥都不会被快照带走。 */
-  const SKIP = { mm_gh_token: 1, mm_ev_stage_v1: 1, mm_account_cred: 1, mm_acct_user: 1, mm_acct_otp: 1 };
-  const mmKeys = () => Object.keys(localStorage).filter(k => /^mm_/.test(k) && !SKIP[k]);
+
+  /* ---------------- 本地文件备份 / 还原（主保底手段） ----------------
+   * 把全部 mm_* 设置导出成 JSON 存到本机；WorkBuddy 云应用失效时也能还原。
+   * 排除清单 + 敏感词兜底：任何凭据 / 密钥 / 验证码都不会进备份文件。 */
+  const BACKUP_APP = 'MACRO-PULSE';
+  const BACKUP_SCHEMA = 'macropulse-settings';
+  const BACKUP_VERSION = 1;
+  const SKIP = {
+    mm_account_cred: 1,      // 本机 PBKDF2 哈希凭据（含 salt / hash）
+    mm_acct_user: 1,         // 本机登录态
+    mm_acct_otp: 1,          // 一次性验证码
+    mm_gh_token: 1,          // 历史 GitHub 凭据
+    mm_gh_gist: 1, mm_gh_acct_gist: 1,   // 历史 Gist 标记
+    mm_ev_stage_v1: 1        // 事件阶段临时态（EV_STAGE_KEY）
+  };
+  /* 白名单式跳过：只有 mm_ 前缀、不在清单、且键名不含 token/cred/otp 等
+   * 敏感片段的键才会进备份文件 / 被还原写回。 */
+  const SENSITIVE = /(token|cred|otp|secret|passwd|password|pwd|hash|salt|auth|session|private|cipher|bearer|apikey|api_key)/i;
+  function backupable(k) {
+    return /^mm_/.test(k) && !SKIP[k] && !SENSITIVE.test(k);
+  }
+  function backupDate() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  /* 云端同步用的快照（解析成 JS 对象）；排除规则与本地文件一致。 */
+  const mmKeys = () => Object.keys(localStorage).filter(backupable);
   function snapshot() { const o = {}; mmKeys().forEach(k => { o[k] = store.get(k, null); }); return o; }
   function restore(obj) {
     if (!obj || typeof obj !== 'object') return 0;
     let n = 0;
-    Object.keys(obj).forEach(k => { if (/^mm_/.test(k) && !SKIP[k]) { store.set(k, obj[k]); n++; } });
+    Object.keys(obj).forEach(k => { if (backupable(k)) { store.set(k, obj[k]); n++; } });
     return n;
+  }
+
+  /* 本地文件用：原样读取 localStorage 字符串，避免 JSON.parse 把裸字符串键
+   * （如 mm_draw_tool / mm_draw_color）解析失败丢成 null，保证导出保真。 */
+  function backupSnapshot() {
+    const data = {};
+    Object.keys(localStorage).forEach(k => {
+      if (backupable(k)) {
+        try { const v = localStorage.getItem(k); if (v != null) data[k] = v; } catch (e) {}
+      }
+    });
+    return data;
+  }
+  function readFileText(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result || ''));
+      fr.onerror = () => reject(new Error('文件读取失败'));
+      fr.readAsText(file, 'utf-8');
+    });
+  }
+
+  /* 备份：生成 JSON 文件并触发下载。文件名含日期，便于多份归档。 */
+  function localBackup() {
+    const data = backupSnapshot();
+    const payload = {
+      app: BACKUP_APP,
+      schema: BACKUP_SCHEMA,
+      version: BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      count: Object.keys(data).length,
+      data: data
+    };
+    const u = w.URL || w.webkitURL;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = u.createObjectURL(blob);
+    const a = d.createElement('a');
+    a.href = url;
+    a.download = 'macropulse-backup-' + backupDate() + '.json';
+    d.body.appendChild(a);
+    a.click();
+    d.body.removeChild(a);
+    setTimeout(() => { try { u.revokeObjectURL(url); } catch (e) {} }, 1000);
+    return { count: payload.count, fileName: a.download };
+  }
+
+  /* 还原：先完整校验，全部通过后才逐键回写；只 setItem，绝不 clear /
+   * removeItem，因此任何异常都不会清空现有设置。 */
+  function applyLocalRestore(text) {
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch (e) { throw new Error('文件不是有效 JSON（已损坏）'); }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('文件结构不正确');
+    }
+    if (payload.app !== BACKUP_APP || payload.schema !== BACKUP_SCHEMA) {
+      throw new Error('不是本应用导出的备份文件（app / schema 不匹配）');
+    }
+    if (payload.version !== BACKUP_VERSION) {
+      throw new Error('备份文件版本不兼容（需要 v' + BACKUP_VERSION + '，实际 v' + String(payload.version) + '）');
+    }
+    const data = payload.data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('备份文件缺少 data 数据体');
+    }
+    let n = 0, skipped = 0;
+    Object.keys(data).forEach(k => {
+      if (!backupable(k) || typeof data[k] !== 'string') { skipped++; return; }
+      try { localStorage.setItem(k, data[k]); n++; } catch (e) { skipped++; }
+    });
+    ui.info = '还原完成：成功 ' + n + ' 项 / 跳过 ' + skipped +
+      ' 项（凭据与密钥不还原，现有设置未被清空；刷新页面后全部设置生效）';
+    return { n, skipped };
   }
 
   let busy = false;
   /* 登录态来自本机标记（与 WorkBuddy 会话解耦，WorkBuddy 挂了也能进） */
   const loggedUser = () => store.get(USER_KEY, null);
 
-  /* 同步状态：primary = WorkBuddy 主通道，backup = CF KV 备通道，github = GitHub 备通道。
+  /* 同步状态：primary = WorkBuddy 云账号主通道；本地文件是主保底手段。
    * 文本里只放 ✓/✗ 与失败原因，绝不出现任何密钥。 */
   let ui = {
     mode: 'login', account: '', wbId: '',
     err: '', info: '',
     primary: '', primaryOk: false,
-    backup: '', backupOk: false,
     github: '', githubOk: false,
     otp: { pending: null, sent: false }   // 一次性验证码 challenge（仅内存，绝不落盘）
   };
@@ -181,64 +274,11 @@
   function errMsg(r) { return (r && r.message) ? r.message : String(r || '未知错误'); }
   function now() { return new Date().toTimeString().slice(0, 5); }
 
-  /* ---------------- 备通道：Cloudflare Worker HTTP API ----------------
-   * 前端不发任何鉴权头；统一超时、统一错误转中文，便于上层回退判断。 */
-  async function edgeApi(path, method, body) {
-    const init = { method: method || 'GET' };
-    if (body !== undefined) {
-      init.headers = { 'Content-Type': 'application/json' };
-      init.body = JSON.stringify(body);
-    }
-    let res;
-    try {
-      res = await withTimeout(fetch(ACCT_API + path, init), API_TIMEOUT, '备份通道');
-    } catch (e) {
-      throw new Error('备份通道不可用：' + errMsg(e));
-    }
-    let json = null;
-    try { json = await res.json(); } catch (e) { json = null; }
-    if (!res.ok) {
-      const why = (json && (json.error || json.message)) || ('HTTP ' + res.status);
-      throw new Error('备份通道返回 ' + res.status + '：' + why);
-    }
-    return json;
-  }
-  /* 从 login / restore 的响应里稳健取出目标对象（兼容多种包装） */
-  function pickCred(json) {
-    if (!json) return null;
-    const c = json.cred || json;
-    return (c && c.account && c.pwd_hash) ? c : null;
-  }
-  function pickSnapshot(json) {
-    if (!json) return null;
-    const s = json.snapshot || json.data || json;
-    return (s && typeof s === 'object') ? s : null;
-  }
-
-  /* 备通道 4 个接口：注册 / 取凭据 / 备份设置 / 恢复设置
-   * register 透传 wbId/wbKind（Worker 把 body 全量存入 KV），保证换设备后
-   * 仍能拿到 WorkBuddy 身份用于 signInWithPassword。 */
-  async function edgeRegister(cred) {
-    await edgeApi('/account/register', 'POST', {
-      account: cred.account,
-      pwd_hash: cred.pwd_hash,
-      salt: cred.salt,
-      iter: cred.iter,
-      wbId: cred.wbId || '',
-      wbKind: cred.wbKind || ''
-    });
-  }
-  async function edgeLogin(account) {
-    const j = await edgeApi('/account/login', 'POST', { account });
-    return pickCred(j);
-  }
-  async function edgeBackup(data) {
-    await edgeApi('/account/backup', 'POST', { snapshot: data });
-  }
-  async function edgeRestore() {
-    const j = await edgeApi('/account/restore', 'GET');
-    return pickSnapshot(j);
-  }
+  /* ---------------- 云备份 / GitHub 备份通道：已停用 ----------------
+   * 原 /account/*（Workers KV）备份通道已整体下线：/account/restore 是无参数
+   * 无鉴权 GET，会返回整个 conf:global（含全站账号哈希），属 P0 风险；public 仓
+   * 放 PBKDF2 哈希又有离线爆破风险。前端不再向该 Worker 发起任何请求 / 写入，
+   * 风险因「不再写入」而收敛。设置保底统一走本地文件「备份 / 还原」。 */
 
   /* ---------------- WorkBuddy 身份（真实 email / phone） ----------------
    * 注册那次 OTP 必须发到能收信的真实 email 或手机号；v5 用账号字符串
@@ -329,30 +369,21 @@
   }
 
   /* ---------------- 通道协作 ----------------
-   * v6（2026-11-12 定案）：核实「仅 auth.signUp 强制 verificationToken，
-   * auth.signInWithPassword 登录不要验证码」后，把 WorkBuddy 摆回主通道。
-   *   注册：一次性 OTP 建 WorkBuddy 账号 → 凭据（PBKDF2 哈希 + wbId）主备多写；
+   * v7（2026-11-12 定案）：WorkBuddy 云账号为唯一云端主通道；
+   *   注册：一次性 OTP 建 WorkBuddy 账号 → 凭据（PBKDF2 哈希 + wbId）写 user_profiles；
    *   登录：取回凭据 → 本地校验哈希 → signInWithPassword 重建会话（无验证码）；
-   *   写：主备并行，任一条成功即可；读：WorkBuddy 主 → CF KV 备 → 本机兜底。
-   *   两条云通道失败不阻断注册（本机哈希缓存兜底，离线可登录）。 */
+   *   设置保底：本地文件「备份 / 还原」（不依赖任何云端通道）；
+   *   云通道失败不阻断注册（本机 PBKDF2 哈希缓存兜底，离线可登录）。 */
   async function saveCred(cred) {
-    const [p, b] = await Promise.allSettled([
-      withTimeout(wbSaveCred(cred), WB_TIMEOUT, 'WorkBuddy 主通道'),
-      withTimeout(edgeRegister(cred), API_TIMEOUT, 'CF KV 备通道')
-    ]);
-    ui.primaryOk = p.status === 'fulfilled';
-    ui.backupOk = b.status === 'fulfilled';
-    ui.primary = (ui.primaryOk ? '✓ 已写入 user_profiles' : '✗ 失败：' + errMsg(p.reason)) + ' · ' + now();
-    ui.backup = (ui.backupOk ? '✓ 已写入' : '✗ 失败：' + errMsg(b.reason)) + ' · ' + now();
-    /* GitHub 备通道：开关关闭时如实显示「未启用 + 所需权限」，不发起请求、不假装可用。 */
-    ui.githubOk = false;
-    ui.github = GH_BACKUP.enabled
-      ? '✓ 已启用 · ' + now()
-      : ('未启用 · ' + GH_BACKUP.reason);
-    /* 关键：云通道全挂也不能挡住注册。本机已保存 PBKDF2 哈希凭据和登录态，
-     * 离线照样能登录；通道状态在卡片里如实显示。 */
-    return { primary: ui.primaryOk, backup: ui.backupOk, github: ui.githubOk,
-             offline: !ui.primaryOk && !ui.backupOk };
+    let ok = false, why = '';
+    try {
+      await withTimeout(wbSaveCred(cred), WB_TIMEOUT, 'WorkBuddy 云账号');
+      ok = true;
+    } catch (e) { why = errMsg(e); }
+    ui.primaryOk = ok;
+    ui.primary = (ok ? '✓ 已写入 user_profiles' : '✗ 失败：' + why) + ' · ' + now();
+    /* 云备份 / GitHub 备份通道已停用：不再发起任何写入，避免向无鉴权端点落盘凭据。 */
+    return { primary: ok, offline: !ok };
   }
   const saveCredBoth = saveCred;   // 兼容旧接口名
 
@@ -363,8 +394,8 @@
     // 主通道：WorkBuddy（仅当已持有会话；换设备首次登录会在 login 里重建会话）
     if (await session()) {
       try {
-        const c = await withTimeout(wbLoadCred(), WB_TIMEOUT, 'WorkBuddy 主通道');
-        if (c && c.account === account) { cred = c; src = 'WorkBuddy 主通道'; }
+        const c = await withTimeout(wbLoadCred(), WB_TIMEOUT, 'WorkBuddy 云账号');
+        if (c && c.account === account) { cred = c; src = 'WorkBuddy 云账号'; }
         ui.primaryOk = true;
         ui.primary = '✓ 主通道' + (src ? '已取回凭据' : '可达（无此账号）') + ' · ' + now();
       } catch (e) {
@@ -376,28 +407,11 @@
       ui.primary = '待登录后用账号+密码重建会话（无需验证码） · ' + now();
     }
 
-    // 主通道没拿到 → 回退 CF KV 备通道
-    if (!cred) {
-      try {
-        const c = await withTimeout(edgeLogin(account), API_TIMEOUT, 'CF KV 备通道');
-        if (c && c.account === account) { cred = c; src = 'CF KV 备通道'; }
-        ui.backupOk = true;
-        ui.backup = (src ? '✓ 已回退 CF KV' : '✓ 可达（无此账号）') + ' · ' + now();
-      } catch (e2) {
-        ui.backupOk = false;
-        ui.backup = '✗ 失败：' + errMsg(e2) + ' · ' + now();
-      }
-    }
-
-    // GitHub 备通道：默认未启用，跳过并如实标注
-    ui.githubOk = false;
-    ui.github = GH_BACKUP.enabled ? (ui.github || '已启用 · ' + now()) : ('未启用 · ' + GH_BACKUP.reason);
-
-    // 两条云端通道都没拿到 → 本机缓存兜底
+    // 云备份通道已停用 → 主通道没拿到就直接用本机哈希缓存兜底
     if (!cred && local && local.account === account) { cred = local; src = '本机哈希缓存'; }
 
     if (!cred) {
-      throw new Error('未找到账号凭据：WorkBuddy 主通道与 CF KV 备通道均无法取得该账号，且本机无缓存，请先注册');
+      throw new Error('未找到账号凭据：WorkBuddy 云账号无此凭据且本机无缓存；请先注册，或用「从本地文件还原」恢复设置');
     }
     return { cred, src };
   }
@@ -405,9 +419,9 @@
   async function push() {
     const data = snapshot();
     const cred = store.get(CRED_KEY, null);
-    if (cred) data[CRED_KEY] = cred;   // 设置备份里保留凭据副本（仅哈希，无明文）
+    if (cred) data[CRED_KEY] = cred;   // 云端备份里保留凭据副本（仅哈希，无明文）
 
-    const primaryTask = (async () => {
+    await withTimeout((async () => {
       const row = await fetchRow();
       if (row) {
         const u = await sdk().database.from('user_profiles')
@@ -421,53 +435,26 @@
         if (i.error) throw new Error(i.error.message || '备份失败');
         if (!Array.isArray(i.data) || !i.data.length) throw new Error('备份未生效（权限或网络）');
       }
-    })();
-
-    const [p, b] = await Promise.allSettled([
-      withTimeout(primaryTask, WB_TIMEOUT, 'WorkBuddy 主通道'),
-      withTimeout(edgeBackup(data), API_TIMEOUT, 'CF KV 备通道')
-    ]);
-    ui.primaryOk = p.status === 'fulfilled';
-    ui.backupOk = b.status === 'fulfilled';
-    ui.primary = (ui.primaryOk ? '✓ 已写入' : '✗ 失败：' + errMsg(p.reason)) + ' · ' + now();
-    ui.backup = (ui.backupOk ? '✓ 已写入' : '✗ 失败：' + errMsg(b.reason)) + ' · ' + now();
-    if (!ui.primaryOk && !ui.backupOk) {
-      throw new Error('设置备份失败：WorkBuddy 主通道与 CF KV 备通道均不可用，请检查网络后重试');
-    }
-    ui.info = '已备份 ' + Object.keys(data).length + ' 项设置到' +
-      (ui.primaryOk && ui.backupOk ? '主备两条通道' : (ui.primaryOk ? 'WorkBuddy 主通道' : 'CF KV 备通道'));
+    })(), WB_TIMEOUT, 'WorkBuddy 云账号');
+    ui.primaryOk = true;
+    ui.primary = '✓ 已写入 · ' + now();
+    ui.info = '已备份 ' + Object.keys(data).length + ' 项设置到 WorkBuddy 云账号';
   }
 
   async function pull(silent) {
     let data = null, src = '';
-
-    // 先试主通道
     try {
-      const row = await withTimeout(fetchRow(), WB_TIMEOUT, 'WorkBuddy 主通道');
-      if (row && row.data) { data = row.data; src = 'WorkBuddy 主通道'; }
+      const row = await withTimeout(fetchRow(), WB_TIMEOUT, 'WorkBuddy 云账号');
+      if (row && row.data) { data = row.data; src = 'WorkBuddy 云账号'; }
       ui.primaryOk = true;
       ui.primary = '✓ 主通道' + (src ? '已取回备份' : '可达（暂无备份）') + ' · ' + now();
     } catch (e) {
       ui.primaryOk = false;
       ui.primary = '✗ 失败：' + errMsg(e) + ' · ' + now();
     }
-
-    // 主通道没有可用数据 → 自动回退 CF KV 备通道
-    if (!data) {
-      try {
-        const s = await withTimeout(edgeRestore(), API_TIMEOUT, 'CF KV 备通道');
-        if (s && typeof s === 'object') { data = s; src = 'CF KV 备通道'; }
-        ui.backupOk = true;
-        ui.backup = (src ? '✓ 已回退 CF KV' : '✓ 备通道可达（暂无备份）') + ' · ' + now();
-      } catch (e2) {
-        ui.backupOk = false;
-        ui.backup = '✗ 失败：' + errMsg(e2) + ' · ' + now();
-      }
-    }
-
     if (!data) {
       if (silent) return;
-      throw new Error('恢复失败：WorkBuddy 主通道与 CF KV 备通道均没有可用备份，或均连接失败');
+      throw new Error('恢复失败：WorkBuddy 云账号没有可用备份或连接失败；可用「从本地文件还原」');
     }
     const cred = data[CRED_KEY];
     const n = restore(data);                       // restore 跳过 SKIP（含 CRED_KEY）
@@ -505,12 +492,12 @@
     store.set(USER_KEY, { account, at: new Date().toISOString() });  // 本机登录态立即成立
     ui.mode = 'login';
     ui.info = '注册成功，已直接登录。' + otpNote;
-    /* 云通道写入全部后台执行：两条云通道失败不阻断注册，本机态已成立；
+    /* WorkBuddy 云账号写入后台执行：云端失败不阻断注册，本机态已成立；
      * 完成后仅刷新同步状态卡片。 */
     (async () => {
-      const sync = await saveCred(cred);               // 主备多写；全败不阻断
+      const sync = await saveCred(cred);               // 写 user_profiles；失败不阻断
       ui.info = '注册成功，已直接登录。' + otpNote +
-        (sync.offline ? '；云端两条通道暂不可用，凭据已安全存于本机，恢复后可重新同步' : '');
+        (sync.offline ? '；云端通道暂不可用，凭据已安全存于本机，恢复后可重新同步' : '');
       try { renderCard(); } catch (e) {}
       try { await push(); } catch (e) {}               // 顺带备份设置（best-effort）
     })();
@@ -571,11 +558,22 @@
   function syncBlock() {
     return `
       <div class="acct-sync">
-        <div class="acct-sync-h">同步状态（WorkBuddy 主 / CF KV 备 / GitHub 备）</div>
-        <div class="acct-sync-row ${ui.primaryOk ? 'ok' : 'bad'}"><span>WorkBuddy 主通道</span><b>${esc(ui.primary || '尚未检测')}</b></div>
-        <div class="acct-sync-row ${ui.backupOk ? 'ok' : 'bad'}"><span>CF KV 备份</span><b>${esc(ui.backup || '尚未检测')}</b></div>
-        <div class="acct-sync-row ${ui.githubOk ? 'ok' : 'off'}"><span>GitHub 备份</span><b>${esc(ui.github || ('未启用 · ' + GH_BACKUP.reason))}</b></div>
+        <div class="acct-sync-h">同步状态（WorkBuddy 云账号 / 本地文件主保底）</div>
+        <div class="acct-sync-row ${ui.primaryOk ? 'ok' : 'bad'}"><span>WorkBuddy 云账号</span><b>${esc(ui.primary || '尚未检测')}</b></div>
+        <div class="acct-sync-row off"><span>本地文件备份</span><b>主保底手段 · 见下方「备份 / 还原」</b></div>
       </div>`;
+  }
+
+  /* 本地文件备份 / 还原按钮块：登录与已登录两种状态都渲染，不依赖登录态 ——
+   * WorkBuddy 云应用失效时仍能导出 / 导入设置与自选。 */
+  function localBackupBlock() {
+    return `
+      <div class="acct-btns">
+        <button class="acct-main ghost" data-act="localbackup">备份到本地文件</button>
+        <button class="acct-main ghost" data-act="localrestore">从本地文件还原</button>
+      </div>
+      <div class="acct-sub">本地文件是主保底手段：把全部设置 / 自选 / 浮窗盯盘 / 事件提醒导出为 JSON 存到本机；WorkBuddy 云应用不可用时也能用备份文件还原。备份不含任何凭据、密钥或验证码，还原不会清空现有设置。</div>
+      <input type="file" id="acctRestoreFile" accept="application/json,.json" style="display:none">`;
   }
 
   function acctCard(user) {
@@ -607,22 +605,24 @@
             ? '注册时填手机号 / 邮箱并验证一次即可建立 WorkBuddy 账号；之后登录永不需验证码。密码仅在本机以 PBKDF2 哈希保存；APP 不需要、也不会接触任何密钥。'
             : '只输账号 + 密码即可登录（登录不需要验证码）。密码仅在本机以 PBKDF2 哈希保存，APP 不需要、也不会接触任何密钥。'}</div>
         </div>
+        ${localBackupBlock()}
         ${syncBlock()}
       </div>`;
     }
     return `
       <div class="set-card" id="acctCard">
         <div class="set-card-h">账号</div>
-        <div class="set-row"><div><b>已登录：${esc(user.account || '')}</b><span>账号 + 密码；密码仅以哈希保存，WorkBuddy / CF KV 各存一份；两条云都不可用时本机仍可登录；登录永不需验证码</span></div>
+        <div class="set-row"><div><b>已登录：${esc(user.account || '')}</b><span>账号 + 密码；密码仅以哈希保存，WorkBuddy 云账号存一份；云端不可用时本机仍可登录；登录永不需验证码</span></div>
           <button class="mini-btn" data-act="out">退出</button></div>
         <div class="acct-btns">
-          <button class="acct-main" data-act="synccred">同步账号凭据到两条通道</button>
-          <button class="acct-main ghost" data-act="pull">恢复设置</button>
-          <button class="acct-main ghost" data-act="push">备份本机设置</button>
+          <button class="acct-main" data-act="synccred">同步账号凭据到 WorkBuddy 云账号</button>
+          <button class="acct-main ghost" data-act="pull">恢复设置（云端）</button>
+          <button class="acct-main ghost" data-act="push">备份本机设置（云端）</button>
         </div>
         ${ui.err ? `<div class="acct-err">${esc(ui.err)}</div>` : ''}
         ${ui.info ? `<div class="acct-ok">${esc(ui.info)}</div>` : ''}
-        <div class="acct-sub">恢复会用云端版本覆盖本机同名配置；备份把当前 mm_* 设置写入主备两条通道。凭据始终以哈希保存，不含明文，也不含任何密钥。</div>
+        <div class="acct-sub">恢复会用云端版本覆盖本机同名配置；备份把当前 mm_* 设置写入 WorkBuddy 云账号。凭据始终以哈希保存，不含明文，也不含任何密钥。</div>
+        ${localBackupBlock()}
         ${syncBlock()}
       </div>`;
   }
@@ -685,52 +685,70 @@
           const cred = store.get(CRED_KEY, null);
           if (!cred) throw new Error('本机没有账号凭据哈希，请重新注册或登录后重试');
           await saveCred(cred);
-          ui.info = '账号凭据已重新写入两条通道（见下方同步状态）';
+          ui.info = '账号凭据已重新写入 WorkBuddy 云账号（见下方同步状态）';
           renderCard(host); return;
         }
         if (act === 'pull') { await pull(); renderCard(host); return; }
         if (act === 'push') { await push(); renderCard(host); return; }
+        if (act === 'localbackup') {
+          const r = localBackup();
+          ui.info = '已导出 ' + r.count + ' 项设置到 ' + r.fileName;
+          renderCard(host); return;
+        }
+        if (act === 'localrestore') {
+          const input = host.querySelector('#acctRestoreFile');
+          if (input) input.click();
+          return;
+        }
         if (act === 'out') { await signout(); renderCard(host); return; }
       } catch (err) {
         ui.err = (err && err.message) ? err.message : '操作失败，请稍后再试';
         renderCard(host);
       } finally { busy = false; }
     });
+    /* 本地文件还原：change 事件委托（卡片重绘会重建 input，委托绑在 host 上）。 */
+    host.addEventListener('change', async e => {
+      const input = e.target;
+      if (!input || input.id !== 'acctRestoreFile') return;
+      const file = input.files && input.files[0];
+      input.value = '';                    // 允许重复选同一文件
+      if (!file || busy) return;
+      busy = true;
+      ui.err = ''; ui.info = '';
+      try {
+        const text = await readFileText(file);
+        applyLocalRestore(text);
+      } catch (err) {
+        ui.err = '还原失败：' + ((err && err.message) || '文件读取失败') + '（现有设置未被改动）';
+      } finally { busy = false; }
+      renderCard(host);
+    });
   }
 
-  /* 兼容旧工具脚本的 GitHub 接口名：新架构的 GitHub 通道为「可配置开关 + 待启用」。
-   * ghConnect 探测 Worker /account/health 的 github.enabled；未启用时如实回报。 */
+  /* 兼容旧工具脚本的 GitHub 接口名：云备份 / GitHub 备份通道已停用，
+   * 如实回报且不发起任何网络请求。 */
   async function ghConnect() {
-    try {
-      const j = await withTimeout(edgeApi('/account/health', 'GET'), API_TIMEOUT, '备份通道');
-      const on = !!(j && j.github && j.github.enabled);
-      ui.githubOk = on;
-      ui.github = on ? ('✓ 已启用 · ' + now())
-                     : ('未启用 · ' + ((j && j.github && j.github.reason) || GH_BACKUP.reason));
-      ui.info = on ? 'GitHub 备份通道已启用' : 'GitHub 备份通道未启用（需可写 token）';
-      return on;
-    } catch (e) {
-      ui.githubOk = false;
-      ui.github = '✗ 探测失败：' + errMsg(e) + ' · ' + now();
-      ui.info = 'GitHub 备份通道探测失败，按未启用处理';
-      return false;
-    }
+    ui.githubOk = false;
+    ui.github = '已停用 · 云备份 / GitHub 备份通道下线';
+    ui.info = 'GitHub 备份通道已停用；请用「备份 / 还原」本地文件';
+    return false;
   }
   function ghDisconnect() {
     store.del('mm_gh_token'); store.del('mm_gh_gist'); store.del('mm_gh_acct_gist');
     ui.githubOk = false;
-    ui.github = '未启用 · ' + GH_BACKUP.reason;
-    ui.info = '本机已无 GitHub 连接（历史密钥缓存已清理）；备份通道保持待启用';
+    ui.github = GH_BACKUP.reason;
+    ui.info = '本机已无 GitHub 连接（历史密钥缓存已清理）；备份通道保持停用';
   }
 
   w.MPAccount = {
     cardHTML, renderCard, bindCard,
     async refresh(root) { renderCard(root); bindCard(root); },
     status: () => !!loggedUser(),
-    /* 遗留接口名：返回 GitHub 备份通道开关状态（不假装已连接）。 */
-    ghStatus: () => ({ connected: GH_BACKUP.enabled, enabled: GH_BACKUP.enabled, login: '', gist: '', reason: GH_BACKUP.reason }),
+    /* 遗留接口名：GitHub 备份通道开关状态（已停用，不假装已连接）。 */
+    ghStatus: () => ({ connected: false, enabled: false, login: '', gist: '', reason: GH_BACKUP.reason }),
     /* 只读调试句柄：验证密钥 / 凭据 / 验证码不进入设置备份清单 */
     _snapshotKeys: () => Object.keys(snapshot()),
+    _backupable: backupable,
     pull, push,
     ghPull: pull, ghPush: push, ghConnect, ghDisconnect,
     saveCred, saveCredBoth, verifyCred

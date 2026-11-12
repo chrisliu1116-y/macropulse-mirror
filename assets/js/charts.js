@@ -734,8 +734,10 @@
          * 清空主图数据才消失 —— 是库内部的 baseline 渲染，不是行情源问题。
          * 换成只画一条线的 LineSeries 后彻底消失；零轴仍由 6 等分横格中线表示。 */
         const lastPx = mainPts.length ? mainPts[mainPts.length - 1].close : base;
+        /* v288：分时主线统一用蓝色（对齐目标详情页），不再按涨跌染红/绿；
+         * 涨跌仍由右侧报价数字与图例颜色表达。深浅主题各一档蓝。 */
         mainSeries = chart.addLineSeries({
-          color: lastPx >= base ? UP : DOWN,
+          color: isLight() ? '#2b6fd6' : '#4f9dff',
           lineWidth: 2,
           priceFormat: { type: 'custom', minMove: Math.pow(10, -dec), formatter: () => '' },
           priceLineVisible: false,
@@ -802,7 +804,8 @@
         const avgPts = pts.filter(p => p.avg).map(p => ({ time: p.time, value: p.avg }));
         if (avgPts.length > 5) {
           const avgSeries = chart.addLineSeries({
-            color: 'rgba(255,196,84,0.9)', lineWidth: 1, lastValueVisible: false,
+            /* v288：均价线改橙色实线（目标详情页），与蓝色主线区分 */
+            color: isLight() ? '#d97b06' : '#ffa726', lineWidth: 1, lastValueVisible: false,
             priceLineVisible: false, crosshairMarkerVisible: false,
             /* v201：均价线同样不往右轴写刻度文字 */
             priceFormat: { type: 'custom', minMove: Math.pow(10, -dec), formatter: () => '' },

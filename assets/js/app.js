@@ -539,7 +539,10 @@
 
   function paintQuote(k, q) {
     if (!q || q.price == null) return;
-    const up = q.pct >= 0;
+    const pct = q.pct == null ? 0 : +q.pct;
+    /* v288：0.00% 既不算涨也不算跌，徽章用灰底（对齐目标自选页）。 */
+    const flat = Math.abs(pct) < 0.005;
+    const up = pct >= 0;
     /* v284【陈旧标记】报价对象带 at（取到该价格的时间）。
      * 批量接口被限流时 batchQuote 会整批失败，缓存里的旧价就一直挂着不动 ——
      * 以前只能靠左上角那个 8px 的「上次」小字，用户看到的是「价格不刷新」。
@@ -552,8 +555,9 @@
        * 实时报价回来后 class 仍是 "qp snap up"，.qp.snap::after 继续显示「上次」，
        * 要等 120 秒整页 renderMarket() 重建 DOM 才消失（用户：一两分钟才消除）。
        * 数据其实早就是实时的，只是这个标签赖着不走。 */
-      el.className = el.className.replace(/\b(up|down|snap|snap-old)\b/g, '').trim()
-        + ' ' + (up ? 'up' : 'down') + (q.snapped ? ' snap' : stale ? ' snap-old' : '');
+      el.className = el.className.replace(/\b(up|down|flat|snap|snap-old)\b/g, '').trim()
+        + ' ' + (flat ? 'flat' : (up ? 'up' : 'down'))
+        + (q.snapped ? ' snap' : stale ? ' snap-old' : '');
       el.title = stale ? ('上次更新 ' + hhmm(q.at) + '（已 ' + Math.round(age / 60000) + ' 分钟未刷新）') : '';
     });
     $$(`.qpx[data-k="${cssq(k)}"]`).forEach(el => { el.textContent = U.fmt(k, q.price); });
@@ -2502,6 +2506,12 @@
     if (!S.notify) return;
     const pf = alertPrefs(type);
     const np = w.NativePulse;
+    if (np && typeof np.notifyRoute === 'function') {
+      /* v288：把 tag/type 一起交给原生，通知点击才能路由回对应新闻/品种 */
+      const rkey = type === 's' ? String(tag || '').replace(/^mm-s-/, '')
+        : String(tag || '').replace(/^mm-(anom|alert)-/, '');
+      try { np.notifyRoute(pf.sound, pf.vib, title || '', body || '', type || '', rkey); return; } catch (e) {}
+    }
     if (np && typeof np.notify === 'function') {
       try { np.notify(pf.sound, pf.vib, title || '', body || ''); return; } catch (e) {}
     }
@@ -3010,6 +3020,9 @@
     } catch (e) { return n; }
   }
 
+  /* v288：每个缩略图的渐变 id 必须唯一。若用固定 id，一屏多个 SVG 的
+   * <defs> 会互相覆盖，浏览器只认第一个，currentColor 会取错色。 */
+  let _sparkGid = 0;
   function mkSparkSVG(vals, up, fullN) {
     if (!vals || vals.length < 4) return '<span class="mk-sp-ph" data-mksp=""></span>';
     const W = 68, H = 30, P = 2;
@@ -3020,9 +3033,18 @@
     const Y = v => H - P - (v - lo) / rg * (H - P * 2);
     let dd = '';
     for (let i = 0; i < vals.length; i++) dd += (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(vals[i]).toFixed(1) + ' ';
-    const col = up ? 'var(--up)' : 'var(--down)';
-    return `<svg class="mk-sp" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`
-      + `<path d="${dd}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+    /* v288：对齐目标自选页 —— 涨红 / 跌绿 / 0% 灰，细折线 + 同色浅渐变填充。
+     * 用 currentColor + CSS 类着色：SVG <linearGradient> 的 stop-color 里
+     * CSS 变量在部分 WebView 不生效，currentColor 最稳。 */
+    const tone = up === 'flat' ? 'flat' : (up ? 'up' : 'down');
+    const gid = 'spg-' + tone + '-' + (++_sparkGid);
+    const area = dd + `L${X(vals.length - 1).toFixed(1)} ${H} L${P} ${H} Z`;
+    return `<svg class="mk-sp ${tone}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`
+      + `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">`
+      + `<stop offset="0%" stop-color="currentColor" stop-opacity="0.26"/>`
+      + `<stop offset="100%" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>`
+      + `<path d="${area}" fill="url(#${gid})" stroke="none"/>`
+      + `<path d="${dd}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
   }
 
   /* 视口懒加载：滚动到哪行才取哪行的分时，避免一屏发几十个请求；
@@ -3131,9 +3153,15 @@
     if (!slot) return;
     const q = QuoteHub.get(k);
     const tmp = d.createElement('div');
-    /* 报价还没到时 q 为 null，原来一律按「跌」画成绿色 —— 涨 +1.9% 的标普
-     * 缩略图是绿的，很别扭。这里退回「首尾比较」兜底。 */
-    const up = (q && q.pct != null) ? q.pct >= 0 : (vals[vals.length - 1] >= vals[0]);
+    /* v288：颜色一律按涨跌幅数值判定，不再用分时线首尾比较 —— 后者会把
+     * 小幅下跌（图1 铠侠 -0.05%）误画成红色。0.00% 用灰色，与徽章一致。 */
+    let up;
+    if (q && q.pct != null) {
+      const pct = +q.pct;
+      up = Math.abs(pct) < 0.005 ? 'flat' : (pct > 0);
+    } else {
+      up = vals[vals.length - 1] >= vals[0];   // 报价没到时的兜底
+    }
     tmp.innerHTML = mkSparkSVG(vals, up, _mkSparkN.get(k));
     const node = tmp.firstChild;
     if (node) { node.setAttribute('data-mksp', k); slot.replaceWith(node); }
@@ -3709,10 +3737,18 @@
     if (np && typeof np.nativeSearch === 'function') {
       try {
         const rows = JSON.parse(np.nativeSearch(q) || '[]');
-        cb(Array.isArray(rows) ? rows : []);
+        const out = Array.isArray(rows) ? rows : [];
+        /* v288 诊断钩子：无头浏览器可断言 H5 真的走了唯一引擎（而非 JS 降级）。
+         * 只记录查询词/来源/条数，不记录任何用户数据。 */
+        try {
+          w.__searchProbe = { q, via: 'bridge', n: out.length,
+            codes: out.slice(0, 5).map(x => x && x.code), at: Date.now() };
+        } catch (e) {}
+        cb(out);
         return;
       } catch (e) { /* 桥不可用 → 落回 JS 三源降级 */ }
     }
+    try { w.__searchProbe = { q, via: 'js-fallback', n: 0, codes: [], at: Date.now() }; } catch (e) {}
     let box = null, cn = null, em = null, left = 3, fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
@@ -3844,6 +3880,11 @@
         if (!q) return '';
         const limit = 12;
         const found = [], seen = Object.create(null);
+        /* v288：APP 壳内两个搜索框共用 Java 引擎。桥结果必须直接进主列表，
+         * 否则本地名录先铺满 found、再以 !seen[x.code] 把桥结果整批丢掉，
+         * 就会重现「行情页搜 cxkj 只出超讯/晨讯/承信、悬浮窗却能出长鑫科技」。*/
+        const bridgeOn = !!(w.NativePulse && typeof w.NativePulse.nativeSearch === 'function')
+          && (S._pkSug || []).some(x => x && x.secid && String(x.secid).indexOf('.') > 0);
         const up = /^[a-z]+$/.test(q) ? q.toUpperCase() : '';
         const push = (code, nm) => {
           /* v59：原来这里用 `U.get(code)` 去重 —— 那是「懒合成」：
@@ -3874,7 +3915,7 @@
         };
         for (const c in CN) consider(c, CN[c]);
         for (const c in G) consider(c, (G[c] || [])[0]);
-        strongM.concat(weakM).forEach(([c, n]) => push(c, n));
+        if (!bridgeOn) strongM.concat(weakM).forEach(([c, n]) => push(c, n));
         if (!found.length && /^[1-9]\d{3}$/.test(q)) {
           /* 台股 4 位代码不在中/港/美名录里（名录只有 6 位 A 股与字母美股），
            * 直接按代码收一条 —— 加进来后首次拉分钟线会用 Yahoo 的
@@ -3883,8 +3924,9 @@
         }
         /* v273：远程建议（ETF/基金/美股杠杆，含正两倍负两倍这类杠杆产品）。
          * 渲染前先 synthSecid 预写进 ASSETS，点「＋」时现有委托直接能加。 */
+        /* v288：桥结果不再被本地名录的 seen 过滤掉（那正是分叉的直接原因） */
         const sug = (S._pkSug || []).filter(x =>
-          x && !seen[x.code] && S.watch.indexOf(String(x.code)) < 0);
+          x && x.secid && S.watch.indexOf(String(x.code)) < 0);
         const sugHTML = sug.map(x => {
           try { U.synthSecid(x.secid, x.code, x.name); } catch (e) { }
           return `<button class="pk-i" data-k="${esc(x.code)}">
@@ -3903,7 +3945,9 @@
             <span>${esc(f.nm)}<em>${esc(f.code)}</em></span><i>${on ? '已添加' : '＋'}</i>
           </button>`;
         }).join('');
-        const main = items ? `<div class="pk-g"><div class="pk-gh" style="color:#8b95a6">全市场匹配</div>${items}</div>` : '';
+        /* v288：桥结果才是「全市场匹配」；本地名录拼音库口径不同
+         * （「长鑫科技」被算成 ZXKJ，smartbox 认 CXKJ），单独分组避免混淆。 */
+        const main = items ? `<div class="pk-g"><div class="pk-gh" style="color:#8b95a6">${bridgeOn ? '全市场匹配' : '本地名录匹配（离线）'}</div>${items}</div>` : '';
         const sugBlock = sugHTML ? `<div class="pk-g"><div class="pk-gh" style="color:#ffd43b">ETF / 全市场建议</div>${sugHTML}</div>` : '';
         if (!main && !sugBlock) return '';
         return sugBlock + main;
@@ -3951,7 +3995,7 @@
           const cur = box.querySelector('#pkSearch');
           if (cur) renderList(cur.value);
         });
-      }, 350);
+      }, (w.NativePulse && typeof w.NativePulse.nativeSearch === 'function') ? 20 : 350);
     });
     box.querySelector('.pk-body').addEventListener('click', (e) => {
       const b = e.target.closest('.pk-i');
@@ -8280,6 +8324,17 @@
     window.__openSheet = openSheet;
     window.__closeSheet = closeSheet;
     window.__openNews = openNews;
+    /* v288：原生通知点击路由。s→那条新闻；anom/price→对应品种行情详情 */
+    window.__notifyRoute = function (rtype, rkey) {
+      try {
+        if (!rkey) return false;
+        if (rtype === 's') { if (typeof openNews === 'function') openNews(String(rkey)); return true; }
+        if (rtype === 'anom' || rtype === 'price') {
+          if (typeof openSheet === 'function') openSheet(String(rkey)); return true;
+        }
+      } catch (e) {}
+      return false;
+    };
     // 事件页的实时报价与渲染句柄，便于核对「卡片上的实时值到底取自哪
     window.__quoteHub = QuoteHub;
     window.__event = { eventQuoteKeys, eventMetricBar, eventCardHTML, eventDetailHTML, renderEvent };
@@ -8342,7 +8397,12 @@
     /* 从推送通知 / 常驻服务通知点进来（壳内带 &tab=set）→ 直接落在通知设置卡片。
      * 就地切 Tab 失败时原生会退回带这个参数的整页导航，所以两条路径都覆盖。 */
     try {
-      if (new URLSearchParams(location.search).get('tab') === 'set') switchTab('set');
+      const qs = new URLSearchParams(location.search);
+      if (qs.get('tab') === 'set') switchTab('set');
+      /* v288：通知冷启动带 rtype/rkey → 落地到对应新闻或品种 */
+      if (qs.get('rtype') && qs.get('rkey')) {
+        setTimeout(() => { try { window.__notifyRoute(qs.get('rtype'), qs.get('rkey')); } catch (e) {} }, 900);
+      }
     } catch (e) {}
 
     // 注册 Service Worker：手机「添加到主屏幕」后能秒开、弱网也不白屏
