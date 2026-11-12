@@ -123,7 +123,9 @@
           <button class="mini-btn" data-act="localrestore">还原</button></div>
         ${ui.info ? `<div class="set-row col"><div><span>${ui.info}</span></div></div>` : ''}
         ${ui.err ? `<div class="set-row col"><div><span style="color:#ff6b6b">${ui.err}</span></div></div>` : ''}
-        <input type="file" id="acctRestoreFile" accept=".json,application/json" hidden>
+        <!-- v298：去掉 accept（部分 Android WebView 对 accept 会吞掉第一次文件选择），
+             用定位隐藏替代 hidden 属性，保证 input.click() 稳定拉起系统选择器 -->
+        <input type="file" id="acctRestoreFile" style="position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0">
       </div>`;
   }
 
