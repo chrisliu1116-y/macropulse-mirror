@@ -103,7 +103,13 @@
       if (!backupable(k) || typeof data[k] !== 'string') { skipped++; return; }
       try { localStorage.setItem(k, data[k]); n++; } catch (e) { skipped++; }
     });
-    ui.info = '还原完成：成功 ' + n + ' 项 / 跳过 ' + skipped + ' 项，刷新后生效';
+    ui.info = '还原完成：成功 ' + n + ' 项 / 跳过 ' + skipped + ' 项，正在自动刷新…';
+    /* v298【还原后自动刷新】此前只写「刷新后生效」，用户不手动清缓存/重进就看不到
+     * 还原回来的自选与设置。现在写完 localStorage 直接重载页面，
+     * 让 boot() 重新读设置、自选、监控池，全部立刻可见。 */
+    setTimeout(function () {
+      try { w.location.reload(); } catch (e) {}
+    }, 700);
     return { n, skipped };
   }
 
@@ -145,9 +151,9 @@
           return;
         }
         if (r.native) {
-          const shown = String(r.path || '').replace(/^Download\//, '手机存储/Download/');
-          ui.path = '位置：' + shown;
-          ui.info = '已导出 ' + r.count + ' 项到 ' + shown;
+          /* v298：只留「位置」一行（用户：下面那条重复的已导出提示不要） */
+          ui.path = '位置：' + String(r.path || '').replace(/^Download\//, '手机存储/Download/');
+          ui.info = '';
         } else {
           ui.path = '';
           ui.info = '已导出 ' + r.count + ' 项到浏览器下载目录（文件名 ' + r.fileName + '）';
