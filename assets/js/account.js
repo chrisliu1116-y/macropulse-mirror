@@ -59,8 +59,10 @@
       if (np && typeof np.saveBackup === 'function') {
         const path = np.saveBackup(fileName, text);
         if (path) return { count: payload.count, fileName: fileName, path: path, native: true };
+        /* 有桥但返回空 = 原生侧写入失败，明确报错（不回落到 blob 假下载） */
+        return { count: payload.count, fileName: fileName, failed: true };
       }
-    } catch (e) {}
+    } catch (e) { return { count: payload.count, fileName: fileName, failed: true }; }
     const u = w.URL || w.webkitURL;
     const blob = new Blob([text], { type: 'application/json' });
     const url = u.createObjectURL(blob);
@@ -135,6 +137,13 @@
     try {
       if (act === 'localbackup') {
         const r = localBackup();
+        /* v296【不许谎报成功】APP 内有原生桥但写入返回空（权限/系统限制）时，
+         * 明确报失败并给替代路径，不再说「已保存到下载目录」让用户找不到文件。 */
+        if (r.failed) {
+          ui.err = '保存失败：系统未写入文件（存储权限被限制或目录不可写）。请到 系统设置→应用→MACRO PULSE→权限 允许「文件和媒体」，再重试。';
+          refresh(btn.closest('#acctHost'));
+          return;
+        }
         if (r.native) {
           const shown = String(r.path || '').replace(/^Download\//, '手机存储/Download/');
           ui.path = '位置：' + shown;
