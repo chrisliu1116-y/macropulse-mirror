@@ -1860,11 +1860,14 @@
    *   ② 本轮很短          → 「5 分钟内迅速跳水 x%，当日跌幅已达 y%」
    *   ③ 跌幅主要在开盘跳空 → 「今日跳空低开 x%」（不许说「持续 N 分钟」）
    */
-  const magTx = (v, bp) => (bp == null
+  /* v290-rev：行情缺失时 chg/bp 可能 NaN，之前会渲染出「迅速跳水 NaN%」，兜底 -- */
+  const magTx = (v, bp) => (!isFinite(v) ? '--' : (bp == null
     ? Math.abs(v).toFixed(2) + '%'
-    : Math.abs(v).toFixed(1) + 'bp');
+    : Math.abs(v).toFixed(1) + 'bp'));
 
   const alarmWords = (r) => {
+    if (!r) return '异动';
+    if (!isFinite(r.chg) && !isFinite(r.bp) && !isFinite(r.dayPct)) return '异动待确认（行情暂缺）';
     /* v260：重复提醒状态机给出的精确标签（V 反 / 再下一台阶）优先，
      * 否则会被「近 N 分钟持续下跌」这类通用文案盖掉，用户看不出是升级报警。 */
     if (r.alertLabel) return r.alertLabel;
@@ -4149,37 +4152,34 @@
           <button class="mini-btn" id="btnTestNotify">测试</button></div>
         <div class="set-row"><div><b>5 秒后测试后台通知</b><span>点完立刻切到后台或锁屏。5 秒后应响铃 + 震动 + 通知栏；计时在 APP 原生层，不受网页定时器冻结影响。没响＝后台进程被系统冻结，去「后台防杀」设为无限制</span></div>
           <button class="mini-btn" id="btnTestDelayed">5 秒</button></div>
-        <div class="set-row"><div><b>后台防杀</b><span>跳转系统电池优化，把本 APP 设为「无限制」避免后台被清理</span></div>
+        <div class="set-row"><div><b>后台防杀</b></div>
           <button class="mini-btn" id="btnBattery">去设置</button></div>
       </div>
 
       <div class="set-card">
         <div class="set-card-h">浮窗盯盘（安卓）</div>
-        <div class="set-row"><div><b>悬浮窗盯盘</b><span>桌面悬浮气泡显示盯盘股票涨跌，点气泡展开列表；APP 全屏时自动隐藏。需授予「显示在其他应用上层」权限</span></div>
+        <div class="set-row"><div><b>悬浮窗盯盘</b></div>
           <button class="mini-btn" id="fwGear" title="打开浮窗设置">⚙ 设置</button>
           <button class="sw ${fw.on ? 'on' : ''}" id="swFloat"><i></i></button></div>
-        ${(!fwPerm) ? `<div class="set-row"><div><b>悬浮窗权限</b><span>未授权时气泡不会显示</span></div>
+        ${(!fwPerm) ? `<div class="set-row"><div><b>悬浮窗权限</b></div>
           <button class="mini-btn" id="fwPerm">去授权</button></div>` : ''}
-        <div class="set-row"><div><b>盯盘股票与展示时间</b><span>添加 / 删除 / 排序 / 交易时段都在浮窗设置里。点上面的 <b>⚙ 设置</b> 随时进入 —— 设了交易时段后，非交易时间浮窗会隐藏，气泡点不到，但这里始终能进</span></div></div>
       </div>
 
       <div class="set-card">
-        <div class="set-row"><div><b>只跑平台标红</b><span>只显示各平台自己筛过的稿子：财联社加红 / 见闻 score≥2 / 金十重要 / 东财标红 / 财联社深度精选。关掉即恢复全量；「全部」档始终是全量，方便回查被筛掉了什么</span></div>
+        <div class="set-row"><div><b>只跑平台标红</b></div>
           <button class="sw ${S.redOnly ? 'on' : ''}" data-sw="red"><i></i></button></div>
       </div>
 
       <div class="set-card">
-        <div class="set-row"><div><b>标级纠错</b><span>长按快讯卡片可改级纠错</span></div>
+        <div class="set-row"><div><b>标级纠错</b></div>
           <em class="fix-n${fixStore.list.length ? ' on' : ''}">${fixStore.list.length} 条</em></div>
-        <div class="set-row"><div><b>纠错单</b><span>${fixStore.list.length
-          ? '攒够一批再点「复制」，一次性粘给 AI —— 它会按这批样本改规则、记台账、补回归用例。'
-          : '还没有改判记录。遇到判错的长按卡片改一次，就会出现在这里；攒一批再一起复制。'}</span></div>
+        <div class="set-row"><div><b>纠错单</b></div>
           <span class="fix-btns"><button class="mini-btn" id="fixCopy"${fixStore.list.length ? '' : ' disabled'}>复制修复指令</button></span></div>
         ${fixStore.list.length ? `<div class="set-row col"><div class="fix-prev">${fixStore.list.slice(0, 8).map(x =>
           `<div class="fix-prev-i"><b>${esc(x.to)}←${esc(x.from)}</b><span>${esc(String(x.title || '').slice(0, 44))}</span>`
           + `<i>${esc(x.reason || '未填原因')}</i></div>`
         ).join('')}${fixStore.list.length > 8 ? `<div class="fix-prev-i more">…另有 ${fixStore.list.length - 8} 条</div>` : ''}</div></div>` : ''}
-        <div class="set-row"><div><b>清空纠错单</b><span>回传并写入规则之后再清，否则这批样本就丢了</span></div>
+        <div class="set-row"><div><b>清空纠错单</b></div>
           <button class="mini-btn danger" id="fixClear"${fixStore.list.length ? '' : ' disabled'}>清空</button></div>
       </div>
 
@@ -4190,7 +4190,7 @@
             <button data-mxm="color" class="${S.mxMode === 'color' ? 'on' : ''}">按颜色</button>
           </div></div>
         <div class="set-row col">
-          <div><b>监控池与实际阈值</b><span>阈值<b>按每个品种自己的波动率分六个时间尺度单独标定</b>：1 / 2 / 3 / 5 / 15 / 30 分钟窗口并联，任一越线即报警。<b>为什么最快的三档是 1~3 分钟</b>——闪崩和垂直拉升的真实时间常数就是几十秒到两三分钟，等 30 分钟窗口走完只能事后复述。5/15/30 分钟阈值由 TradingView 真实 5 分钟 K 线（A股 106 个交易日、其余 19~28 个）按「触发日占比」反解（5% / 4.5% / 4%）；1/2/3 分钟用近 5 个交易日真实 1 分钟数据量出「等稀有度比例」（r1=0.66 / r2=0.78 / r3=0.88 · t5），严格单调递增；分类下限 floor 对 1~3 分钟按自身标定等比缩放，不再垫高外汇等低波品种。<b>阈值会自己漂移</b>——页面每 20 秒把当日窗口极值写进本地波动率库，跨天累积后与静态标定值按样本量加权；样本 ≥15 日还会做「近 15 日 0.7 + 全量 0.3」双窗口融合，平静期收紧、高波日放宽（双向 ±15%），40 个交易日后以实盘分布为主（仍受标定值 0.6~2.0 倍夹紧，防脏数据打穿）。<b>重复提醒只认瞬时脉冲</b>——首次报警后：横盘磨洋工绝不重报（15/30 长窗残留、冷却到期、阶梯跨档都不例外）；反向短窗脉冲立即破锁，报「快速反弹 / 高台跳水」；同向再下一台阶（当日幅度比上次再扩大 1 个 5 分钟阈值，或距上次超 15 分钟后短窗独立再越线）立即升级，报「跌幅 / 涨幅已扩大至 X%」。当日累计幅度跨 1.0 / 1.8 / 2.6 / 3.5 倍当日阈值时逐档升级并豁免冷却。</span></div>
+          <div><b>监控池与实际阈值</b></div>
           <div class="pool-list">${U.RADAR.map(r => {
             const st = radar && radar.state && radar.state[r.k];
             const live = st ? st.thr : null;
@@ -4264,10 +4264,7 @@
       <div class="set-card">
         <div class="set-row"><div><b>清空本地偏好</b><span>行情自选、阈值、提醒开关全部恢复默认</span></div>
           <button class="mini-btn danger" id="resetAll">重置</button></div>
-        <div class="set-row col"><div><b>口径说明</b>
-          <span>行情为真实数据（东财 / 腾讯 / 新浪 / CNBC / 币安），非交易时段显示最后成交价并标注「休市」，加密另给链上池子价。快讯由金十 / 华尔街见闻 / 财联社 / 财联社深度 / 格隆汇 / 同花顺 / 东方财富 / 新浪 / 口罩哥KZG / 川普言论 十源聚合，跨源去重后统一分级打标；全部使用源站真实时间戳，抓不到的源直接标失败，不用相对时间凑数。</span></div></div>
-        <div class="set-row col"><div><b>免责声明</b>
-          <span>本终端仅做信息聚合与可视化，不构成任何投资建议。行情可能延迟，交易决策请以券商/交易所数据为准。</span></div></div>
+
       </div>
 
       <div id="acctHost"></div>
@@ -4958,9 +4955,63 @@
     return `<button class="ns-src-link ${cls || ''}" data-open="${esc(url)}">${esc(label)}</button>`;
   }
 
+  /* ---------------- 天然气实时价（异步桥 · 仅详情页触发 · 不进主刷新链） ----------------
+   * 背景：新浪 hf_NG 连续是远月口径（3.678），比主力高 13%；
+   * hf_NG<YYMM>（带年月合约）才是主力实时价（hf_NG2612 = 3.266，实测在跳）。
+   * 卡死教训：此前把 4 次同步 nativeFetch 塞进 batchQuote 主链 → JS 主线程卡死。
+   * 现在：只在打开天然气详情页时调一次 ngQuoteAsync（Java 后台线程 + 回调），
+   * 15 分钟缓存，失败静默用东财主力价，绝不阻塞渲染。 */
+  let _ngLive = null;
+  function ngSymNow() {
+    const d = new Date();
+    const m = new Date(d.getFullYear(), d.getMonth() + 1, 1);   // 主力一般是次月合约
+    return 'NG' + String(m.getFullYear()).slice(2) + ('0' + (m.getMonth() + 1)).slice(-2);
+  }
+  function ngRealtimeOnce() {
+    const np = w.NativePulse;
+    if (!np || typeof np.ngQuoteAsync !== 'function') return;
+    if (_ngLive && Date.now() - _ngLive.at < 15 * 60 * 1000) { applyNgLive(); return; }
+    try { np.ngQuoteAsync(ngSymNow()); } catch (e) {}
+  }
+  window.__ngQuoteCb = function (sym, text) {
+    try {
+      const m = /="([^"]*)"/.exec(text || '');
+      if (!m || !m[1]) return;
+      const f = m[1].split(',');
+      const price = +f[0], prev = +f[7];
+      if (!(price > 0)) return;
+      _ngLive = {
+        sym: sym, price: price, prev: prev,
+        pct: prev > 0 ? (price - prev) / prev * 100 : 0,
+        at: Date.now()
+      };
+      applyNgLive();
+    } catch (e) {}
+  };
+  function applyNgLive() {
+    if (S.sheetKey !== 'NG' || !_ngLive) return;
+    try {
+      const lg = $('#shLegend');
+      if (!lg) return;
+      lg.querySelectorAll('.lg-item').forEach(it => {
+        const b = it.querySelector('b');
+        const txt = it.textContent || '';
+        if (b && /^价/.test(txt)) {
+          b.textContent = _ngLive.price.toFixed(3);
+          b.className = _ngLive.pct >= 0 ? 'up' : 'down';
+        } else if (/^全天/.test(txt)) {
+          it.textContent = '全天 ' + (_ngLive.pct >= 0 ? '+' : '') + _ngLive.pct.toFixed(2) + '%';
+          it.className = 'lg-item ' + (_ngLive.pct >= 0 ? 'up' : 'down');
+        }
+      });
+    } catch (e) {}
+  }
+
   function openSheet(key) {
     if (!U.get(key)) return;
     S.sheetKey = key;
+    /* v290-rev：打开天然气详情页时异步拉一次带年月合约的实时价（不阻塞） */
+    if (key === 'NG') { try { ngRealtimeOnce(); } catch (e) {} }
     S.sheetMode = 'min';
     const a = U.get(key);
     const g = U.grp(key);
@@ -8533,6 +8584,6 @@
     });
   }
 
-  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', () => { boot(); initEffectBar(); });
-  else { boot(); initEffectBar(); }
+  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', () => { boot(); initEffectBar(); try { w.MPAccount && w.MPAccount.autoSync && w.MPAccount.autoSync(); } catch (e) {} });
+  else { boot(); initEffectBar(); try { w.MPAccount && w.MPAccount.autoSync && w.MPAccount.autoSync(); } catch (e) {} }
 })(window, document);

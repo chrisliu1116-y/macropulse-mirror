@@ -251,15 +251,27 @@
     if (!S.B || !S.axis) return false;
     var oldLast = S.B.dates[S.B.dates.length - 1];
     if (b.dates[b.dates.length - 1] <= oldLast) return false;
+    /* v292【右端跟随 · 用户核心诉求】此前只按日期保持视窗：
+     * 数据更新（本地旧 8816 → 远端新 8818）后，视窗仍停在旧日期（11-10），
+     * 用户必须手动往右拖才能看到最新（11-12）。
+     * 现在：若更新前视窗右端就贴着旧轴末尾（用户在看最新），
+     * 新数据进来后整窗右移到新末尾；若用户已拖到历史中间，按日期保持原位。 */
+    var wasAtEnd = S.to >= S.axis.length - 1 - 0.5;
+    var span = S.to - S.from;
     var fromDate = S.axis[Math.max(0, Math.min(S.axis.length - 1, Math.round(S.from)))];
     var toDate = S.axis[Math.max(0, Math.min(S.axis.length - 1, Math.round(S.to)))];
     S.B = b;
     S.bIndex = new Map();
     for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
     buildAxis();
-    var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
-    S.from = nf >= 0 ? Math.min(nf, S.axis.length - 1) : 0;
-    S.to = nt >= 0 ? Math.max(S.from, Math.min(nt, S.axis.length - 1)) : S.axis.length - 1;
+    if (wasAtEnd) {
+      S.to = S.axis.length - 1;
+      S.from = Math.max(0, S.to - span);
+    } else {
+      var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
+      S.from = nf >= 0 ? Math.min(nf, S.axis.length - 1) : 0;
+      S.to = nt >= 0 ? Math.max(S.from, Math.min(nt, S.axis.length - 1)) : S.axis.length - 1;
+    }
     $('upd').textContent = '全A股 · ' + updText(b);
     $('ft').textContent = footText();
     if (isFresh(b)) $('dot').classList.remove('old');
@@ -1155,6 +1167,18 @@
   }
 
   /* ============ 启动 ============ */
+  /* 只读调试句柄：验证进入时视窗是否在最右最新 */
+  window.__breadthView = function () {
+    return {
+      from: S.from, to: S.to, n: S.axis ? S.axis.length : 0,
+      lastDate: S.axis ? S.axis[S.axis.length - 1] : null,
+      compare: S.compare, embed: document.body.classList.contains('embed'),
+      docScrollH: document.documentElement.scrollHeight,
+      docClientH: document.documentElement.clientHeight,
+      bodyOverflow: getComputedStyle(document.body).overflow
+    };
+  };
+
   function boot() {
     bindFullscreen();
     if (/embed=1/.test(location.search)) document.body.classList.add('embed');

@@ -131,17 +131,43 @@
       count: Object.keys(data).length,
       data: data
     };
+    const text = JSON.stringify(payload, null, 2);
+    const fileName = 'macropulse-backup-' + backupDate() + '.json';
+    /* v290-rev【APP 内走原生落盘】Blob + a[download] 在 WebView 里掉进缓存，
+     * 用户看不到路径也没法还原。改由 MainActivity.saveBackup 写到公共
+     * Download/MacroPulse/ 并回显路径；浏览器（无桥）仍用下载。
+     * 注意：同步桥只在用户点按钮时调用一次，不在任何轮询里，不会卡界面。 */
+    try {
+      const np = w.NativePulse;
+      if (np && typeof np.saveBackup === 'function') {
+        const path = np.saveBackup(fileName, text);
+        if (path) return { count: payload.count, fileName: fileName, path: path, native: true };
+      }
+    } catch (e) {}
     const u = w.URL || w.webkitURL;
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const blob = new Blob([text], { type: 'application/json' });
     const url = u.createObjectURL(blob);
     const a = d.createElement('a');
     a.href = url;
-    a.download = 'macropulse-backup-' + backupDate() + '.json';
+    a.download = fileName;
     d.body.appendChild(a);
     a.click();
     d.body.removeChild(a);
     setTimeout(() => { try { u.revokeObjectURL(url); } catch (e) {} }, 1000);
-    return { count: payload.count, fileName: a.download };
+    return { count: payload.count, fileName: fileName };
+  }
+
+  /* v290-rev：找最近一次本地备份（APP 内）；无桥/无文件返回 null 走文件选择器 */
+  function latestLocalBackup() {
+    try {
+      const np = w.NativePulse;
+      if (!np || typeof np.latestBackup !== 'function') return null;
+      const raw = np.latestBackup();
+      if (!raw) return null;
+      const j = JSON.parse(raw);
+      if (!j || !j.ok || !j.data) return null;
+      return { path: j.path || j.name || '最新备份', data: j.data };
+    } catch (e) { return null; }
   }
 
   /* 还原：先完整校验，全部通过后才逐键回写；只 setItem，绝不 clear /
@@ -607,11 +633,9 @@
         <div class="set-card-h">账号</div>
         <div class="set-row"><div><b>已登录：${esc(user.account || '')}</b></div>
           <button class="mini-btn" data-act="out">退出</button></div>
-        <div class="acct-btns">
-          <button class="acct-main" data-act="synccred">同步账号凭据到 WorkBuddy 云账号</button>
-          <button class="acct-main ghost" data-act="pull">恢复设置（云端）</button>
-          <button class="acct-main ghost" data-act="push">备份本机设置（云端）</button>
-        </div>
+        /* v292【自动同步】云备份/恢复改为全自动（登录态：启动静默拉 + 每 5 分钟推），
+         * 不再需要手动按钮（用户口径：还要手动点就没必要有这个功能）。 */
+        <div class="acct-note">云端自动同步已开启：登录状态下启动时自动恢复、此后每 5 分钟自动备份；本地文件备份/还原仍是主保底手段。</div>
         ${ui.err ? `<div class="acct-err">${esc(ui.err)}</div>` : ''}
         ${ui.info ? `<div class="acct-ok">${esc(ui.info)}</div>` : ''}
         ${localBackupBlock()}
@@ -682,10 +706,19 @@
         if (act === 'push') { await push(); renderCard(host); return; }
         if (act === 'localbackup') {
           const r = localBackup();
-          ui.info = '已导出 ' + r.count + ' 项设置到 ' + r.fileName;
+          ui.info = '已导出 ' + r.count + ' 项设置到 ' + (r.path || r.fileName)
+            + (r.native ? '' : '（浏览器下载目录）');
+          cloudNotify('备份已保存：' + (r.path || r.fileName));
           renderCard(host); return;
         }
         if (act === 'localrestore') {
+          /* v290-rev：APP 内先找最近一次备份直接还原；找不到再弹系统文件选择器 */
+          const latest = latestLocalBackup();
+          if (latest) {
+            if (!w.confirm('从 ' + latest.path + ' 还原设置？现有设置会被覆盖（凭据不受影响）')) return;
+            applyLocalRestore(latest.data);
+            return;
+          }
           const input = host.querySelector('#acctRestoreFile');
           if (input) input.click();
           return;
@@ -733,7 +766,19 @@
     ui.info = '本机已无 GitHub 连接（历史密钥缓存已清理）；备份通道保持停用';
   }
 
+  /* v292【自动同步】登录态：启动时静默 pull（云端有备份才恢复，不覆盖较新本机）；
+   * 此后每 5 分钟自动 push。任何失败静默，不打扰用户。 */
+  function autoSync() {
+    if (!loggedUser()) return;
+    try { pull(true).catch(function () {}); } catch (e) {}
+    setInterval(function () {
+      if (!loggedUser()) return;
+      try { push().catch(function () {}); } catch (e) {}
+    }, 5 * 60 * 1000);
+  }
+
   w.MPAccount = {
+    autoSync,
     cardHTML, renderCard, bindCard,
     async refresh(root) { renderCard(root); bindCard(root); },
     status: () => !!loggedUser(),

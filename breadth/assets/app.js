@@ -108,9 +108,11 @@
    * 若让同源抢跑，明天起主站宽度页会一直显示发版那天的旧数据。
    * 所以：三个远端全并发（数据一定是新的），同源延后 700ms 只做全挂兜底。
    * 加速来自「并发 + jsDelivr 跑批后 purge」，不靠牺牲数据新鲜度。 */
+  /* v290-rev：jsDelivr 提到首位（跑批完成后 workflow 主动 purge，国内可达）；
+   * raw 在国内手机常年取不到，放第二；镜像与本地副本只做全挂兜底。 */
   var DATA_SOURCES = [
-    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json',
     'data/breadth.json'
   ];
@@ -282,6 +284,17 @@
     if (meta) meta.setAttribute('content', on ? '#eef2f7' : '#070a0f');
     if (S.d) draw();      // 图表是 canvas，换了主题要重画
   }
+
+  /* 只读调试句柄：无头浏览器验证「进入时视窗是否在最右最新」用 */
+  window.__breadthView = function () {
+    return {
+      from: S.from, to: S.to, n: S.d ? S.d.dates.length : 0,
+      lastDate: S.d ? S.d.dates[S.d.dates.length - 1] : null,
+      userMoved: S.userMoved,
+      docScrollH: document.documentElement.scrollHeight,
+      docClientH: document.documentElement.clientHeight
+    };
+  };
 
   function boot() {
     bindFullscreen();
