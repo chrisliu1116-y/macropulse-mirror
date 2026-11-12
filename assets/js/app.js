@@ -5134,7 +5134,19 @@
      * 于是「这一场压根没取到盘前数据」也照样亮着一个点了没反应的「盘前分时」。 */
     const dataOk = !chart || chart.extAvailable === true;
     const hasExt = !!(a && a.tv && (isUS || isKr) && dataOk);
-    const show = S.sheetMode === 'min' && hasExt;
+    /* v296【用户口径：延展开关只在延展时段出现】
+     *   · 盘中（reg）—— 完全不出这个按钮（盘中就是普通分时）
+     *   · 盘前（pre）—— 显示「盘前分时」，持续到开盘
+     *   · 盘后（post）—— 显示「盘后分时」，持续到次日盘前开始
+     * 此前「除盘前外一律显示盘后分时」，盘中会出现一个写着盘后分时、
+     * 点开却是盘前数据的按钮，用户已两次指出。 */
+    const phaseNow = (() => {
+      try {
+        const st0 = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
+        return (st0 && st0.phase) || '';
+      } catch (e) { return ''; }
+    })();
+    const show = S.sheetMode === 'min' && hasExt && (phaseNow === 'pre' || phaseNow === 'post');
     bar.hidden = !show;
     const note = $('#shMinNote');
     if (note) {
@@ -5154,12 +5166,8 @@
       note.hidden = !text;
     }
     if (!show) return;
-    /* v294-rev【用户口径的生命周期】按钮文案按美东当前时段三态切换：
-     * 盘前开始（04:00 ET）→「盘前分时」，持续到开盘；开盘 →「常规分时」；
-     * 收盘（16:00 ET）→「盘后分时」，持续到次日盘前开始。 */
-    const st = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
-    const secLabel = (st && st.phase === 'pre') ? '盘前分时'
-      : (st && st.phase === 'reg') ? '常规分时' : '盘后分时';
+    /* v296：按钮只在盘前 / 盘后出现，文案与当前时段严格一致 */
+    const secLabel = (phaseNow === 'pre') ? '盘前分时' : '盘后分时';
     const secBtn = bar.querySelector('button[data-x="1"]');
     if (secBtn) secBtn.textContent = secLabel;
     const on = effMinExt();
@@ -8500,6 +8508,6 @@
     });
   }
 
-  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', () => { boot(); initEffectBar(); try { w.MPAccount && w.MPAccount.autoSync && w.MPAccount.autoSync(); } catch (e) {} });
-  else { boot(); initEffectBar(); try { w.MPAccount && w.MPAccount.autoSync && w.MPAccount.autoSync(); } catch (e) {} }
+  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', () => { boot(); initEffectBar(); });
+  else { boot(); initEffectBar(); }
 })(window, document);
