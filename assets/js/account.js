@@ -336,6 +336,15 @@
     };
     ui.otp.sent = true;
   }
+  /* v294-rev【注册死结根修】BaaS 的 SignUpRequest.Password 校验 ^.{4,60}$，
+   * 而 PBKDF2 原串「pbkdf2$150000$salt$hash」含 $ 且 >60 位必被拒 ——
+   * 用户连注 3 次全败于此。派生函数：去掉非字母数字取前 48 位（确定性、
+   * 注册与登录共用同一函数），仍不含明文。 */
+  function baasPassword(cred) {
+    const s = String((cred && cred.pwd_hash) || '').replace(/[^A-Za-z0-9]/g, '');
+    return (s.slice(0, 48) || 'mp0');
+  }
+
   async function otpVerifyAndSignup(token, pwdHash) {
     const p = ui.otp.pending;
     if (!p) throw new Error('请先点击「获取验证码」');
@@ -372,7 +381,7 @@
     return await session();
   }
   async function wbSaveCred(cred) {
-    await wbEnsureSession(cred.wbId, cred.wbKind, cred.pwd_hash);
+    await wbEnsureSession(cred.wbId, cred.wbKind, baasPassword(cred));
     const row = await fetchRow();
     const data = Object.assign({}, snapshot(), { [CRED_KEY]: cred });
     if (row) {
@@ -519,7 +528,7 @@
       const p = ui.otp.pending;
       cred.wbId = p.wbId; cred.wbKind = p.wbKind;   // 与发码身份一致，保证后续 signInWithPassword 命中同一账号
       try {
-        await withTimeout(otpVerifyAndSignup(otpToken, cred.pwd_hash), WB_TIMEOUT, '验证码校验');
+        await withTimeout(otpVerifyAndSignup(otpToken, baasPassword(cred)), WB_TIMEOUT, '验证码校验');
         otpNote = 'WorkBuddy 账号已通过一次性验证码建立，之后登录（含换设备）永不需验证码';
       } catch (e) {
         otpNote = 'WorkBuddy 一次性验证码未完成（' + errMsg(e) + '），主通道会话可能未建立，可稍后重试';
@@ -552,7 +561,7 @@
      * best-effort，失败不影响登录（登录态来自本机标记）。 */
     /* v294-rev【提速】会话重建与云端恢复原来串行（最坏 8s+8s+8s）；
      * 现在并行跑，登录反馈从最坏 ~24s 缩到 ~8s。 */
-    const sessP = withTimeout(wbEnsureSession(r.cred.wbId, r.cred.wbKind, r.cred.pwd_hash), WB_TIMEOUT, 'WorkBuddy 主通道')
+    const sessP = withTimeout(wbEnsureSession(r.cred.wbId, r.cred.wbKind, baasPassword(r.cred)), WB_TIMEOUT, 'WorkBuddy 主通道')
       .then(() => { ui.primaryOk = true; ui.primary = '✓ 会话已重建（无需验证码） · ' + now(); })
       .catch((e) => { ui.primaryOk = false; ui.primary = '✗ 会话未重建：' + errMsg(e) + ' · ' + now(); });
     const pullP = pull(true).catch(function () {});
@@ -706,7 +715,7 @@
           const r = localBackup();
           ui.info = '已导出 ' + r.count + ' 项设置到 ' + (r.path || r.fileName)
             + (r.native ? '' : '（浏览器下载目录）');
-          cloudNotify('备份已保存：' + (r.path || r.fileName));
+          cloudNotify('备份已保存到：手机存储/Download/MacroPulse/' + (r.path ? r.path.split('/').pop() : r.fileName));
           renderCard(host); return;
         }
         if (act === 'localrestore') {

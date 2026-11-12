@@ -5154,9 +5154,12 @@
       note.hidden = !text;
     }
     if (!show) return;
-    // 按钮文案随时段切换：盘前时段显示「盘前分时」，其余（盘后 / 常规）显示「盘后分时」
+    /* v294-rev【用户口径的生命周期】按钮文案按美东当前时段三态切换：
+     * 盘前开始（04:00 ET）→「盘前分时」，持续到开盘；开盘 →「常规分时」；
+     * 收盘（16:00 ET）→「盘后分时」，持续到次日盘前开始。 */
     const st = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
-    const secLabel = (st && st.phase === 'pre') ? '盘前分时' : '盘后分时';
+    const secLabel = (st && st.phase === 'pre') ? '盘前分时'
+      : (st && st.phase === 'reg') ? '常规分时' : '盘后分时';
     const secBtn = bar.querySelector('button[data-x="1"]');
     if (secBtn) secBtn.textContent = secLabel;
     const on = effMinExt();

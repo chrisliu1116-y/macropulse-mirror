@@ -441,6 +441,17 @@
         if (e.phase && e.phase !== L.seg) return;   // 时段变了（盘前→盘中），别混着画
         px = e.price;
       }
+      /* v294-rev【美债竖线修复】常规时段内，快照价与分钟线尾点价差超过品类阈值
+       * 判为坏 tick（东财快照与分钟线不同步），丢弃本轮不续 —— 绝不把 90 度直线
+       * 画上分时图。延展段（盘前/盘后）不过滤：财报盘后 ±5% 是真实波动。 */
+      const last0 = L.arr[L.arr.length - 1];
+      if (last0 && isFinite(last0.close) && last0.close > 0
+        && (!L.seg || L.seg === 'reg')) {
+        const _g = (U && U.grp) ? U.grp(L.key) : '';
+        const jumpLim = (_g === 'fx' || _g === 'rate') ? 0.003
+          : (_g === 'crypto') ? 0.05 : 0.02;
+        if (Math.abs(px - last0.close) / last0.close > jumpLim) return;
+      }
       const nowMin = Math.floor((Date.now() + 8 * 3600e3) / 60000) * 60;
       const last = L.arr[L.arr.length - 1];
       if (!last || !isFinite(last.close)) return;
