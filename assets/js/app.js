@@ -3597,6 +3597,51 @@
     return String(s == null ? '' : s).replace(/\\u([0-9a-fA-F]{4})/g,
       (m, hex) => String.fromCharCode(parseInt(hex, 16)));
   }
+  /* v301【第 4 路搜索源 · Yahoo】smartbox 实测完全不覆盖日股/韩股/台股个股
+   * （搜 7203 只返回基金、三星只返回中国三星系、2330 只返回 A股 002330），
+   * 用户点名要求打通。Yahoo search 覆盖全球：把「7203.T / 005930.KS / 2330.TW /
+   * ES=F / ^GSPC」映射回我们的 code 与分组；APP 内走 nativeFetch 直连（最快），
+   * 浏览器走 proxyFetch（同源失败自动切 Worker）。单次请求，不做同源双打。 */
+  function yahooSug(q, cb) {
+    const url = 'https://query1.finance.yahoo.com/v1/finance/search?q='
+      + encodeURIComponent(q) + '&quotesCount=10&newsCount=0&listsCount=0';
+    const parse = (txt) => {
+      const out = [];
+      try {
+        const d = JSON.parse(txt);
+        (d.quotes || []).forEach(x => {
+          const sym = String(x.symbol || '');
+          if (!sym) return;
+          let code = sym, grp = '', type = '全球', yy = sym;
+          let m;
+          if ((m = /^(\d{4})\.T$/.exec(sym))) { code = m[1]; grp = 'jpstock'; type = '日股'; }
+          else if ((m = /^(\d{6})\.KS$/.exec(sym))) { code = m[1]; grp = 'krstock'; type = '韩股'; }
+          else if ((m = /^(\d{4})\.TW$/.exec(sym))) { code = m[1]; grp = 'twstock'; type = '台股'; }
+          else if ((m = /^(\d{4,5})\.HK$/.exec(sym))) { code = m[1].padStart(5, '0'); grp = 'hkstock'; type = '港股'; }
+          else if ((m = /^([A-Z0-9]{1,6})=F$/.exec(sym))) { code = m[1]; grp = 'glbfut'; type = '期货'; }
+          else if (/^\^/.test(sym)) { type = '指数'; }
+          else if (/^\d{6}\.(SS|SZ)$/.test(sym)) { code = sym.slice(0, 6); grp = 'cnstock'; type = 'A股'; }
+          else if (/^[A-Za-z.\-]{1,8}$/.test(sym)) { grp = 'usstock'; type = '美股'; }
+          else return;
+          out.push({ code: code, name: x.shortname || x.longname || sym, secid: '', type: type, yh: yy, grp: grp });
+        });
+      } catch (e) { /* 解析失败给空 */ }
+      cb(out);
+    };
+    try {
+      const np = w.NativePulse;
+      if (np && typeof np.nativeFetch === 'function') {
+        parse(np.nativeFetch(url));
+        return;
+      }
+    } catch (e) { /* 落浏览器路径 */ }
+    if (typeof proxyFetch === 'function') {
+      proxyFetch(url).then(r => r.text()).then(parse).catch(() => cb([]));
+      return;
+    }
+    fetch(url).then(r => r.text()).then(parse).catch(() => cb([]));
+  }
+
   function smartboxSug(q, cb) {
     /* v275：APP 壳内走原生 Java 直连（GBK 已在 Java 侧解码）——
      * WebView 的 script 标签对该域名零响应（SCRIPT ERROR 无 HTTP 响应），
@@ -3663,6 +3708,8 @@
   /* 只读测试句柄：验证全市场中文名 Unicode 解码，不参与业务状态。 */
   w.__decodeBoxText = decodeBoxText;
   w.__parseBox = parseBox;
+  /* v300：只读测试句柄（全链路覆盖测试用，不参与业务） */
+  w.__sugList = sugList;
   /* 沪深 ETF 名录（中文名搜索用）。按成交额降序 top300，60 分钟缓存。 */
   let _etfCN = null, _etfCNAt = 0;
   function etfCNSug(q, cb) {
@@ -3760,11 +3807,13 @@
      * （007709→07709 南方东英SK海力士2x）。补查结果排在前；公募基金已被
      * parseBox / emSearchSug 的 jj~ / 150. 过滤排除，不会混进来。 */
     const q2 = /^0\d{5}$/.test(q) ? q.replace(/^0+/, '') : null;
-    let box = null, cn = null, em = null, box2 = null, em2 = null, left = q2 ? 5 : 3, fin = false;
+    let box = null, cn = null, em = null, box2 = null, em2 = null, yh = null, left = q2 ? 6 : 4, fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
-      (box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
-        if (!x || !x.secid || x.secid.indexOf('.') < 0 || seen[x.code]) return;
+      /* v301：Yahoo 结果没有东财 secid（只有 yh 符号），不能按旧条件过滤掉 */
+      (yh || []).concat(box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
+        if (!x || !x.code || seen[x.code]) return;
+        if (!x.yh && (!x.secid || x.secid.indexOf('.') < 0)) return;
         seen[x.code] = 1; out.push(x);
       });
       cb(out);
@@ -3774,6 +3823,7 @@
     smartboxSug(q, h => { box = parseBox(h); done(); });
     etfCNSug(q, rows => { cn = rows; done(); });
     emSearchSug(q, rows => { em = rows; done(); });
+    yahooSug(q, rows => { yh = rows; done(); });
     if (q2) {
       smartboxSug(q2, h => { box2 = parseBox(h); done(); });
       emSearchSug(q2, rows => { em2 = rows; done(); });

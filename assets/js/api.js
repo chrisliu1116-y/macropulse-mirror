@@ -57,6 +57,24 @@
 
   /* ---------------- 基础工具 ---------------- */
 
+  /* v301【代理双通道】线上静态托管没有 server.py，同源 /__proxy 恒 404；
+   * 这里统一封装：先试同源，失败再试 Cloudflare Worker 的 /__proxy。
+   * Worker 已加同路由（白名单放行行情源），两条路任一可用即可。 */
+  const WORKER_BASE = 'https://macropulse-edge.mp-7962af18.workers.dev';
+  async function proxyFetch(target, opts) {
+    const q = encodeURIComponent(target);
+    const o = Object.assign({ cache: 'no-store' }, opts || {});
+    let firstErr = null;
+    try {
+      const r = await fetch('/__proxy?u=' + q, o);
+      if (r.ok) return r;
+      firstErr = new Error('same-origin HTTP ' + r.status);
+    } catch (e) { firstErr = e; }
+    const r2 = await fetch(WORKER_BASE + '/__proxy?u=' + q, o);
+    if (r2.ok) return r2;
+    throw firstErr || new Error('proxy HTTP ' + r2.status);
+  }
+
   async function getJSON(url, ttl, tag) {
     const hit = cache.get(url);
     const now = Date.now();
@@ -101,7 +119,7 @@
     /* 直连两个域名都挂 → 让服务端再试一次（出口 IP 不同，能绕开对客户端的限流） */
     if (typeof location !== 'undefined' && location.protocol !== 'file:') {
       try {
-        const r = await fetch('/__proxy?u=' + encodeURIComponent(EM_HIS_HOSTS[0] + pathQuery), { cache: 'no-store' });
+        const r = await proxyFetch(EM_HIS_HOSTS[0] + pathQuery);
         if (r.ok) {
           const d = await r.json();
           if (d && d.data) { status.emHis = 'ok-proxy'; return d; }
@@ -1631,7 +1649,7 @@
       + '&timeframe=minute&count=700&requestType=0';
     let txt = '';
     try {
-      const r = await fetch('/__proxy?u=' + encodeURIComponent(target), { cache: 'no-store' });
+      const r = await proxyFetch(target);
       if (r.ok) {
         const t = await r.text();
         if (t && t.indexOf('data="') >= 0) txt = t;
@@ -2052,6 +2070,39 @@
    * Yahoo 的 range 也从 1y/5y/10y 改成 max。 */
   const LIMIT = { d: 9000, w: 3000, m: 1500 };
 
+  /* v301【全品种 Yahoo 兜底 · 东财被封/无历史时】把 universe key 映射成 Yahoo 符号。
+   * 实测本机东财全线被掐后，Yahoo chart 对 A股/港股/美股/日股/韩股/台股/指数/外汇/
+   * 美债收益率/商品/海外期指全部可用 —— 这是「任何源失败自动换源」的核心备用路。 */
+  function yahooSymbolFor(key, a) {
+    if (a && a.yh) return a.yh;
+    if (a && a.sym && a.src === 'yahoo') return a.sym;
+    const k = String(key || '');
+    /* 显式映射表（指数/外汇/美债/商品/期指） */
+    const MAP = {
+      SPX: '^GSPC', IXIC: '^IXIC', DJI: '^DJI', HSI: '^HSI', N225: '^N225', KOSPI: '^KS11', TWSE: '^TWII',
+      USDCNH: 'CNH=X', USDJPY: 'JPY=X', EURUSD: 'EURUSD=X', DXY: 'DX-Y.NYB',
+      US10Y: '^TNX', US30Y: '^TYX', US5Y: '^FVX', US2Y: '^IRX',
+      WTI: 'CL=F', BRENT: 'BZ=F', GOLD: 'GC=F', SILVER: 'SI=F', COPPER: 'HG=F', NG: 'NG=F',
+      ES: 'ES=F', NQ: 'NQ=F', YM: 'YM=F', NK: 'NKD=F', A50: 'XIN9.FGI',
+      IF: null, IH: null, IC: null, IM: null, TL: null, T: null, TF: null, TS: null
+    };
+    if (Object.prototype.hasOwnProperty.call(MAP, k)) return MAP[k];
+    /* 代码型 */
+    if (/^\d{6}$/.test(k)) {                       // A股：6/9 开头沪，其余深
+      return (k[0] === '6' || k[0] === '9') ? k + '.SS' : k + '.SZ';
+    }
+    if (/^\d{5}$/.test(k)) return k.replace(/^0+/, '').padStart(4, '0') + '.HK';  // 港股 5 位
+    if (/^\d{4}$/.test(k)) {
+      const a2 = a || {};
+      if (a2.grp === 'twstock') return k + '.TW';
+      if (a2.grp === 'jpstock') return k + '.T';
+      return k + '.T';
+    }
+    if (/^\d{6}$/.test(k) && a && a.grp === 'krstock') return k + '.KS';
+    if (/^[A-Z.]{1,6}$/.test(k)) return k;         // 美股 ticker
+    return null;
+  }
+
   async function candles(key, mode) {
     const a = U.get(key);
     if (!a) throw new Error('unknown asset ' + key);
@@ -2125,7 +2176,19 @@
           const tp = await txDaily(code, m);
           if (tp.length >= 20) return finalize({ points: dedupe(tp), synthetic: false, src: 'tencent' });
         }
-      } catch (e2) { /* 腾讯也没有就照实失败 */ }
+      } catch (e2) { /* 腾讯也没有就继续走 Yahoo */ }
+      /* v301【Yahoo 兜底】东财被掐时 Yahoo chart 覆盖 A股/港/美/日/韩/台/指数/外汇/
+       * 美债收益率/商品/海外期指。够 20 根才用（1~2 根画不出历史）。 */
+      try {
+        const ys = yahooSymbolFor(key, a);
+        if (ys) {
+          const iv = mode === 'd' ? '1d' : mode === 'w' ? '1wk' : '1mo';
+          const y = await yahooBars(ys, iv, 'epoch');
+          if (y && y.points && y.points.length >= 20) {
+            return finalize({ points: dedupe(y.points.slice(-m)), synthetic: false, src: 'yahoo' });
+          }
+        }
+      } catch (e3) { /* Yahoo 也不通就如实失败 */ }
       return failedRes(e && e.message);
     }
   }

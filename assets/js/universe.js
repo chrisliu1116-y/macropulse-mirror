@@ -216,7 +216,23 @@
      * api.js twseSymOf 按 178.XXXX 推导，不依赖这里的字段。 */
     '2330':   { name: '台积电',     short: '台积电',   src: 'em', secid: '178.2330',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2330', twse: 'tse_2330.tw' },
     '2327':   { name: '国巨',       short: '国巨',     src: 'em', secid: '178.2327',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2327', twse: 'tse_2327.tw' },
-    '2454':   { name: '联发科',     short: '联发科',   src: 'em', secid: '178.2454',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2454', twse: 'tse_2454.tw' }
+    '2454':   { name: '联发科',     short: '联发科',   src: 'em', secid: '178.2454',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2454', twse: 'tse_2454.tw' },
+    /* ===== v301【全品种补齐 · 期货 / 国债 / 美债 / 海外期指】 ===== */
+    'IF':  { name: '沪深300股指期货', short: 'IF', src: 'em', secid: '8.IF00', dec: 1, grp: 'cffex', kind: 'future', unit: '点', sinaf: 'IF0' },
+    'IH':  { name: '上证50股指期货',  short: 'IH', src: 'em', secid: '8.IH00', dec: 1, grp: 'cffex', kind: 'future', unit: '点', sinaf: 'IH0' },
+    'IC':  { name: '中证500股指期货', short: 'IC', src: 'em', secid: '8.IC00', dec: 1, grp: 'cffex', kind: 'future', unit: '点', sinaf: 'IC0' },
+    'IM':  { name: '中证1000股指期货', short: 'IM', src: 'em', secid: '8.IM00', dec: 1, grp: 'cffex', kind: 'future', unit: '点', sinaf: 'IM0' },
+    'TL':  { name: '30年期国债期货',   short: 'TL', src: 'em', secid: '8.TL00', dec: 2, grp: 'bondfut', kind: 'future', unit: '元', sinaf: 'TL0' },
+    'T':   { name: '10年期国债期货',   short: 'T',  src: 'em', secid: '8.T00',  dec: 3, grp: 'bondfut', kind: 'future', unit: '元', sinaf: 'T0' },
+    'TF':  { name: '5年期国债期货',    short: 'TF', src: 'em', secid: '8.TF00', dec: 3, grp: 'bondfut', kind: 'future', unit: '元', sinaf: 'TF0' },
+    'TS':  { name: '2年期国债期货',    short: 'TS', src: 'em', secid: '8.TS00', dec: 3, grp: 'bondfut', kind: 'future', unit: '元', sinaf: 'TS0' },
+    'ES':  { name: '标普500期货',      short: 'ES', src: 'yahoo', sym: 'ES=F', dec: 2, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME_MINI:ES1!' },
+    'NQ':  { name: '纳指100期货',      short: 'NQ', src: 'yahoo', sym: 'NQ=F', dec: 2, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME_MINI:NQ1!' },
+    'YM':  { name: '道指期货',         short: 'YM', src: 'yahoo', sym: 'YM=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CBOT_MINI:YM1!' },
+    'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
+    'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
+    'US5Y': { name: '美债5年期收益率', short: '5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'yahoo', sym: '^IRX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' }
   };
 
   /* ---------------- 行情分组 ----------------
@@ -238,7 +254,10 @@
     hkstock: { label: '港股个股',  full: '港股映射标的', color: '#ffc9c9', order: 12, session: 'hk' },
     krstock: { label: '韩股个股',  full: '韩股',         color: '#4dabf7', order: 13, session: 'kr' },
     jpstock: { label: '日股个股',  full: '日股',         color: '#da77f2', order: 14, session: 'jp' },
-    twstock: { label: '台股个股',  full: '台股',         color: '#ffa94d', order: 15, session: 'tw' }
+    twstock: { label: '台股个股',  full: '台股',         color: '#ffa94d', order: 15, session: 'tw' },
+    cffex:   { label: '股指期货',  full: '中金所股指期货', color: '#e599f7', order: 16, session: 'cn' },
+    bondfut: { label: '国债期货',  full: '中金所国债期货', color: '#96f2d7', order: 17, session: 'cn' },
+    glbfut:  { label: '海外期指',  full: '海外股指期货',  color: '#ffd8a8', order: 18, session: 'us' }
   };
 
   /* ---------------- 异动矩阵监控池 ----------------
