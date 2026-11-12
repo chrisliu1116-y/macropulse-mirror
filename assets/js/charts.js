@@ -10,6 +10,16 @@
   const UP = '#f6465d';
   const DOWN = '#0ecb81';
 
+  /* v286【行情可信白名单 / 渲染硬闸】图表只认这些真实数据源的序列。
+   * 与 api.js 的 REAL_SOURCES 一致。渲染前先断言：未失败 + 非合成 + src 在白名单，
+   * 三者全过才画；任何伪造 / 无源 / 合成 / 未登记来源的序列一律拒绝并报「取数失败」。
+   * 这是 series.setData 之前的最后一道闸，杜绝「顶部真报价 + 图上假曲线」重现。 */
+  const SRC_NAME = Object.freeze({
+    em: '东财', tencent: '腾讯', sina: '新浪', cboe: 'CBOE', cnbc: 'CNBC',
+    yahoo: 'Yahoo', binance: '币安', nasdaq: '纳斯达克', naver: 'Naver',
+    mixed: '多源合并', tx: '腾讯外盘', tv: 'TradingView', 'jp-pts': '日股'
+  });
+
   // 图表配色跟随深浅主题（每次建图时重新取，切主题后重绘即可生效）
   const isLight = () => !!(w.document && w.document.body && w.document.body.classList.contains('light'));
   function pal() {
@@ -76,6 +86,31 @@
       /* v204：真分栏 —— 主图与副图指标是两个独立的 chart 实例（参考图3/4 结构） */
       this.paneMain = null; this.paneVol = null; this.volChart = null;
       this._volSeries = null; this._volDataMap = null; this._unsync = null;
+    }
+
+    /* v284：取数失败时在图区正中摆一行说明 + 「重试」按钮。
+     * 只靠左上角图例那行小字，用户很容易以为「图还在加载」；
+     * 明确写清「取数失败 + 具体原因（哪个源/HTTP 码）」，并给一个能立刻再试的入口。 */
+    _showFailHint(msg) {
+      if (!this.host) return;
+      this._clearFailHint();
+      const el = document.createElement('div');
+      el.className = 'ch-fail';
+      const t = document.createElement('span');
+      t.textContent = msg;
+      el.appendChild(t);
+      const btn = document.createElement('button');
+      btn.className = 'ch-retry';
+      btn.textContent = '重试';
+      btn.onclick = () => { this._clearFailHint(); this.render(this.key, this.mode); };
+      el.appendChild(btn);
+      this.host.appendChild(el);
+      this._failEl = el;
+    }
+
+    _clearFailHint() {
+      if (this._failEl && this._failEl.parentNode) this._failEl.parentNode.removeChild(this._failEl);
+      this._failEl = null;
     }
 
     destroy() {
@@ -503,6 +538,7 @@
       if (!this.host) return;
       /* v231：换品种 / 换周期前先掐掉旧的活线定时器，否则会往已经销毁的 series 上写数据 */
       this._stopLive();
+      this._clearFailHint();
       this._extS = null;
       const myReq = ++this.reqId;
       this.key = key;
@@ -520,15 +556,41 @@
         data = isMin ? await w.API.intraday(key) : await w.API.candles(key, mode);
       } catch (e) {
         if (this.legendEl) this.legendEl.innerHTML = '<span class="lg-err">数据加载失败</span>';
+        this._showFailHint('数据加载失败：' + ((e && e.message) || '网络异常'));
         return;
       }
       if (myReq !== this.reqId) return; // 已被更新的请求取代
 
       const pts = data.points || [];
-      if (!pts.length) {
-        if (this.legendEl) this.legendEl.innerHTML = '<span class="lg-err">暂无数据</span>';
+      /* v286【行情可信断言 / 白名单硬闸】只有「未失败 + 非合成 + src 在真实源白名单」
+       * 的序列才允许被画成行情。任何伪造 / 无源 / 合成 / 未登记来源的序列一律
+       * 拒绝渲染并明确报错 —— 即使上游将来又误塞进假序列，也到不了 series.setData。 */
+      const srcOk = !!(data && Object.prototype.hasOwnProperty.call(SRC_NAME, data.src));
+      const rejected = !!(data && data.failed) || (data && data.synthetic === true) || !srcOk;
+      if (!pts.length || rejected) {
+        const reason = (data && data.failed)
+          ? String(data.error || '数据源无响应')
+          : (rejected && !srcOk)
+            ? ('数据来源未通过校验（' + ((data && data.src) || '无源') + '）')
+            : '数据源无响应';
+        const pretty = reason.replace(/Failed to fetch/gi, '连接被断开');
+        const why = (data && data.failed) || rejected
+          ? ('取数失败：' + pretty + '（稍后会自动重试）')
+          : ('暂无' + (isMin ? '分时' : 'K线') + '数据');
+        if (this.legendEl) {
+          this.legendEl.innerHTML = '';
+          const s = document.createElement('span');
+          s.className = 'lg-err';
+          s.textContent = (data && data.failed) || rejected ? '取数失败' : '暂无数据';
+          s.title = why;
+          this.legendEl.appendChild(s);
+        }
+        this._showFailHint(why);
         return;
       }
+      /* v284【来源三要素】数据源 + 时间戳（图例里的 HH:MM）+ 是否延迟（app.js 的
+       * 「延迟」角标）。来源直接标在图例上，用户不必猜这条线是谁给的。 */
+      const srcName = SRC_NAME[data.src];
       /* v183：K 线缺口只算一次（含「是否已被回补」判定），重绘时只做筛选 */
       this._buildGaps(pts);
 
@@ -958,7 +1020,7 @@
               `<span class="lg-item ${cls}" title="相对昨收 ${priceFmt(prev)}">全天 ${chg >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>`) +
             (useExt ? `<span class="lg-item lg-ext" title="这条曲线把延展时段接进来了（美股：盘前 04:00–09:30 ET / 盘后 16:00–20:00 ET；韩股：收盘定价 15:40–16:00 + Nextrade 애프터마켓 16:00–20:00）">${extTagText(pts)}</span>` : '') +
             amtTag(p) +
-            (data.synthetic ? '<span class="lg-err">演示数据</span>' : '');
+            (srcName ? `<span class="lg-item lg-src" title="分时数据源：${srcName}">${srcName}</span>` : '');
         } else {
           this.legendEl.innerHTML =
             `<span class="lg-item">开 <b>${priceFmt(p.open)}</b></span>` +
@@ -967,7 +1029,7 @@
             `<span class="lg-item">收 <b class="${cls}">${priceFmt(p.close)}</b></span>` +
             `<span class="lg-item ${cls}">${chg >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>` +
             amtTag(p) +
-            (data.synthetic ? '<span class="lg-err">演示数据</span>' : '');
+            (srcName ? `<span class="lg-item lg-src" title="K线数据源：${srcName}">${srcName}</span>` : '');
         }
       };
       paint(last);

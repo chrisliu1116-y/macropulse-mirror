@@ -5,7 +5,10 @@
  *   2) 东财 push2his  — K线 / 分时
  *   3) 币安 open API  — BTC/ETH/SOL 分钟级 K 线
  *   4) DexScreener    — 链上池子价格（非交易时段 / CEX-DEX 基差）
- * 网络异常时自动降级为「演示数据」，并在 UI 上明确标注，绝不冒充真实。
+ * v284：取不到数时**不再降级为合成的「演示数据」**。假曲线一旦画上去，
+ *       就会和顶部的真实报价同时出现（用户 11-12 截图：报价 7634，分时却写着
+ *       昨收 3793 的假数字），比空着更误导。现在如实返回 failed + 原因，
+ *       由图表显示「取数失败」。
  * ============================================================ */
 (function (w) {
   'use strict';
@@ -17,8 +20,20 @@
 
   const U = w.UNIVERSE;
 
-  const EM_KLINE = 'https://push2his.eastmoney.com/api/qt/stock/kline/get';
-  const EM_TREND = 'https://push2his.eastmoney.com/api/qt/stock/trends2/get';
+  /* v284【历史接口多宿主】2026-11-12 01:5x 实测（IPv4 直连、带 Referer/UA）：
+   *   · push2.eastmoney.com/api/qt/ulist.np/get  → HTTP 200，正常返回 JSON；
+   *   · push2his.eastmoney.com/api/qt/stock/trends2/get → TLS 握手成功后
+   *     **0 字节直接断开**；同一秒内的同一台机器上两个域名表现完全不同。
+   *   连续请求若干次后整站开始回 403（openresty 风控页）。
+   *   设备侧的表现正是「顶部报价是真的、点进分时全是假的」——因为报价走 push2，
+   *   分时/K线走 push2his，两个域名是两条独立的命。
+   * 所以历史接口不再绑死一个域名，按顺序试：
+   *   ① push2his（首选）② push2（同款 API 路径）
+   *   ③ 同源 /__proxy（服务端取数，换出口 IP 绕开对客户端的限流；file:// 下不可用）
+   * 三条都失败才算失败，并把每一步的原因拼起来交给 UI 显示。 */
+  const EM_HIS_HOSTS = ['https://push2his.eastmoney.com', 'https://push2.eastmoney.com'];
+  const EM_KLINE_PATH = '/api/qt/stock/kline/get';
+  const EM_TREND_PATH = '/api/qt/stock/trends2/get';
   const EM_LIST = 'https://push2.eastmoney.com/api/qt/ulist.np/get';
   const EM_GET = 'https://push2.eastmoney.com/api/qt/stock/get';
   const EM_UT = 'fa5fd1943c7b386f172d6893dbfba10b';
@@ -38,7 +53,7 @@
   const DEX_BASE = 'https://api.dexscreener.com/latest/dex';
 
   const cache = new Map();
-  const status = { em: 'unknown', binance: 'unknown', dex: 'unknown', ext: 'unknown', hl: 'unknown', cboe: 'unknown', lastErr: '', lastOk: 0 };
+  const status = { em: 'unknown', emHis: 'unknown', binance: 'unknown', dex: 'unknown', ext: 'unknown', hl: 'unknown', cboe: 'unknown', lastErr: '', lastOk: 0 };
 
   /* ---------------- 基础工具 ---------------- */
 
@@ -67,6 +82,41 @@
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** 东财「历史类」接口（K线 / 分时）统一入口：多宿主 + 同源代理兜底。
+   *  路径参数里已经带好 query string。全部失败时抛出集合后的原因。 */
+  async function emHistJSON(pathQuery, ttl) {
+    const errs = [];
+    for (const host of EM_HIS_HOSTS) {
+      try {
+        const d = await getJSON(host + pathQuery, ttl);
+        status.emHis = 'ok';
+        return d;
+      } catch (e) {
+        errs.push(host.replace(/^https:\/\//, '').replace(/\.eastmoney\.com$/, '')
+          + ':' + ((e && e.message) || 'net'));
+      }
+    }
+    /* 直连两个域名都挂 → 让服务端再试一次（出口 IP 不同，能绕开对客户端的限流） */
+    if (typeof location !== 'undefined' && location.protocol !== 'file:') {
+      try {
+        const r = await fetch('/__proxy?u=' + encodeURIComponent(EM_HIS_HOSTS[0] + pathQuery), { cache: 'no-store' });
+        if (r.ok) {
+          const d = await r.json();
+          if (d && d.data) { status.emHis = 'ok-proxy'; return d; }
+          errs.push('proxy:empty');
+        } else {
+          errs.push('proxy:HTTP ' + r.status);
+        }
+      } catch (e) {
+        errs.push('proxy:' + ((e && e.message) || 'net'));
+      }
+    }
+    status.emHis = 'fail';
+    const msg = errs.join(' / ') || 'em history fail';
+    status.lastErr = msg;
+    throw new Error(msg);
   }
 
   // '2026-11-03 09:30' → unix seconds（按 UTC 分量对齐，使坐标轴直接显示北京时间）
@@ -111,54 +161,48 @@
     return out;
   }
 
-  /* ---------------- 演示数据（离线兜底） ---------------- */
+  /* ---------------- 失败的统一返回形状 ----------------
+   * v284：原来这里有一条 synth()（随机游走 + base 3600 之类），任何品种取数失败
+   * 都会画出一条「长得像行情」的假曲线，图例只挂一个 8px 的「演示数据」小字。
+   * 用户 11-12 的截图就是三种品种（标普/KOSPI/SK海力士）同时命中它：
+   * 假昨收 3793.71 / 3806.28 / 3702.95 全落在 3600–3900（正是上证的量级），
+   * 而顶部报价是真实的 —— 两套数字差一倍。
+   * 现在**不再合成**，统一返回 failed + 原因，让界面直接说「取数失败」。 */
+  function failedRes(reason) {
+    return { points: [], preClose: 0, synthetic: false, failed: true, error: String(reason || 'net') };
+  }
 
-  function synth(key, mode) {
-    const a = U.get(key) || { dec: 2 };
-    let seed = 0;
-    const s = key + '|' + mode + '|' + new Date().toISOString().slice(0, 10);
-    for (let i = 0; i < s.length; i++) seed = (seed * 31 + s.charCodeAt(i)) % 99991;
-    const rnd = () => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
-      return seed / 2147483648;
-    };
-    const base = a.kind === 'crypto' ? 77000 : a.kind === 'yield' ? 4.2 : a.grp === 'fx' ? 7.12
-      : a.grp === 'metal' ? 3960 : a.grp === 'energy' ? 84 : 3600;
-    const n = mode === 'min' ? 240 : mode === 'd' ? 180 : mode === 'w' ? 120 : 60;
-    const step = mode === 'min' ? 60 : mode === 'd' ? 86400 : mode === 'w' ? 604800 : 2592000;
-    /* 【时区口径】全站时间轴是「北京时间墙上时间装进 UTC 分量」（见 tMin 注释）。
-     * 这里以前直接用 Date.now()，兜底数据在图上会整体偏 8 小时
-     * （实测 VIX 断源走兜底时显示成 18:20，别的品种是 02:20）。 */
-    const BJ = 8 * 3600;
-    const t0 = mode === 'min'
-      ? (Math.floor((Date.now() / 1000 + BJ) / 60) * 60 - n * 60)
-      : (Math.floor((Date.now() / 1000 + BJ) / 86400) * 86400 - n * 86400);
-    const out = [];
-    let price = base * (0.9 + rnd() * 0.2);
-    for (let i = 0; i < n; i++) {
-      const drift = (rnd() - 0.48) * base * 0.004;
-      const open = price;
-      price = Math.max(base * 0.5, price + drift);
-      const close = price;
-      const high = Math.max(open, close) * (1 + rnd() * 0.0018);
-      const low = Math.min(open, close) * (1 - rnd() * 0.0018);
-      out.push({
-        time: t0 + i * step,
-        open: +open.toFixed(a.dec), high: +high.toFixed(a.dec),
-        low: +low.toFixed(a.dec), close: +close.toFixed(a.dec),
-        volume: Math.round(1000 + rnd() * 90000)
-      });
-    }
-    return out;
+  /* v286【行情可信白名单 / API 出口硬闸】--------------------------------------
+   * 11-12 事故复盘：intradayRaw 的 catch(e) 无条件调用 synth() 生成随机游走，
+   * 上游 push2his 一挂就把 240 个假点当成真分时画出去（假昨收 3793.71…）。
+   * 现在除删除 synth() 外，再加一道出口校验：只有「未失败 + 非合成 + src 属于
+   * 下列真实数据源」的序列才允许离开 API 层。所有调用方（charts.render、
+   * app.js 的缩略图 loadMkSpark、quote、雷达）都只能拿到真数据或 failedRes。
+   * 这样即便将来有人误加一条无源 / 合成的返回，也会在这里被改写成空 failed。
+   * 与 charts.js 的 SRC_NAME 白名单保持一致。 */
+  const REAL_SOURCES = Object.freeze([
+    'em', 'tencent', 'sina', 'cboe', 'cnbc', 'yahoo', 'binance',
+    'nasdaq', 'naver', 'mixed', 'tx', 'tv', 'jp-pts'
+  ]);
+  function trusted(res) {
+    if (!res || res.failed || res.synthetic) return false;
+    if (!res.points || !res.points.length) return false;
+    return REAL_SOURCES.indexOf(res.src) >= 0;
+  }
+  function finalize(res, reason) {
+    return trusted(res) ? res : failedRes((res && res.error) || reason || 'untrusted series');
   }
 
   /* ---------------- 东财封装 ---------------- */
 
   async function emKline(secid, klt, lmt, fqt) {
-    const url = `${EM_KLINE}?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6`
+    const q = `${EM_KLINE_PATH}?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6`
       + `&fields2=f51,f52,f53,f54,f55,f56,f57&klt=${klt}&fqt=${fqt === 0 ? 0 : 1}&end=20500101&lmt=${lmt}`;
-    const d = await getJSON(url, 30000, 'em');
+    const d = await emHistJSON(q, 30000);
     const rows = (d && d.data && d.data.klines) || [];
+    /* 空包也必须当失败抛出：以前这里返回 []，上层再兜底到合成曲线，
+     * 结果「接口回了 200 但没有 klines」= 一张假 K 线。 */
+    if (!rows.length) throw new Error('em kline empty');
     return rows.map(r => {
       const p = r.split(',');
       return {
@@ -179,9 +223,9 @@
   }
 
   async function emTrend(secid, ndays) {
-    const url = `${EM_TREND}?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8`
+    const q = `${EM_TREND_PATH}?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8`
       + `&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=${ndays || 1}&iscr=0&iscca=0`;
-    const d = await getJSON(url, 15000, 'em');
+    const d = await emHistJSON(q, 15000);
     const data = (d && d.data) || {};
     const rows = data.trends || [];
     const pts = rows.map(r => {
@@ -244,6 +288,95 @@
       s.src = url.replace('__CB__', g);
       document.head.appendChild(s);
     });
+  }
+
+  /* ---------------- 腾讯分时 / 日K（A股 · 港股） ----------------
+   * 2026-11-12 实测（本机；响应带 Access-Control-Allow-Origin: *，浏览器可直连）：
+   *   sh000001 / sz399001 / sh000300 → 242 根 09:30–15:00（逐分钟，date=20261111）
+   *   sh600519 / sz300750            → 267 根（含集合竞价时段，已按时段过滤）
+   *   hkHSI / hkHSTECH / hk00700     → 332 根，末根 16:08/18:31 是收盘快照（已过滤到 16:00）
+   *   usINX / usAAPL / kr000660      → **只回 1 个当前 tick**，不能当分时（所以不接）
+   * 东财 trends2 整站挂掉时，这是 A股/港股分时唯一可用的浏览器直连源。
+   * 解构：`data[code].data.data` = ["0930 3655.66 累计量 累计额", ...]，
+   *       量/额是**当日累计**，要按分钟差分；`data[code].qt[4]` 是昨收。
+   */
+  const TX_MIN = 'https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=';
+  const TX_KLINE = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=';
+  const txMinCache = new Map();
+
+  /** 由 secid 推导腾讯代码：1.600519→sh600519；0.000001→sz000001；
+   *  港股 100.HSI→hkHSI、124.HSTECH→hkHSTECH、116.00700→hk00700。其余返回 null。 */
+  function txStockCode(key) {
+    const a = U.get(key);
+    if (!a || !a.secid) return null;
+    const s = String(a.secid);
+    if (/^1\.\d{6}$/.test(s)) return 'sh' + s.slice(2);
+    if (/^0\.\d{6}$/.test(s)) return 'sz' + s.slice(2);
+    if ((/^100\.|^124\.|^116\./.test(s)) && (a.sess === 'hk' || a.grp === 'hkstock')) {
+      return 'hk' + s.split('.')[1];
+    }
+    return null;
+  }
+
+  async function txMinute(code, sess) {
+    const hit = txMinCache.get(code);
+    if (hit && Date.now() - hit.t < 20000) return hit.d;
+    const d = await getJSON(TX_MIN + encodeURIComponent(code), 0, 'tx');
+    const inner = ((d && d.data) || {})[code] || {};
+    const box = inner.data || {};
+    const rows = box.data || [];
+    const md = /^(\d{4})(\d{2})(\d{2})$/.exec(String(box.date || ''));
+    if (rows.length < 30 || !md) throw new Error('tx min empty');
+    const y = +md[1], mo = +md[2], dd = +md[3];
+    const qt = ((inner.qt || {})[code]) || [];
+    const prev = +qt[4] || 0;
+    let prevCum = 0;
+    const pts = [];
+    for (const row of rows) {
+      const f = String(row).split(' ');
+      const hm = f[0];
+      if (!/^\d{4}$/.test(hm)) continue;
+      const hh = +hm.slice(0, 2), mi = +hm.slice(2);
+      const t = hh * 60 + mi;
+      /* 只留常规时段：A股 09:30-11:30 / 13:00-15:00；港股 09:30-16:00。
+       * 腾讯把集合竞价和收盘快照也塞在同一数组里，不过滤会把线拉到 18:31。 */
+      if (sess === 'cn' && !((t >= 570 && t <= 690) || (t >= 780 && t <= 900))) continue;
+      if (sess === 'hk' && !(t >= 570 && t <= 960)) continue;
+      const c = +f[1];
+      if (!(c > 0)) continue;
+      const cum = +f[2] || 0;
+      const vol = cum > prevCum ? cum - prevCum : 0;
+      if (cum) prevCum = cum;
+      pts.push({
+        time: Math.floor(Date.UTC(y, mo - 1, dd, hh, mi) / 1000),
+        open: c, high: c, low: c, close: c, volume: vol
+      });
+    }
+    if (pts.length < 30) throw new Error('tx min empty');
+    const out = { points: pts, prev: prev || 0, date: box.date };
+    txMinCache.set(code, { t: Date.now(), d: out });
+    return out;
+  }
+
+  /** 腾讯日K（前复权）。实测：A股/港股给满 320 天，美股/韩股只给**当日 1 根**。
+   *  数组格式：[日期, 开, 收, 高, 低, 量]。
+   *  【上限 1200】实测 count=9000 时腾讯返回的是 data:[]（数组而不是对象），
+   *  解析会炸；640/1200 都正常，1200 约 4.7 年，够画长周期。 */
+  async function txDaily(code, n) {
+    const cnt = Math.max(20, Math.min(1200, n || 320));
+    const d = await getJSON(TX_KLINE + encodeURIComponent(code) + ',day,,,' + cnt + ',qfq', 120000, 'tx');
+    const box = ((d && d.data) || {})[code];
+    if (!box || typeof box !== 'object') throw new Error('tx kline empty');
+    const rows = box.qfqday || box.day || [];
+    const pts = [];
+    for (const r of rows) {
+      if (!Array.isArray(r) || r.length < 5) continue;
+      const t = tDay(r[0]);
+      const o = +r[1], c = +r[2], hi = +r[3], lo = +r[4];
+      if (!t || !(c > 0)) continue;
+      pts.push({ time: t, open: o || c, close: c, high: hi || c, low: lo || c, volume: +r[5] || 0 });
+    }
+    return pts;
   }
 
   /** 新浪外盘分时（1 分钟）。首行是「日线头」，带昨收，字段比正文多。
@@ -453,6 +586,52 @@
     });
     const out = { points: pts };
     cnbcCache.set(ck, { t: Date.now(), d: out });
+    return out;
+  }
+
+  /* v284：美股**指数**分时改用 CNBC 1D 分钟线。
+   * 2026-11-12 实测：`.SPX` 当日 09:30→13:07 ET 共 218 根，逐分钟、价格量级与报价一致
+   * （last=7631.83，图末 7631.74）；而东财 push2his 当天 0 字节断连 / 403。
+   * 只取最后一日的常规时段（09:30–16:00 ET）：1D 序列里还混着盘前盘后，
+   * 指数分时按 390 格铺 X 轴，混进延展段会让「线只走一半」。
+   * `tradeTime` 对美股指数是**美东墙上时间**（20261111093000 = 09:30 ET），
+   * 可直接按 0930–1600 切片；时间戳换成全站的「北京墙上时间装进 UTC」口径（+8h）。 */
+  const idxMinCache = new Map();
+  async function cnbcIdxIntraday(sym) {
+    const ck = 'i:' + sym;
+    const hit = idxMinCache.get(ck);
+    if (hit && Date.now() - hit.t < 15000) return hit.d;
+    const url = CNBC_CHART.replace('__SYM__', encodeURIComponent(sym));
+    const pts = await cnbcRetry(async () => {
+      const d = await cnbcJSON(url);
+      const bars = ((d && d.barData) || {}).priceBars || [];
+      if (!bars.length) throw new Error('cnbc no bars');
+      let lastDay = '';
+      for (const b of bars) {
+        const s = String(b.tradeTime || '');
+        if (s.length >= 8 && s.slice(0, 8) > lastDay) lastDay = s.slice(0, 8);
+      }
+      const acc = [];
+      for (const b of bars) {
+        const s = String(b.tradeTime || '');
+        if (!lastDay || s.slice(0, 8) !== lastDay) continue;
+        const hm = +s.slice(8, 12);
+        if (!(hm >= 930 && hm <= 1600)) continue;
+        const ms = +b.tradeTimeinMills;
+        const c = +b.close;
+        if (!(ms > 0) || !(c > 0)) continue;
+        acc.push({
+          time: Math.floor((ms + 8 * 3600e3) / 60000) * 60,
+          open: +b.open || c, high: +b.high || c, low: +b.low || c, close: c,
+          volume: 0            // CNBC 指数分时不给成交量 → 副图显示「量 --」，比编一根柱子好
+        });
+      }
+      if (!acc.length) throw new Error('cnbc empty');
+      acc.sort((x, y) => x.time - y.time);
+      return acc;
+    });
+    const out = { points: pts, preClose: 0 };
+    idxMinCache.set(ck, { t: Date.now(), d: out });
     return out;
   }
 
@@ -1645,9 +1824,19 @@
         }
       }
       if (!pts.length) throw new Error('empty');
-      return { points: dedupe(pts), synthetic: false };
+      return finalize({ points: dedupe(pts), synthetic: false, src: a.src === 'binance' ? 'binance' : 'em' });
     } catch (e) {
-      return { points: dedupe(synth(key, mode)), synthetic: true };
+      /* v284：东财 kline 挂了 → 腾讯日K 补一次（实测 A股/港股给满 320 天；
+       * 美股/韩股只给当日 1 根，1 根画不出历史，所以 <20 根就当没有）。
+       * 再不行才如实报「取数失败」，绝不合成假 K 线。 */
+      try {
+        const code = txStockCode(key);
+        if (code && mode === 'd') {
+          const tp = await txDaily(code, m);
+          if (tp.length >= 20) return finalize({ points: dedupe(tp), synthetic: false, src: 'tencent' });
+        }
+      } catch (e2) { /* 腾讯也没有就照实失败 */ }
+      return failedRes(e && e.message);
     }
   }
 
@@ -2027,7 +2216,9 @@
 
   async function intradayRaw(key) {
     const a = U.get(key);
-    if (!a) throw new Error('unknown asset ' + key);
+    /* 未知品种也走「失败」返回而不是抛错：调用方（缩略图队列）是 fire-and-forget，
+     * 抛出去会变成没人接的 Promise 异常，把整轮补图打断。 */
+    if (!a) return failedRes('unknown asset ' + key);
     try {
       /* VIX：CBOE 延 15 分钟，报价和分时都改走 CNBC（真实时 + 1 分钟线）。
        * CNBC 偶尔抽风时退回 CBOE 那条（延 15 分钟，但仍是真数据），
@@ -2045,13 +2236,13 @@
             else {
               try { const q = await cnbcQuoteOne(sym); if (q.prev) pre = q.prev; } catch (e) {}
             }
-            return { points: r.points, preClose: pre, synthetic: false };
+            return { points: r.points, preClose: pre, synthetic: false, src: 'cnbc' };
           }
         } catch (e) { /* 落到下面走 CBOE */ }
         const cm = await cboeMinutes();
         let pre2 = cm[0].close;
         try { const q = await cboeQuote(); if (q.prev) pre2 = q.prev; } catch (e) {}
-        return { points: cm, preClose: pre2, synthetic: false };
+        return { points: cm, preClose: pre2, synthetic: false, src: 'cboe' };
       }
       /* 外盘商品：东财延 10 分钟，分时改走新浪（真实时，末点＝当前分钟） */
       if (a.rt === 'tx') {
@@ -2065,7 +2256,7 @@
                 resolveSinaRoll(key, anc.price);
               }
             }
-            return { points: r.points, preClose: r.preClose || r.points[0].close, synthetic: false };
+            return { points: r.points, preClose: r.preClose || r.points[0].close, synthetic: false, src: 'sina' };
           }
         } catch (e) { /* 新浪抽风时退回东财（延 10 分钟，但仍是真数据） */ }
       }
@@ -2073,17 +2264,33 @@
         const pts = await cboeMinutes();
         if (!pts.length) throw new Error('empty');
         const q = await cboeQuote();
-        return { points: pts, preClose: q.prev || pts[0].close, synthetic: false };
+        return { points: pts, preClose: q.prev || pts[0].close, synthetic: false, src: 'cboe' };
       }
       if (a.src === 'yahoo') {
         const y = await yahooBars(a.sym, '5m', '1d');
         if (!y.points.length) throw new Error('empty');
-        return { points: y.points, preClose: y.prevClose || y.points[0].close, synthetic: false };
+        return { points: y.points, preClose: y.prevClose || y.points[0].close, synthetic: false, src: 'yahoo' };
       }
       if (a.src === 'binance') {
         const pts = shift(await bnKline(a.sym, '5m', 288), 28800);
         if (!pts.length) throw new Error('empty');
-        return { points: pts, preClose: pts[0].close, synthetic: false };
+        return { points: pts, preClose: pts[0].close, synthetic: false, src: 'binance' };
+      }
+      /* A股 / 港股（含指数与个股）：腾讯逐分钟，实测 200ms、CORS 开放。
+       * 直接优先于东财：东财这条通道一挂就是 2×9 秒超时再失败，图要等 20 秒才空；
+       * 腾讯不行时再落到下面的东财。 */
+      if ((a.grp === 'cn' || a.grp === 'cnstock' || a.grp === 'hkstock' || a.sess === 'hk')
+          && txStockCode(key)) {
+        try {
+          const r = await txMinute(txStockCode(key), a.sess === 'hk' || a.grp === 'hkstock' ? 'hk' : 'cn');
+          if (r.points.length > 30) {
+            return {
+              points: r.points,
+              preClose: r.prev || (cachedQuote(key) || {}).prev || r.points[0].close,
+              synthetic: false, src: 'tencent'
+            };
+          }
+        } catch (e) { /* 落到东财 */ }
       }
       /* 美股正股 / ETF：先要「含盘前盘后」的完整曲线。
        * 失败就静默回退下面的东财常规时段 —— 宁可少一段盘前，也不能让图空着。
@@ -2125,6 +2332,7 @@
                       preClose: r.preClose || n.preClose || merged[0].close,
                       regClose: regPts[regPts.length - 1].close || n.preClose,
                       synthetic: false,
+                      src: 'mixed',
                       ext: true
                     };
                   }
@@ -2135,6 +2343,7 @@
                 preClose: n.preClose || n.points[0].close,
                 regClose: n.regClose || n.preClose,
                 synthetic: false,
+                src: 'nasdaq',
                 ext: true
               };
             }
@@ -2194,19 +2403,36 @@
               const post = nx.points.filter(p => p.seg === 'post');
               if (post.length > 5) {
                 const merged = pts.concat(post);
-                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, ext: true };
+                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'mixed', ext: true };
               }
             }
           } catch (e) { /* 拿不到就保持常规分时 */ }
         }
-        return { points: pts, preClose: r.preClose, regClose: base, synthetic: false, ext: hasExt };
+        return { points: pts, preClose: r.preClose, regClose: base, synthetic: false, src: 'em', ext: hasExt };
+      }
+      /* v284：美股指数（标普 / 纳指 / 费半 / 道指）先走 CNBC 分钟线。
+       * 见 cnbcIdxIntraday 注释：东财历史域名挂掉时，CNBC 这条仍是逐分钟真数据。 */
+      if (a.grp === 'us' && a.kind === 'index' && CNBC_IDX[key] && a.rt !== 'cnbc') {
+        try {
+          const c = await cnbcIdxIntraday(CNBC_IDX[key]);
+          if (c.points.length > 20) {
+            /* 昨收必须是真的「上一交易日收盘」，不能拿首根当基准：
+             * 标普首根 7593 而昨收 7520.93，拿首根算会把 +1.48% 写成 +0.66%。
+             * 缓存里没有就用 CNBC 的 quick quote（last - change）补一次。 */
+            let pre = (cachedQuote(key) || {}).prev;
+            if (!pre) {
+              try { pre = (await cnbcQuoteOne(CNBC_IDX[key])).prev; } catch (e) { pre = 0; }
+            }
+            return { points: c.points, preClose: pre || c.preClose || c.points[0].close, synthetic: false, src: 'cnbc' };
+          }
+        } catch (e) { /* CNBC 也不通 → 落到东财 */ }
       }
       const r = await emTrend(a.secid, 1);
       if (!r.points.length) throw new Error('empty');
-      return { points: r.points, preClose: r.preClose, synthetic: false };
+      return { points: r.points, preClose: r.preClose, synthetic: false, src: 'em' };
     } catch (e) {
-      const pts = synth(key, 'min');
-      return { points: pts, preClose: pts[0].close, synthetic: true };
+      /* v284：不再编一条假曲线（见 failedRes 注释） */
+      return failedRes(e && e.message);
     }
   }
 
@@ -2247,12 +2473,11 @@
         last.time = nowMin;
       }
 
-      /* 报价优先用缓存；缓存没热（刚打开详情页时常见）就补一次批量报价，
-       * 否则线头补不上、图上就比顶部价格慢 1~2 分钟。 */
-      let q = cachedQuote(key);
-      if (!q || !(q.price > 0)) {
-        try { q = (await batchQuote([key]))[key] || null; } catch (e) { q = null; }
-      }
+      /* 报价只读缓存，**不再同步补一次批量报价**。
+       * v285：原来缓存没热时会 await batchQuote —— 东财挂掉时那是 9~18 秒，
+       * 整张分时图就卡在「加载中…」等一个根本拿不到的报价（实测上证 6 秒还没画完）。
+       * 线头晚几分钟由 _liveTick（每 8 秒）补上，不该拿首屏时间换。 */
+      const q = cachedQuote(key);
       if (!q || !(q.price > 0)) return res;
 
       let gap = nowMin - last.time;
@@ -2274,7 +2499,7 @@
   }
 
   async function intraday(key) {
-    return await withLiveTip(key, await intradayRaw(key));
+    return finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
   }
 
   // 分钟序列（供异动雷达计算窗口涨跌幅）
@@ -2307,7 +2532,10 @@
       return y.points;
     }
     if (a.src === 'binance') return bnKline(a.sym, '1m', limit || 40);
-    let bars = await emKline(a.secid, 1, limit || 40);
+    /* v284：emKline 现在「空包即抛错」，这里要接住，否则没有 1 分钟线的品种
+     * （美元指数等）会直接失败，连下面用分时序列兜底的机会都没有。 */
+    let bars = [];
+    try { bars = await emKline(a.secid, 1, limit || 40); } catch (e) { bars = []; }
     if (bars.length >= 5) return bars;
     // 部分品种（美元指数等）没有 1 分钟 K 线，用分时序列合成
     const r = await emTrend(a.secid, 1);
@@ -2330,6 +2558,7 @@
     const o = await batchQuote([key]);
     if (o[key]) return o[key];
     const r = await intraday(key);
+    if (r.failed || !r.points.length) throw new Error(r.error || 'no quote');
     const last = r.points[r.points.length - 1];
     const prev = r.preClose || (r.points[0] && r.points[0].close);
     const price = last ? last.close : null;
@@ -2421,11 +2650,17 @@
    * 这里在启动后主动打一遍四个通道，状态立刻是真实值。 */
   async function probeSources() {
     const r = {};
-    // 东财
+    // 东财批量快照（push2）
     try {
       await getJSON(`${EM_LIST}?fltt=2&secids=1.000001&fields=f2,f3,f4,f12,f13,f14&ut=${EM_UT}&_=` + Date.now(), 0, 'em');
       r.em = 'ok';
     } catch (e) { r.em = 'fail'; }
+    /* v284：历史接口（分时/K线，push2his）必须单独探。
+     * 以前只探批量报价，于是「东财行情 · 在线」一直亮着，而分时全站挂掉没人知道。 */
+    try {
+      const d = await emHistJSON(`${EM_TREND_PATH}?secid=1.000001&fields1=f1,f2&fields2=f51,f52&ndays=1`, 0);
+      r.emHis = ((d && d.data && d.data.trends) || []).length ? 'ok' : 'fail';
+    } catch (e) { r.emHis = 'fail'; }
     // 币安（含备选）
     try {
       await bnJSON('/ticker/24hr?symbols=' + encodeURIComponent('["BTCUSDT"]'));
@@ -2456,6 +2691,8 @@
     candles, intraday, minutes, quote, batchQuote, dexQuote, extQuote, extQuotes, hlQuote, hlMids, jpPtsQuote, krNaverMinutes,
     status, tradingViewURL, tMin, tDay, flash, news, newsSoft,
     probeSources, altTickers, bnJSON, cboeQuote, cboeMinutes, cboeDaily,
-    cachedQuote
+    cachedQuote,
+    /* v286：行情可信白名单与校验器（供回归测试 / 外部校验复用） */
+    REAL_SOURCES, trusted, finalize
   };
 })(window);

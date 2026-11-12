@@ -2912,6 +2912,28 @@ body.light .mk-lag{background:#eef2f7;color:#7b8798;border-color:#dbe3ee}
 /* 【改造1·首屏快照】快照价淡显：打开瞬间用的是上次落盘价，等网络覆盖前降低存在感 */
 .qp.snap{opacity:.55}
 .qp.snap::after{content:'上次';font-size:7.5px;margin-left:2px;color:var(--tx3);opacity:.8}
+/* v284：报价超过 3 分钟没更新 → 「延迟」。和「上次」区分开：
+ * 「上次」= 首屏落盘快照（马上会被真价替换）；「延迟」= 源没给新价（会一直挂着）。 */
+.qp.snap-old{opacity:.7}
+.qp.snap-old::after{content:'延迟';font-size:7.5px;margin-left:2px;color:var(--a);opacity:.9}
+
+/* v284：分时/K线取数失败的图区提示（居中，说清原因，不画假线） */
+.ch-fail{
+  position:absolute;left:0;right:0;top:46%;transform:translateY(-50%);
+  text-align:center;padding:0 18px;
+  font-size:11.5px;line-height:1.6;color:var(--tx3);word-break:break-all;
+}
+.ch-retry{
+  display:block;margin:10px auto 0;padding:5px 14px;border-radius:14px;
+  font-size:11px;font-family:inherit;cursor:pointer;
+  background:transparent;color:var(--tx2);border:1px solid var(--hair);
+}
+.ch-retry:active{opacity:.6}
+.lg-src{opacity:.55;font-size:9.5px}
+.set-err{
+  display:block;margin-top:3px;font-style:normal;font-size:9.5px;
+  color:var(--a);opacity:.85;word-break:break-all;
+}
 
 /* 新闻补获卡片里的新闻标题：站内打开 */
 .ra-nl{
@@ -3440,14 +3462,12 @@ body.chart-fs.draw-open .sh-chartbar{right:auto}
 .pk-kb-row button{flex:1;padding:10px 0;text-align:center;background:var(--card,rgba(127,127,127,.14));border:1px solid var(--line2);border-radius:6px;color:var(--tx);font-size:14px}
 .pk-kb-row button:active{background:var(--line2,rgba(127,127,127,.3))}
 
-/* v276：账号同步卡（手机号+密码；登录/注册；恢复/备份） */
+/* v3：账号卡（账号+密码[输两次]、哈希双存、双份同步状态；恢复/备份） */
 .acct-tabs{display:flex;gap:8px;margin:2px 0 10px}
 .acct-tabs button{padding:7px 16px;border-radius:16px;border:1px solid var(--line2);background:transparent;color:var(--tx3);font-size:13px}
 .acct-tabs button.on{color:var(--tx);border-color:var(--accent,currentColor);font-weight:700}
 .acct-form{display:flex;flex-direction:column;gap:9px}
 .acct-form input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:10px;border:1px solid var(--line2);background:var(--card,rgba(127,127,127,.1));color:var(--tx);font-size:14px}
-.acct-code{display:flex;gap:8px;align-items:center}
-.acct-code input{flex:1;min-width:0}
 .acct-main{width:100%;padding:11px 0;border:0;border-radius:12px;background:#1f6feb;color:#fff;font-weight:700;font-size:14px}
 .acct-main.ghost{background:transparent;border:1px solid var(--line2);color:var(--tx);font-weight:600}
 .acct-main:active{opacity:.85}
@@ -3455,4 +3475,11 @@ body.chart-fs.draw-open .sh-chartbar{right:auto}
 .acct-sub{color:var(--tx3);font-size:11px;line-height:1.45}
 .acct-err{color:#ff6b6b;font-size:12px}
 .acct-ok{color:#2ea98a;font-size:12px}
+.acct-sync{margin-top:12px;border-top:1px solid var(--line2);padding-top:10px;display:flex;flex-direction:column;gap:6px}
+.acct-sync-h{color:var(--tx3);font-size:11px;font-weight:700;letter-spacing:.3px}
+.acct-sync-row{display:flex;justify-content:space-between;gap:10px;font-size:12px}
+.acct-sync-row span{color:var(--tx3);flex:0 0 auto}
+.acct-sync-row b{font-weight:600;text-align:right;word-break:break-all}
+.acct-sync-row.ok b{color:#2ea98a}
+.acct-sync-row.bad b{color:#ff6b6b}
 

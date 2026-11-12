@@ -179,26 +179,27 @@
     ['国债.{0,8}(流拍|认购不足)|拍卖.{0,6}(失败|流拍)|债务上限.{0,6}(违约|失守)', '美债']
   ];
 
-  /* v66【S 白名单 · 央行/财政正式动作】顶层兜底用。
+  /* v66【S 豁免守卫 · 央行/财政正式动作】。
    * 用户口径：「美联储周三宣布紧急降息50个基点」「央行宣布降准0.5个百分点」
    * 必须是 S —— 不能因为标题带「周三」、或正文用 ①② 分点写政策细节就降级。
-   * 为什么在 grade() 里兜而不是 gradeCoreRules 里：后者新增早退会突破
-   * 棘轮锁（108 > 107）；而在 grade() 前置换判不改变规则流水线的出口数量。 */
+   * 形态：**只回答「这条是不是顶格央行动作」**，不产出级别、不产生 return 出口；
+   * 由 gradeCoreRules 里的前置闸门把它当豁免条件（`&& !sCbTopHit(head, brief)`），
+   * 让稿子自然往下流到 S_RE 命中 S —— 判级出口仍然只有 gradeCore。 */
   /* 只认「顶格级」动作，避免把例行加息 / 官员表态 / 问句也顶到 S：
    *   ① 紧急/意外/突发/非常规 + 降息加息（美联储周三宣布紧急降息50个基点）
    *   ② 降息/加息/降准 明确落地生效
    *   ③ 降准明确幅度（央行宣布降准0.5个百分点）
    *   ④ 五大央行正式/宣布降准（降准是中国独有工具，宣布即落地级） */
   const S_CB_ACTION = /(紧急|意外|突发|非常规)(降息|加息)|(降息|加息|降准).{0,10}(落地|生效|实施)|降准.{0,8}(0\.\d|\d+\s*个百分点)|(美联储|FOMC|欧洲央行|欧央行|日本央行|英国央行|中国人民银行|中国央行|央行).{0,14}(正式|宣布|决定).{0,8}降准/;
-  function sCbTopOverride(title, brief) {
+  function sCbTopHit(title, brief) {
     const h = String(title || '');
-    if (!S_CB_ACTION.test(h)) return null;
-    if (SPECULATION.test(h)) return null;              // 预期 / 传闻不顶格
-    if (isRecapOrCommentary(h, brief)) return null;    // 复盘归因不放行
-    if (/[？?]\s*$/.test(h)) return null;               // 问句不顶格（「英国央行会紧急加息？」）
+    if (!S_CB_ACTION.test(h)) return false;
+    if (SPECULATION.test(h)) return false;              // 预期 / 传闻不顶格
+    if (isRecapOrCommentary(h, brief)) return false;    // 复盘归因不放行
+    if (/[？?]\s*$/.test(h)) return false;              // 问句不顶格（「英国央行会紧急加息？」）
     /* 官员个人表态 ≠ 决议：「欧洲央行行长拉加德：宣布降息25个基点」只能是 A */
-    if (/(行长|主席|总裁|执委|官员|理事)[^：:]{0,10}[：:]/.test(h)) return null;
-    return ['S', /降准|LPR|逆回购|MLF|存款准备金/.test(h) ? '中国政策' : '海外央行'];
+    if (/(行长|主席|总裁|执委|官员|理事)[^：:]{0,10}[：:]/.test(h)) return false;
+    return true;
   }
 
   /* ---------------- A 级规则：会直接动价格 ---------------- */
@@ -2099,18 +2100,10 @@
    *      （这是回顾体最常见的开篇，而政策分点不会这么写） */
   const DIGEST_BRIEF = /(?:均|仅)?小幅(?:上涨|下跌|反弹|回落)|微涨|微跌/;
   const DIGEST_BRIEF_PAST = /^\s*(?:①|1[、.])\s*(?:周[一二三四五六日]|昨日|前日|上周)/;
-  /* v66：S 白名单是否命中（八科通用）。
-   * 用途：给「提前把稿子判成 A」的那几处守卫用 —— 之前只放了 SOVEREIGN_S（地缘），
-   * 结果「美联储周三宣布紧急降息50个基点」「央行宣布降准0.5个百分点」在进 S_RE
-   * 之前就被 croPillar 吃成 A/货币政策，白名单等于没生效。
-   * 这里改成"只要命中任一科 S 白名单，就不许提前降级"。 */
-  function sPatHit(head) {
-    const h = String(head || '');
-    for (let i = 0; i < S_PAT.length; i++) {
-      try { if (S_PAT[i][0].test(h)) return true; } catch (e) { }
-    }
-    return false;
-  }
+  /* v66：S 白名单豁免判定统一见上方 sCbTopHit()（央行/财政顶格动作）。
+   * 旧 sPatHit() 用 `S_PAT[i][0].test()` —— S_PAT 存的是字符串，
+   * 在字符串上取 .test 会抛 TypeError 并被 catch 吞掉，恒返回 false，
+   * 守卫等于没生效。那段已删除，避免再被误用。 */
 
   function isRecapOrCommentary(head, brief) {
     const h = String(head || ''), b = String(brief || '');
@@ -2180,10 +2173,6 @@
   /* P0-3：grade() 退化为薄包装。**所有改级只在 gradeCore() 单一出口发生**，
    * 抓取入库 / 合并重算 / gv 升级重算三条链路因此 100% 一致。 */
   function grade(title, brief, important, stocks, src) {
-    /* v66：央行/降准的正式落地动作在最外层兜底，避免被后续
-     * 「例行政策 / 官员表态 / 会议报道」阶段降成 A。 */
-    const _cb = sCbTopOverride(title, brief);
-    if (_cb) return _cb;
     return gradeCore(title, brief, important, stocks, src);
   }
 
@@ -3007,9 +2996,10 @@
        * 通道受损规则不能把「霍尔木兹海峡被封锁」吃成 A，
        * 央行/财政规则也不能把「美联储紧急降息」「央行降准」吃成 A。 */
       && !SOVEREIGN_S.test(head)
-      /* v66：其余七科白名单同样不能让路被吃 —— 原写法只放行地缘，
-       * 导致「美联储紧急降息」「央行降准」在进 S_RE 前就被判成 A/货币政策。 */
-      && !S_PAT.some(function (x) { try { return x[0].test(head); } catch (e) { return false; } })
+      /* v66：其余七科同理 —— 原写法只放行地缘，
+       * 导致「美联储紧急降息」「央行降准」在进 S_RE 前就被判成 A/货币政策。
+       * 豁免守卫只放行「顶格央行动作」，例行加息 / 官员表态 / 问句 / 预期仍走 A。 */
+      && !sCbTopHit(head, brief)
     ) return ['A', croCat(head)];
 
     /* 0.25) 行情类「暴涨暴跌」一律进 A —— 用户 11-05 的最终口径（原话）：

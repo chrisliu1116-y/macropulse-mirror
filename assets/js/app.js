@@ -420,6 +420,8 @@
   function applyTheme(t, silent) {
     S.theme = t === 'light' ? 'light' : 'dark';
     store.set('mm_theme', S.theme);
+    /* 同步给原生：浮窗盯盘设置页 / 添加页要跟 APP 主题走，不能只看系统夜间模式 */
+    try { window.NativePulse && window.NativePulse.setAppTheme(S.theme); } catch (e) {}
     d.body.classList.toggle('light', S.theme === 'light');
     d.documentElement.setAttribute('data-theme', S.theme);
     const meta = d.querySelector('meta[name="theme-color"]');
@@ -527,12 +529,23 @@
       } catch (e) { /* ignore */ }
       this.busy = false;
     },
+    /* v284：只重画已有缓存（不发请求）。行情页每 15 秒调一次，
+     * 让「延迟」标记能在价格停止更新后自己出现，而不是等下一次整页重绘。 */
+    repaintAll() {
+      Object.keys(this.cache).forEach(k => paintQuote(k, this.cache[k]));
+    },
     get(k) { return this.cache[k]; }
   };
 
   function paintQuote(k, q) {
     if (!q || q.price == null) return;
     const up = q.pct >= 0;
+    /* v284【陈旧标记】报价对象带 at（取到该价格的时间）。
+     * 批量接口被限流时 batchQuote 会整批失败，缓存里的旧价就一直挂着不动 ——
+     * 以前只能靠左上角那个 8px 的「上次」小字，用户看到的是「价格不刷新」。
+     * 现在：>3 分钟没更新 → 标「延迟」（比「上次」更明确，且会随时间自动出现）。 */
+    const age = q.at ? (Date.now() - q.at) : 0;
+    const stale = age > 180000;
     $$(`.qp[data-k="${cssq(k)}"]`).forEach(el => {
       el.textContent = U.changeLabel(k, q);
       /* v241【关键 bug】原来只清 up/down，忘了清 snap ——
@@ -540,7 +553,8 @@
        * 要等 120 秒整页 renderMarket() 重建 DOM 才消失（用户：一两分钟才消除）。
        * 数据其实早就是实时的，只是这个标签赖着不走。 */
       el.className = el.className.replace(/\b(up|down|snap|snap-old)\b/g, '').trim()
-        + ' ' + (up ? 'up' : 'down') + (q.snapped ? ' snap' : '');
+        + ' ' + (up ? 'up' : 'down') + (q.snapped ? ' snap' : stale ? ' snap-old' : '');
+      el.title = stale ? ('上次更新 ' + hhmm(q.at) + '（已 ' + Math.round(age / 60000) + ' 分钟未刷新）') : '';
     });
     $$(`.qpx[data-k="${cssq(k)}"]`).forEach(el => { el.textContent = U.fmt(k, q.price); });
     /* 暗盘价先到、主报价后到时，基差会是空的；这里补算一次，
@@ -3057,15 +3071,35 @@
       if (Object.keys(data).length) store.set(SPARK_SNAP_KEY, { at: now, data, n: ns });
     } catch (e) {}
   }
-  const _mkSparkFail = new Map();   // v242：失败时刻，用于退避重试
+  /* v284：失败退避改成「次数越多等越久」。
+   * 分时源（东财 push2his）整站挂掉时，60 行缩略图每 12 秒重打一遍 = 每 12 秒 60 个
+   * 必然失败的请求，只会把对方的限流越触发越狠。现在 12s → 24s → … 上限 2 分钟。 */
+  const _mkSparkFail = new Map();   // key -> { at, n }
+  function sparkFailCool(k) {
+    const f = _mkSparkFail.get(k);
+    if (!f) return false;
+    return Date.now() - f.at < Math.min(120000, 12000 * (f.n || 1));
+  }
+  function sparkFailMark(k) {
+    const f = _mkSparkFail.get(k);
+    _mkSparkFail.set(k, { at: Date.now(), n: ((f && f.n) || 0) + 1 });
+  }
   async function loadMkSpark(k) {
     let vals = _mkSpark.get(k);
-    const failAt = _mkSparkFail.get(k) || 0;
-    const cooling = failAt && (Date.now() - failAt < 12000);  // 失败后 12 秒退避，避免每轮补拉都重打
+    const cooling = sparkFailCool(k);
     const stale = _mkSparkStale.has(k);
     if (!cooling && (vals === undefined || stale)) {
       try {
         const r = await w.API.intraday(k);
+        /* v286 防假数据硬闸：API 出口有 trusted() 就以它为唯一判据，
+         * 缺失时回退到 failed/synthetic 标记；不可信结果一律不画缩略图。 */
+        const trustOk = (w.API && w.API.trusted)
+          ? !!w.API.trusted(r)
+          : !(r && (r.failed || r.synthetic));
+        if (!trustOk) {
+          if (vals === undefined) sparkFailMark(k);
+          return;
+        }
         const allPts = (r && r.points) || [];
         /* 美股个股的 intraday 默认带盘前段（ext=true，从 04:00 ET 起 432 个点），
          * 直接拿来算就会「点数 > 全天格数」→ 不补 → 缩略图走满。
@@ -3082,12 +3116,12 @@
           _mkSparkStale.delete(k);
           saveSparkSnap();
         } else if (vals === undefined) {
-          /* v242：只记失败时刻，不永久写 null。
+          /* v242：只记失败，不永久写 null。
            * 原来失败即 set(k,null)，之后 vals===undefined 不成立、stale 也不成立，
            * 这一行再也不会重试 —— 网络抖一下就永久空白（用户截图里的灰块）。 */
-          _mkSparkFail.set(k, Date.now());
+          sparkFailMark(k);
         }
-      } catch (e) { if (vals === undefined) _mkSparkFail.set(k, Date.now()); }
+      } catch (e) { if (vals === undefined) sparkFailMark(k); }
     }
     if (!vals) return;
     const body = $('#marketBody');
@@ -3110,7 +3144,10 @@
   function fillMkSparks() {
     const body = $('#marketBody');
     if (!body || !w.API || !w.API.intraday) return;
-    const keys = [...body.querySelectorAll('.mk-sp-ph[data-mksp]')].map(el => el.dataset.mksp);
+    /* data-mksp="" 是「没有数据」的空占位（mkSparkSVG 兜底时用的），
+     * 不过滤就会拿着空 key 去请求，抛 unknown asset。 */
+    const keys = [...body.querySelectorAll('.mk-sp-ph[data-mksp]')]
+      .map(el => el.dataset.mksp).filter(Boolean);
     if (!keys.length) return;
     let i = 0;
     const next = () => {
@@ -3501,15 +3538,30 @@
     return out;
   }
 
-  /* ---------------- v274：搜索建议双源（全市场 ETF：国内/香港/海外杠杆反向） ----------------
-   * ① 腾讯 smartbox.gtimg.cn：美股/港股/沪深 ETF 的代码与拼音搜索。
-   *    实测 TQQQ / SOXL / 03036(港股ETF) / 510300 全部命中，不校验 token。
-   *    无 CORS（fetch 不可用）但返回 v_hint="..." 全局赋值，script 标签直连即可。
-   *    旧 searchapi.eastmoney.com 虽 curl 可用，但页面内 script 加载零响应
-   *    （SCRIPT ERROR、无 HTTP 响应，疑似 CDN 对浏览器环境拒连），实测弃用。
-   * ② 沪深 ETF 名录：push2 clist fs=b:MK0021~24（total=1660，实测）按成交额
-   *    取前 300，支持中文名搜索（smartbox 不支持中文）；60 分钟缓存。
-   * 返回 QuoteID 直接当 secid（synthSecid 原样收下），QuoteHub 实时报价。 */
+  /* ---------------- 搜索建议 · 唯一规范 SPEC（v277，H5 与原生 Activity 共用） ----------------
+   * 【为什么要有这份 SPEC】行情页「添加自选」(openPicker) 与原生「浮窗添加股票」
+   * 曾各自写了一套搜索，结果同一标的「一个搜得到、一个搜不到」。二者不能字面共享
+   * JS 代码（原生 Activity 是纯 Java、无 WebView，@JavascriptInterface 只是把 Java
+   * 注入 WebView 的 JS 上下文，方向 JS→Java，反过来调不到），故把「源/编码/参数/
+   * 解析」固定为下面唯一一份规范，Java 严格镜像；可复跑 tools/test_search_parity.py
+   * 对同一批关键词分别复刻 H5 与 Java 逻辑，比对结果，防止再次分叉。
+   *
+   * 规范（三层，顺序即优先级，参数两边必须一致）：
+   *  ① 稳定主源 腾讯 smartbox  https://smartbox.gtimg.cn/s3/?v=2&q=<UTF-8>&t=all
+   *     关键词必须 UTF-8 编码（GBK 编码直接返回 v_hint="N"）；响应纯 ASCII+\uXXXX，
+   *     先 decodeUnicode 再按 ^ / ~ 拆字段。覆盖沪深/科创/创业/港/美/ETF/指数/
+   *     中文名/代码/拼音，但**不含北交所与可转债**。
+   *  ② 全市场补全 东财 searchapi  https://searchapi.eastmoney.com/api/suggest/get
+   *     ?input=<UTF-8>&type=14&token=<同原生 emSuggest>  —— 唯一单源覆盖北交所
+   *     (920xxx/8xxxxx 京A)、可转债、港股、美股、ETF、指数的方法，且直接给 QuoteID
+   *     (=secid)，无需自己合成。部分网络不可达 → 只做补全、不能当唯一主路径。
+   *  ③ 断网兜底 本地名录 assets/js/cn-stocks.js：CN_STOCKS(fc,含北交所364只)
+   *     + GLOBAL_STOCKS(fg,港美股12721只)。
+   * APP 壳内 ①② 都走 NativePulse.nativeFetch 桥（Java 直连，规避 CORS/编码），
+   * PWA 无桥时用 fetch/script 标签降级。返回 secid 原样交给 synthSecid/QuoteHub。
+   *
+   * 附带增强（不参与 parity 比对）：H5 另有 push2 clist ETF 中文名录(etfCNSug)，
+   * 原生另有新浪 suggest3 兜底；二者都不改变上面的规范三源结果集。 */
   let _sugSeq = 0;
   /* v276：smartbox 的名称字段可能整体是字面 \\uXXXX（原生与 script 两入口同构）。
    * 只解码合法的 Unicode 转义，保留正常反斜杠、代码和行情文本。 */
@@ -3617,20 +3669,54 @@
         });
     });
   }
+  /* ② 全市场补全源：东财 searchapi suggest(type=14)。与原生
+   * FloatWatchAddStockActivity.emSuggest 同一 URL/编码/参数/解析（唯一规范 SPEC）。
+   * 直接采信服务端 QuoteID 作 secid，不自行合成；东财在部分网络不可达，
+   * 失败静默返回空数组，由主源①与本地名录③兜底。
+   * token 是东财公开 suggest token，实测该接口不校验 token（空/任意值均返回数据），
+   * 故与原生共用同一占位符写法即可，不构成参数分叉。 */
+  const EM_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8&count=10';
+  function emSearchSug(q, cb) {
+    const url = 'https://searchapi.eastmoney.com/api/suggest/get?input='
+      + encodeURIComponent(q) + '&type=14&token=' + EM_TOKEN;
+    const parse = (txt) => {
+      try {
+        const t = String(txt || ''), i = t.indexOf('{');
+        if (i < 0) return cb([]);
+        const data = (JSON.parse(t.slice(i)).QuotationCodeTable || {}).Data || [];
+        cb(data.filter(r => r && r.Code && r.QuoteID
+              && String(r.QuoteID).indexOf('.') >= 0).slice(0, 8).map(r => ({
+          secid: String(r.QuoteID), code: String(r.Code).toUpperCase(),
+          name: String(r.Name || r.Code), type: String(r.SecurityTypeName || '股票')
+        })));
+      } catch (e) { cb([]); }
+    };
+    const np = w.NativePulse;
+    if (np && typeof np.nativeFetch === 'function') {
+      /* 桥返回体首行可能是 "HTTP状态码\n"（nativeHttp 风格），这里统一跳过非 JSON 前缀 */
+      try { parse(np.nativeFetch(url)); } catch (e) { cb([]); }
+      return;
+    }
+    fetch(url).then(r => r.text()).then(parse).catch(() => cb([]));
+  }
+  /* 三源合并。v277 修：原实现 done() 首次触发即 fin=true 并 cb()，
+   * 后面到达的源结果被静默丢弃 —— 表面「双源合并」实为「竞态取最快」，
+   * 正是「同一个词这边搜得到、那边搜不到」的元凶之一。现等三路齐/超时再合并。 */
   function sugList(q, cb) {
-    let box = null, cn = null, fin = false;
+    let box = null, cn = null, em = null, left = 3, fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
-      (cn || []).concat(box || []).forEach(x => {
+      (cn || []).concat(em || []).concat(box || []).forEach(x => {
         if (!x || !x.secid || x.secid.indexOf('.') < 0 || seen[x.code]) return;
         seen[x.code] = 1; out.push(x);
       });
       cb(out);
     };
-    const done = () => { if (fin) return; fin = true; merge(); };
-    setTimeout(done, 4500);
+    const done = () => { if (fin || --left > 0) return; fin = true; merge(); };
+    setTimeout(() => { if (fin) return; fin = true; merge(); }, 4500);
     smartboxSug(q, h => { box = parseBox(h); done(); });
     etfCNSug(q, rows => { cn = rows; done(); });
+    emSearchSug(q, rows => { em = rows; done(); });
   }
 
   /* ---------------- v273：浮窗盯盘（安卓系统悬浮窗） ----------------
@@ -3667,6 +3753,13 @@
       return;
     }
     if (t.closest('#fwPerm')) { try { w.NativePulse.openFloatPerm(); } catch (e) { } return; }
+    /* 齿轮直通原生浮窗设置：设了交易时段后气泡会隐藏，这里是唯一稳定入口 */
+    if (t.closest('#fwGear')) {
+      const np2 = w.NativePulse;
+      if (!np2 || !np2.openFloatSettings) { toast('浮窗设置仅安卓 APP 内可用'); return; }
+      try { np2.openFloatSettings(); } catch (e) { toast('打不开浮窗设置'); }
+      return;
+    }
     const del = t.closest('[data-fwdel]');
     if (del) {
       const dnow = floatData();
@@ -4002,10 +4095,11 @@
       <div class="set-card">
         <div class="set-card-h">浮窗盯盘（安卓）</div>
         <div class="set-row"><div><b>悬浮窗盯盘</b><span>桌面悬浮气泡显示盯盘股票涨跌，点气泡展开列表；APP 全屏时自动隐藏。需授予「显示在其他应用上层」权限</span></div>
+          <button class="mini-btn" id="fwGear" title="打开浮窗设置">⚙ 设置</button>
           <button class="sw ${fw.on ? 'on' : ''}" id="swFloat"><i></i></button></div>
         ${(!fwPerm) ? `<div class="set-row"><div><b>悬浮窗权限</b><span>未授权时气泡不会显示</span></div>
           <button class="mini-btn" id="fwPerm">去授权</button></div>` : ''}
-        <div class="set-row"><div><b>盯盘股票与展示时间</b><span>添加 / 删除 / 排序 / 交易时段都在<b>桌面浮窗</b>里：点开气泡，右上角 ⚙ 进入设置（v1.5.26 起）</span></div></div>
+        <div class="set-row"><div><b>盯盘股票与展示时间</b><span>添加 / 删除 / 排序 / 交易时段都在浮窗设置里。点上面的 <b>⚙ 设置</b> 随时进入 —— 设了交易时段后，非交易时间浮窗会隐藏，气泡点不到，但这里始终能进</span></div></div>
       </div>
 
       <div class="set-card">
@@ -4054,7 +4148,8 @@
       </div>
 
       <div class="set-card">
-        <div class="set-row"><div><b>东财行情</b><span>批量快照 · K线 · 分时</span></div>${badge(st.em)}</div>
+        <div class="set-row"><div><b>东财批量报价</b><span>push2 快照（一次请求拿全部品种的价格/涨跌）</span></div>${badge(st.em)}</div>
+        <div class="set-row"><div><b>分时 / K线</b><span>东财历史接口（push2his → push2 → 服务端代理）；美股指数另走 CNBC。这里异常＝点进详情看不到图</span></div>${badge(st.emHis)}${st.lastErr ? `<em class="set-err" title="${esc(st.lastErr)}">${esc(String(st.lastErr).slice(0, 40))}</em>` : ''}</div>
         <div class="set-row"><div><b>VIX 恐慌指数</b><span>${st.cboe === 'ok'
           ? 'CBOE 官方 CDN · 延迟 15 分钟（指数本身即延迟报价）'
           : 'CBOE 官方 CDN（不开放跨域，浏览器版需代理通道；APK 版内置直取）'}</span></div>${badge(st.cboe)}</div>
@@ -4843,7 +4938,13 @@
             <div class="sh-sub">
               <span style="color:${gColor(g)}">${esc(g.label)}</span>
               <span class="sh-sess ${_idxExt ? '' : (sess.open ? 'open' : '')}">${esc(_sessLbl)}</span>
-              ${a.unit && a.kind !== 'index' ? '· ' + esc(a.unit) + ' ' : ''}· ${a.src === 'binance' ? 'Binance' : (a.rt === 'tx' ? '腾讯 · 新浪' : (a.rt === 'cnbc' ? 'CNBC' : (a.src === 'cboe' ? 'CBOE' : '东方财富')))}${a.lag ? ' · 延' + Math.round(a.lag / 60) + '分' : ''}
+              ${a.unit && a.kind !== 'index' ? '· ' + esc(a.unit) + ' ' : ''}· ${a.src === 'binance' ? 'Binance'
+                : (a.rt === 'tx' ? '腾讯 · 新浪'
+                : (a.rt === 'cnbc' ? 'CNBC'
+                : (a.src === 'cboe' ? 'CBOE'
+                /* v285：A股 / 港股的分时已改为腾讯优先（东财 trends2 挂了时仍能画），
+                 * 这里不再写死「东方财富」；具体哪条源给了数据，图例末尾有标注。 */
+                : ((a.grp === 'cn' || a.grp === 'cnstock' || a.grp === 'hkstock' || a.sess === 'hk') ? '腾讯 · 东财' : '东方财富'))))}${a.lag ? ' · 延' + Math.round(a.lag / 60) + '分' : ''}
             </div>
           </div>
           <div class="sh-px">
@@ -7846,8 +7947,11 @@
       const st = w.API.status;
       const ok = st.em === 'ok' || st.binance === 'ok';
       const bad = st.em === 'fail' && st.binance === 'fail';
-      const short = bad ? '离线' : ok ? '在线' : '连接中';
-      const lbl = bad ? '数据离线' : ok ? '数据在线' : '连接中';
+      /* v284：批量报价在线、但历史接口（分时/K线）挂了 —— 这是 11-12 那次
+       * 「顶部报价是真的、点进分时全是假的」的真实状态，以前顶栏只会显示「在线」。 */
+      const hisBad = st.emHis === 'fail';
+      const short = bad ? '离线' : ok ? (hisBad ? '分时异常' : '在线') : '连接中';
+      const lbl = bad ? '数据离线' : ok ? (hisBad ? '报价在线 · 分时异常' : '数据在线') : '连接中';
       // 快讯维度：显示「N/M 源在线」，一眼看出有没有源没抓到
       const det = srcDetailList();
       const okN = det.filter(x => x.ok).length;
@@ -8163,6 +8267,11 @@
       if (S.tab !== 'market' || document.hidden) return;
       QuoteHub.refresh(mktCatKeys().filter(k => U.get(k)));
     }, 25000);
+    /* v284：报价停止更新时，「延迟」标记要能自动亮起来 —— 只重画缓存，不发请求 */
+    setInterval(() => {
+      if (S.tab !== 'market' || document.hidden) return;
+      QuoteHub.repaintAll();
+    }, 15000);
     /* v242：残留占位符定时补拉。任何一次网络抖动都能自愈，不必等 120 秒整页重绘。 */
     setInterval(() => {
       if (S.tab !== 'market' || document.hidden || !mktSparkOn) return;
