@@ -42,7 +42,11 @@
     HSTECH:{ name: '恒生科技指数', short: '恒生科技', ord: 2, sess: 'hk', src: 'em', secid: '124.HSTECH', dec: 2, grp: 'apac', kind: 'index', unit: '点', tv: 'TVC:HSTECH', yh: '^HSTECH' },
     KS11:  { name: '韩国KOSPI',  short: 'KOSPI',   ord: 3, src: 'em', secid: '100.KS11', dec: 2, grp: 'apac', sess: 'kr', kind: 'index', unit: '点', tv: 'KRX:KOSPI', yh: '^KS11'},
     N225:  { name: '日经225',    short: '日经',    ord: 4, src: 'em', secid: '100.N225', dec: 2, grp: 'apac', sess: 'jp', kind: 'index', unit: '点', tv: 'TVC:NI225' , hl: 'JP225', yh: '^N225'},
-    TWII:  { name: '台湾加权指数', short: '台湾加权', ord: 5, src: 'em', secid: '100.TWII', dec: 2, grp: 'apac', sess: 'tw', kind: 'index', unit: '点', tv: 'TVC:TWII' },
+    /* v291：TWII 兜底链实测结论 —— 台湾加权是全池唯一「腾讯/新浪/TradingView
+     * 三家都没有免费报价符号」的品种（实测 tw2330/rt_tw2330/TVC:TWII/TPE:TWII
+     * 全部无数据），只有 Yahoo ^TWII 可用（实测 2340，与东财 178.TWII 同量级），
+     * 所以东财挂掉时它走 yahooQuoteFallback。 */
+    TWII:  { name: '台湾加权指数', short: '台湾加权', ord: 5, src: 'em', secid: '100.TWII', dec: 2, grp: 'apac', sess: 'tw', kind: 'index', unit: '点', yh: '^TWII' },
 
     /* ---------------- 美股 ----------------
      * 注意：东财 100.NDX = 纳斯达克综合指数（IXIC），100.NDX100 才是纳斯达克100。
@@ -69,7 +73,11 @@
 
     /* ---------------- 美债收益率：只留 5 / 10 / 30 年 ----------------
      * 2 年是政策利率预期，噪音大且与本终端的「黑天鹅」定位不符，已移除 */
-    US5Y:  { name: '美债5年',    short: '美债5Y',  src: 'em', secid: '171.US5Y',  dec: 4, grp: 'rate', kind: 'yield', unit: '%', tv: 'TVC:US5Y', invert: true, yh: '^FVX' },
+    /* v291：US5Y 的 tv 符号实测修正 —— TVC:US5Y 在 TradingView scanner 里不存在
+     * （实测 95 个 tv 符号穷举：US10Y/US30Y 都返回，唯独 US5Y 缺席），
+     * 正确符号是 TVC:US05Y（实测 4.837，update_mode=streaming 真实时）。
+     * 东财 171.US5Y 挂掉时兜底链靠它 + Yahoo ^FVX（实测 4.827 同量级）。 */
+    US5Y:  { name: '美债5年',    short: '美债5Y',  src: 'em', secid: '171.US5Y',  dec: 4, grp: 'rate', kind: 'yield', unit: '%', tv: 'TVC:US05Y', invert: true, yh: '^FVX' },
     US10Y: { name: '美债10年',   short: '美债10Y', src: 'em', secid: '171.US10Y', dec: 4, grp: 'rate', kind: 'yield', unit: '%', tv: 'TVC:US10Y', invert: true, yh: '^TNX' },
     US30Y: { name: '美债30年',   short: '美债30Y', src: 'em', secid: '171.US30Y', dec: 4, grp: 'rate', kind: 'yield', unit: '%', tv: 'TVC:US30Y', invert: true, yh: '^TYX' },
 
@@ -101,7 +109,11 @@
 
     /* ---------------- 贵金属 ---------------- */
     // 用户口径：黄金用「黄金兑美元」现货，而非 COMEX 期金
-    GOLD:  { name: '黄金/美元',  short: '黄金',    src: 'em', secid: '122.XAU', dec: 2, grp: 'metal', kind: 'spot', unit: '美元/盎司', tv: 'OANDA:XAUUSD' , hl: 'GOLD'},
+    /* v291：GOLD 兜底链实测 —— 现货黄金（122.XAU）只有东财与 TV OANDA:XAUUSD
+     * 两条链。给报价补腾讯 hf_GC（实测 3972.5，与 TVC:GOLD 3969 差 0.09%，
+     * 是期金口径但基差 <0.5%）、分时补新浪 hf_GC 分钟线（真实时），
+     * 东财挂掉时黄金不再只剩 TV 一条腿。 */
+    GOLD:  { name: '黄金/美元',  short: '黄金',    src: 'em', secid: '122.XAU', dec: 2, grp: 'metal', kind: 'spot', unit: '美元/盎司', tv: 'OANDA:XAUUSD' , hl: 'GOLD', rt: 'tx', txSym: 'hf_GC', sinaSym: 'GC'},
     SILVER:{ name: '白银/美元',  short: '白银',    src: 'em', secid: '101.SI00Y', dec: 3, grp: 'metal', kind: 'future', unit: '美元/盎司', tv: 'COMEX:SI1!' , hl: 'SILVER', rt: 'tx', txSym: 'hf_SI', sinaSym: 'SI'},
 
     /* ---------------- 金属（贵金属 + 工业金属合并） ----------------

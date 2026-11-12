@@ -305,7 +305,10 @@
   const txMinCache = new Map();
 
   /** 由 secid 推导腾讯代码：1.600519→sh600519；0.000001→sz000001；
-   *  港股 100.HSI→hkHSI、124.HSTECH→hkHSTECH、116.00700→hk00700。其余返回 null。 */
+   *  港股 100.HSI→hkHSI、124.HSTECH→hkHSTECH、116.00700→hk00700；
+   *  v291：美股 105/106/107.GM→usGM（实测 usAAPL/usGM 等 27 只全部返回），
+   *  指数 100.DJIA→usDJI、100.NDX→usIXIC（实测 52486/25466 与东财同量级，
+   *  且 100.NDX＝纳斯达克综合，与腾讯 usIXIC 同口径）。其余返回 null。 */
   function txStockCode(key) {
     const a = U.get(key);
     if (!a || !a.secid) return null;
@@ -315,6 +318,9 @@
     if ((/^100\.|^124\.|^116\./.test(s)) && (a.sess === 'hk' || a.grp === 'hkstock')) {
       return 'hk' + s.split('.')[1];
     }
+    if (/^(105|106|107)\./.test(s)) return 'us' + s.split('.')[1];
+    if (s === '100.DJIA') return 'usDJI';
+    if (s === '100.NDX') return 'usIXIC';
     return null;
   }
 
@@ -527,6 +533,77 @@
         at: Date.now(), src: 'tx'
       };
       n++;
+    }
+    return n;
+  }
+
+  /* v291：东财批量报价失败时的第三/四级兜底（第一级是 emFallbackTx 腾讯）。
+   * 背景：东财 push2 间歇故障（实测 http=000/连接直接断），此时 A股/美股/港股
+   * 有腾讯兜底，但美债/外汇/商品/亚太指数/台股原本无路可走。
+   * 穷举实测（tools/test_quote_coverage.py，95 品种 × 7 源）确认：
+   *   · TV scanner 对 94 个 tv 符号一次 POST 全部返回（唯一例外 TVC:TWII，
+   *     已实测确认该符号在 scanner 不存在）→ 批量兜底首选，CORS 开放；
+   *   · 延迟口径由 update_mode 给出：streaming=真实时，delayed_streaming_600/
+   *     900/1200 = 官方延迟 10/15/20 分钟，报价对象上带 delayed 秒数；
+   *   · 台湾加权（TWII）腾讯/新浪/TV 全无免费符号，只有 Yahoo ^TWII 可用
+     *     （实测 2340），走 yahooBars 末点兜底。
+   * 两级都只填 out 里还缺的 key，绝不覆盖腾讯已拿到的实时价。 */
+  async function tvScanFallback(keys, out) {
+    const want = keys.filter(k => !out[k] && U.get(k) && U.get(k).tv);
+    if (!want.length) return 0;
+    const body = JSON.stringify({
+      symbols: { tickers: want.map(k => U.get(k).tv), query: { types: [] } },
+      columns: ['close', 'change', 'update_mode']
+    });
+    const res = await fetch(TV_SCAN, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' },
+      body: body, cache: 'no-store'
+    });
+    if (!res.ok) throw new Error('TV fallback HTTP ' + res.status);
+    const d = await res.json();
+    const byTv = {};
+    (d.data || []).forEach(it => { if (it && it.s) byTv[it.s] = it.d; });
+    let n = 0;
+    want.forEach(k => {
+      const a = U.get(k);
+      const arr = byTv[a.tv];
+      if (!arr || !isFinite(Number(arr[0])) || !(Number(arr[0]) > 0)) return;
+      const price = Number(arr[0]);
+      const pct = isFinite(Number(arr[1])) ? Number(arr[1]) : 0;
+      const dm = /_(\d+)$/.exec(String(arr[2] || ''));
+      out[k] = {
+        price: price,
+        pct: pct,
+        chg: null, prev: null, high: null, low: null, open: null,
+        at: Date.now(), src: 'tv',
+        delayed: dm ? +dm[1] : 0        // 官方延迟口径（秒）；streaming 为 0
+      };
+      n++;
+    });
+    return n;
+  }
+
+  async function yahooQuoteFallback(keys, out) {
+    const want = keys.filter(k => !out[k] && U.get(k) && U.get(k).yh);
+    if (!want.length) return 0;
+    let n = 0;
+    for (const k of want) {
+      try {
+        const y = await yahooBars(U.get(k).yh, '5m', '1d');
+        if (!y.points.length) continue;
+        const last = y.points[y.points.length - 1];
+        const prev = y.prevClose || y.points[0].close;
+        if (!(last.close > 0)) continue;
+        out[k] = {
+          price: last.close,
+          pct: prev ? (last.close - prev) / prev * 100 : 0,
+          chg: prev ? last.close - prev : null,
+          prev: prev || null,
+          high: null, low: null, open: null,
+          at: Date.now(), src: 'yahoo'
+        };
+        n++;
+      } catch (e) { /* Yahoo 偶发 429，不重试，宁缺毋假 */ }
     }
     return n;
   }
@@ -795,7 +872,12 @@
         } catch (e) {
           /* v287：东财挂了不能只「保留缓存」——那会让旧价被当成实时价。
            * ① 记下失败原因供设置页/顶栏显示；② 对能映射腾讯代码的品种补真实报价；
-           * ③ 补不到的品种绝不编数，交给 UI 明确标「延迟」。 */
+           * ③ 补不到的绝不编数，交给 UI 明确标「延迟」。
+           * v291：兜底升级为三级链（穷举实测覆盖 95/95，见 tools/test_quote_coverage.py）：
+           *   一级 腾讯（真实时）：A股/港股/美股个股/美股指数/商品/日韩股
+           *   二级 TV scanner 批量（一次 POST）：美债/外汇/商品/亚太指数/台股等
+           *        全部 tv 符号（带官方延迟口径 update_mode）
+           *   三级 Yahoo 末点：全池只剩 TWII 一只（腾讯/新浪/TV 三家均无符号） */
           status.em = 'fail';
           status.lastErr = '东财批量报价失败：' + ((e && e.message) || e);
           try {
@@ -804,9 +886,18 @@
               status.emFallback = 'tx:' + n;
               status.lastOk = Date.now();
             }
-          } catch (e2) {
-            status.emFallback = 'fail';
-          }
+          } catch (e2) { /* 二级继续 */ }
+          try {
+            const n2 = await tvScanFallback(em, out);
+            if (n2 > 0) {
+              status.tvFallback = 'tv:' + n2;
+              status.lastOk = Date.now();
+            }
+          } catch (e3) { /* 三级继续 */ }
+          try {
+            const n3 = await yahooQuoteFallback(em, out);
+            if (n3 > 0) status.yhFallback = 'yh:' + n3;
+          } catch (e4) { /* 全挂，交给 UI 报失败 */ }
         }
       })());
     }
