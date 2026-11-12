@@ -782,7 +782,9 @@
             }
             extLine(arr, color, seg);
           };
-          drawExt(pts.filter(p => p.seg === 'pre'), isLight() ? 'rgba(63,110,216,0.95)' : 'rgba(122,162,255,0.95)', 'pre');
+          /* v293-rev【用户口径】盘前/盘后延展段统一用琥珀黄，与蓝色常规分时一眼区分；
+           * 盘前原来是蓝色（rgba(122,162,255)），跟主线 #4f9dff 几乎同色根本分不清。 */
+          drawExt(pts.filter(p => p.seg === 'pre'), isLight() ? 'rgba(210,128,26,0.95)' : 'rgba(255,196,84,0.95)', 'pre');
           drawExt(pts.filter(p => p.seg === 'post'), isLight() ? 'rgba(210,128,26,0.95)' : 'rgba(255,196,84,0.95)', 'post');
         }
         /* 【v187】对称振幅定轴：右轴 [昨收-amp, 昨收+amp]。
@@ -804,8 +806,13 @@
         /* v290-rev：撤销 v290 的「累计均值近似黄线」。
          * 用户口径：指数分时黄线是【等权指数】（每只股票权重一样），不是均价线；
          * 源里没有等权指数就不画，自己用收盘价累计均值画是伪线。 */
+        /* v293-rev【用户口径】均价线只对个股（A股/港股/美股/日韩台股个股）画：
+         * 外汇/美债/商品期货/加密的东财 avg ≈ 现价，画出来就是一条贴着主线的
+         * 橙线（用户实测美元离岸人民币两条线并在一起），没有信息量。 */
+        const _ua = w.U || null;
+        const _kind = _ua && this.key ? ((_ua.get(this.key) || {}).kind || '') : 'stock';
         const avgPts = pts.filter(p => p.avg).map(p => ({ time: p.time, value: p.avg }));
-        if (avgPts.length > 5) {
+        if (avgPts.length > 5 && _kind === 'stock') {
           const avgSeries = chart.addLineSeries({
             /* v288：均价线改橙色实线（目标详情页），与蓝色主线区分 */
             color: isLight() ? '#d97b06' : '#ffa726', lineWidth: 1, lastValueVisible: false,

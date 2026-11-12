@@ -420,7 +420,6 @@
   function applyTheme(t, silent) {
     S.theme = t === 'light' ? 'light' : 'dark';
     store.set('mm_theme', S.theme);
-    /* 同步给原生：浮窗盯盘设置页 / 添加页要跟 APP 主题走，不能只看系统夜间模式 */
     try { window.NativePulse && window.NativePulse.setAppTheme(S.theme); } catch (e) {}
     d.body.classList.toggle('light', S.theme === 'light');
     d.documentElement.setAttribute('data-theme', S.theme);
@@ -3569,7 +3568,7 @@
   }
 
   /* ---------------- 搜索建议 · 单一引擎（v286+，H5 与原生 Activity 共用一份实现） ----------------
-   * 【方案4】行情页「添加自选」(openPicker) 与原生「浮窗添加股票」现在共用唯一实现
+   * 【方案4】行情页「添加自选」(openPicker) 与原生搜索共用唯一实现
    * StockSearchEngine.search(ctx,q)（Java，四源并发收集+解析+合并+去重）。APP 壳内 H5
    * 经 NativePulse.nativeSearch 桥调它，原生 Activity 直接调它，结果天然一致；
    * 下面 JS 三源仅在无桥（PWA/浏览器）或桥异常时作降级。tools/test_search_parity.py
@@ -3733,22 +3732,28 @@
    * 正是「同一个词这边搜得到、那边搜不到」的元凶之一。现等三路齐/超时再合并。 */
   function sugList(q, cb) {
     /* v286+ 方案4：APP 壳内优先走唯一引擎 NativePulse.nativeSearch（Java 单实现），
-     * H5 行情页与原生浮窗共用同一份「请求+解码+解析+合并+去重」，结果天然一致。
+     * H5 各搜索入口共用同一份「请求+解码+解析+合并+去重」，结果天然一致。
      * 无桥（PWA/浏览器）或桥异常时，整段落到下面 JS 三源合并作降级。 */
     const np = w.NativePulse;
     if (np && typeof np.nativeSearch === 'function') {
+      let out = [];
       try {
         const rows = JSON.parse(np.nativeSearch(q) || '[]');
-        const out = Array.isArray(rows) ? rows : [];
-        /* v288 诊断钩子：无头浏览器可断言 H5 真的走了唯一引擎（而非 JS 降级）。
-         * 只记录查询词/来源/条数，不记录任何用户数据。 */
+        out = Array.isArray(rows) ? rows : [];
+      } catch (e) { out = []; }
+      /* v293-rev【用户口径：全部走线上引擎，不再落离线库】桥返回空（个别词
+       * 引擎没结果/瞬时失败）时不再直接 cb 空 —— 继续走下面的 JS 线上三源
+       * （APP 内经 nativeFetch 直连腾讯 smartbox / 东财 searchapi，同样是
+       * 线上引擎；CXKJ=长鑫科技 688825 的首字母在 smartbox 有官方数据）。
+       * 本地名录只在三源全空时作最后兜底。 */
+      if (out.length) {
         try {
           w.__searchProbe = { q, via: 'bridge', n: out.length,
             codes: out.slice(0, 5).map(x => x && x.code), at: Date.now() };
         } catch (e) {}
         cb(out);
         return;
-      } catch (e) { /* 桥不可用 → 落回 JS 三源降级 */ }
+      }
     }
     try { w.__searchProbe = { q, via: 'js-fallback', n: 0, codes: [], at: Date.now() }; } catch (e) {}
     /* v290：007709 这类 0 开头 6 位数字，同时补一次去前导零的 5 位港股查询
@@ -3774,86 +3779,6 @@
       emSearchSug(q2, rows => { em2 = rows; done(); });
     }
   }
-
-  /* ---------------- v273：浮窗盯盘（安卓系统悬浮窗） ----------------
-   * 配置存 localStorage 并同步给原生（NativePulse.setFloatWatch）；
-   * 原生 FloatWatchService 负责气泡/展开面板/轮询/全屏隐藏。 */
-  function floatData() {
-    const d = store.get('mm_float_watch', null);
-    return (d && typeof d === 'object')
-      ? { on: !!d.on, stocks: Array.isArray(d.stocks) ? d.stocks.slice(0, 5) : [] }
-      : { on: false, stocks: [] };
-  }
-  function floatApply(d) {
-    store.set('mm_float_watch', d);
-    try {
-      const np = w.NativePulse;
-      if (np && np.setFloatWatch) np.setFloatWatch(d.on ? 1 : 0, JSON.stringify(d.stocks));
-    } catch (e) { }
-  }
-  /* 浮窗相关 UI 的统一点击委托（设置页每次重绘都重新生成 DOM，委托最稳） */
-  d.addEventListener('click', (e) => {
-    const t = e.target;
-    if (t.closest('#swFloat')) {
-      const np = w.NativePulse;
-      if (!np || !np.setFloatWatch) { toast('浮窗盯盘仅安卓 APP 内可用'); return; }
-      const dnow = floatData();
-      if (dnow.on) { dnow.on = false; floatApply(dnow); renderSettings(); return; }
-      if (np.floatCanDraw && !np.floatCanDraw()) {
-        toast('请先授予「显示在其他应用上层」权限');
-        try { np.openFloatPerm(); } catch (e2) { }
-        return;
-      }
-      if (!dnow.stocks.length) { toast('先在下面添加盯盘股票'); return; }
-      dnow.on = true; floatApply(dnow); renderSettings();
-      return;
-    }
-    if (t.closest('#fwPerm')) { try { w.NativePulse.openFloatPerm(); } catch (e) { } return; }
-    /* 齿轮直通原生浮窗设置：设了交易时段后气泡会隐藏，这里是唯一稳定入口 */
-    if (t.closest('#fwGear')) {
-      const np2 = w.NativePulse;
-      if (!np2 || !np2.openFloatSettings) { toast('浮窗设置仅安卓 APP 内可用'); return; }
-      try { np2.openFloatSettings(); } catch (e) { toast('打不开浮窗设置'); }
-      return;
-    }
-    const del = t.closest('[data-fwdel]');
-    if (del) {
-      const dnow = floatData();
-      dnow.stocks.splice(+del.dataset.fwdel, 1);
-      floatApply(dnow); renderSettings();
-      return;
-    }
-    if (t.closest('#fwAdd')) {
-      const inp = $('#fwQ');
-      const q = inp ? inp.value.trim() : '';
-      if (!q) { toast('先输入代码或名称'); return; }
-      const btn = t.closest('#fwAdd');
-      btn.textContent = '搜索中';
-      sugList(q, (rows) => {
-        btn.textContent = '搜索';
-        const host = $('#fwSug'); if (!host) return;
-        host._rows = rows.slice(0, 6);
-        host.innerHTML = host._rows.length
-          ? host._rows.map((r, i) => `<div class="set-row"><div><b>${esc(r.name)}</b><span>${esc(r.code)} · ${esc(r.type || '')}</span></div><button class="mini-btn" data-fwpick="${i}">加入</button></div>`).join('')
-          : '<div class="set-row"><div><span>没有匹配结果</span></div></div>';
-      });
-      return;
-    }
-    const pick = t.closest('[data-fwpick]');
-    if (pick) {
-      const host = t.closest('#fwSug');
-      const rows = (host && host._rows) || [];
-      const r = rows[+pick.dataset.fwpick];
-      if (!r) return;
-      const dnow = floatData();
-      if (dnow.stocks.length >= 5) { toast('盯盘最多 5 只'); return; }
-      if (dnow.stocks.some(x => x.code === r.code)) { toast('已在盯盘列表'); return; }
-      try { U.synthSecid(r.secid, r.code, r.name); } catch (e) { }
-      dnow.stocks.push({ secid: r.secid, code: r.code, name: r.name });
-      floatApply(dnow); renderSettings();
-      return;
-    }
-  });
 
   /* ---------------- 添加品种 ---------------- */
   function openPicker() {
@@ -4110,9 +4035,6 @@
   }
   function renderSettings() {
     const st = w.API.status;
-    /* v273：浮窗盯盘状态（仅安卓 APP 有原生桥；浏览器隐藏权限行、开关给提示） */
-    const fw = floatData();
-    const fwPerm = (w.NativePulse && w.NativePulse.floatCanDraw) ? !!w.NativePulse.floatCanDraw() : true;
     const badge = (v) => v === 'ok' ? '<span class="badge ok">在线</span>'
       : v === 'fail' ? '<span class="badge bad">异常</span>' : '<span class="badge">待连接</span>';
 
@@ -4154,15 +4076,6 @@
           <button class="mini-btn" id="btnTestDelayed">5 秒</button></div>
         <div class="set-row"><div><b>后台防杀</b></div>
           <button class="mini-btn" id="btnBattery">去设置</button></div>
-      </div>
-
-      <div class="set-card">
-        <div class="set-card-h">浮窗盯盘（安卓）</div>
-        <div class="set-row"><div><b>悬浮窗盯盘</b></div>
-          <button class="mini-btn" id="fwGear" title="打开浮窗设置">⚙ 设置</button>
-          <button class="sw ${fw.on ? 'on' : ''}" id="swFloat"><i></i></button></div>
-        ${(!fwPerm) ? `<div class="set-row"><div><b>悬浮窗权限</b></div>
-          <button class="mini-btn" id="fwPerm">去授权</button></div>` : ''}
       </div>
 
       <div class="set-card">

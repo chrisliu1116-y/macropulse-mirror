@@ -633,9 +633,7 @@
         <div class="set-card-h">账号</div>
         <div class="set-row"><div><b>已登录：${esc(user.account || '')}</b></div>
           <button class="mini-btn" data-act="out">退出</button></div>
-        /* v292【自动同步】云备份/恢复改为全自动（登录态：启动静默拉 + 每 5 分钟推），
-         * 不再需要手动按钮（用户口径：还要手动点就没必要有这个功能）。 */
-        <div class="acct-note">云端自动同步已开启：登录状态下启动时自动恢复、此后每 5 分钟自动备份；本地文件备份/还原仍是主保底手段。</div>
+        <div class="acct-note">云端自动同步已开启</div>
         ${ui.err ? `<div class="acct-err">${esc(ui.err)}</div>` : ''}
         ${ui.info ? `<div class="acct-ok">${esc(ui.info)}</div>` : ''}
         ${localBackupBlock()}
