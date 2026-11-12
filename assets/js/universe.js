@@ -232,7 +232,7 @@
     'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
     'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
     'US5Y': { name: '美债5年期收益率', short: '5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
-    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'yahoo', sym: '^IRX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' }
+    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'em', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' }
   };
 
   /* ---------------- 行情分组 ----------------

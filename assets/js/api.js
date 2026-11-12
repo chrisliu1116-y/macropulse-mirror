@@ -342,6 +342,91 @@
     return null;
   }
 
+  /* ---------------- 新浪国内期货（v302） ----------------
+   * 用户点名：IF/IH/IC/IM、TL/T/TF/TS 此前只挂了东财 8. 段，东财一断全瞎。
+   * 新浪这三条接口免费、无需 key、字段稳定：
+   *   实时  hq.sinajs.cn/list=nf_IF0        （GBK，逗号分隔：名,开,高,低,最新,...）
+   *   分时  stock2.finance.sina.com.cn/futures/api/jsonp.php/.../getFewMinLine?symbol=IF0&type=5
+   *   日K   .../InnerFuturesNewService.getDailyKLine?symbol=IF0
+   */
+  const SINA_NF = 'https://hq.sinajs.cn/list=nf_';
+  /* 取文本的统一入口：APP 内 nativeFetch 直连（最快、无 CORS）；PWA 走代理池。 */
+  async function proxyText(target, ref) {
+    try {
+      const np = w.NativePulse;
+      if (np && typeof np.nativeFetch === 'function') {
+        const t = np.nativeFetch(target);
+        if (t) return String(t).replace(/^\s*HTTP\s*\d+\s*/, '');
+      }
+    } catch (e) { /* 落代理 */ }
+    const P = w.LiveNews && w.LiveNews.proxy;
+    if (typeof P === 'function') {
+      try { return await P(target, { timeout: 12000, raw: true }); } catch (e) { /* 落 proxyFetch */ }
+    }
+    const r = await proxyFetch(target);
+    return await r.text();
+  }
+  const SINA_FUT_API = 'https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20_nf=/InnerFuturesNewService.';
+  function sinafOf(key, a) { return (a && a.sinaf) || null; }
+
+  async function sinaFutQuote(key, a) {
+    const sym = sinafOf(key, a);
+    if (!sym) return null;
+    const txt = await proxyText(SINA_NF + sym, 'https://finance.sina.com.cn/futures/quotes/' + sym + '.shtml');
+    const m = /="([^"]*)"/.exec(String(txt || ''));
+    if (!m || !m[1]) return null;
+    const f = m[1].split(',');
+    if (f.length < 6) return null;
+    const price = +f[4];          // 最新价
+    const prev = +f[10] || +f[3]; // 昨结（部分品种在 10 位）
+    if (!isFinite(price) || price <= 0) return null;
+    return { price: price, prev: isFinite(prev) && prev > 0 ? prev : null, src: 'sina' };
+  }
+
+  async function sinaFutDaily(key, a, n) {
+    const sym = sinafOf(key, a);
+    if (!sym) return [];
+    const txt = await proxyText(SINA_FUT_API + 'getDailyKLine?symbol=' + sym,
+      'https://finance.sina.com.cn/futures/quotes/' + sym + '.shtml');
+    const cut = String(txt || '').indexOf('[');
+    if (cut < 0) return [];
+    let arr;
+    try { arr = JSON.parse(String(txt).slice(cut).replace(/\);\s*$/, '')); } catch (e) { return []; }
+    const out = [];
+    (arr || []).forEach(r => {
+      const d = String(r.d || r.date || '');
+      const t = tDay(d);
+      const c = +r.c || +r.close;
+      if (!t || !(c > 0)) return;
+      out.push({ time: t, open: +r.o || c, close: c, high: +r.h || c, low: +r.l || c, volume: +r.v || 0 });
+    });
+    return out.slice(-(n || 200));
+  }
+
+  async function sinaFutMin(key, a) {
+    const sym = sinafOf(key, a);
+    if (!sym) return [];
+    const txt = await proxyText(SINA_FUT_API + 'getFewMinLine?symbol=' + sym + '&type=5',
+      'https://finance.sina.com.cn/futures/quotes/' + sym + '.shtml');
+    const cut = String(txt || '').indexOf('[');
+    if (cut < 0) return [];
+    let arr;
+    try { arr = JSON.parse(String(txt).slice(cut).replace(/\);\s*$/, '')); } catch (e) { return []; }
+    const out = [];
+    (arr || []).forEach(r => {
+      const tm = String(r.d || r.time || '');           // 2026-11-13 09:01:00
+      const mm = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(tm);
+      if (!mm) return;
+      const c = +r.p || +r.price || +r.c;
+      if (!(c > 0)) return;
+      out.push({
+        time: Math.floor(Date.UTC(+mm[1], +mm[2] - 1, +mm[3], +mm[4], +mm[5]) / 1000),
+        open: c, high: c, low: c, close: c, volume: +r.v || 0
+      });
+    });
+    return out;
+  }
+
   async function txMinute(code, sess) {
     const hit = txMinCache.get(code);
     if (hit && Date.now() - hit.t < 20000) return hit.d;
@@ -388,10 +473,19 @@
    *  解析会炸；640/1200 都正常，1200 约 4.7 年，够画长周期。 */
   async function txDaily(code, n) {
     const cnt = Math.max(20, Math.min(1200, n || 320));
-    const d = await getJSON(TX_KLINE + encodeURIComponent(code) + ',day,,,' + cnt + ',qfq', 120000, 'tx');
+    /* v302【美股/港股日K 打错接口】腾讯分市场三个 endpoint：
+     *   A股 fqkline / 港股 hkfqkline / 美股 usfqkline。此前一律打 fqkline，
+     *   美股自然拿不到 → 误判「腾讯只给 1 根」。字段兼容也一并放宽到 hfqday。 */
+    const c = String(code || '');
+    const base = /^[a-z]{2}/i.test(c)
+      ? (/^us/i.test(c) ? 'https://web.ifzq.gtimg.cn/appstock/app/usfqkline/get?param='
+        : (/^hk/i.test(c) ? 'https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get?param='
+          : TX_KLINE))
+      : TX_KLINE;
+    const d = await getJSON(base + encodeURIComponent(code) + ',day,,,' + cnt + ',qfq', 120000, 'tx');
     const box = ((d && d.data) || {})[code];
     if (!box || typeof box !== 'object') throw new Error('tx kline empty');
-    const rows = box.qfqday || box.day || [];
+    const rows = box.qfqday || box.day || box.hfqday || [];
     const pts = [];
     for (const r of rows) {
       if (!Array.isArray(r) || r.length < 5) continue;
@@ -2081,7 +2175,8 @@
     const MAP = {
       SPX: '^GSPC', IXIC: '^IXIC', DJI: '^DJI', HSI: '^HSI', N225: '^N225', KOSPI: '^KS11', TWSE: '^TWII',
       USDCNH: 'CNH=X', USDJPY: 'JPY=X', EURUSD: 'EURUSD=X', DXY: 'DX-Y.NYB',
-      US10Y: '^TNX', US30Y: '^TYX', US5Y: '^FVX', US2Y: '^IRX',
+      US10Y: '^TNX', US30Y: '^TYX', US5Y: '^FVX',
+      /* US2Y：^IRX 是 13 周国库券，不是 2 年期 —— 宁可不出也不冒充 */
       WTI: 'CL=F', BRENT: 'BZ=F', GOLD: 'GC=F', SILVER: 'SI=F', COPPER: 'HG=F', NG: 'NG=F',
       ES: 'ES=F', NQ: 'NQ=F', YM: 'YM=F', NK: 'NKD=F', A50: 'XIN9.FGI',
       IF: null, IH: null, IC: null, IM: null, TL: null, T: null, TF: null, TS: null
@@ -2101,6 +2196,20 @@
     if (/^\d{6}$/.test(k) && a && a.grp === 'krstock') return k + '.KS';
     if (/^[A-Z.]{1,6}$/.test(k)) return k;         // 美股 ticker
     return null;
+  }
+
+  /* v302【Yahoo 美债收益率缩放】^TNX/^TYX/^FVX/^IRX 返回的是「收益率×10」
+   * （4.3% 返回 43.0）。这里统一 /10，与东财/CNBC 口径对齐。 */
+  function yahooUnit(ys) {
+    return /^\^(TNX|TYX|FVX|IRX)$/.test(String(ys || '')) ? 0.1 : 1;
+  }
+  function yahooScale(pts, ys) {
+    const f = yahooUnit(ys);
+    if (!pts || !pts.length || f === 1) return pts;
+    return pts.map(p => ({
+      time: p.time, volume: p.volume || 0,
+      open: p.open * f, high: p.high * f, low: p.low * f, close: p.close * f
+    }));
   }
 
   async function candles(key, mode) {
@@ -2170,6 +2279,13 @@
       /* v284：东财 kline 挂了 → 腾讯日K 补一次（实测 A股/港股给满 320 天；
        * 美股/韩股只给当日 1 根，1 根画不出历史，所以 <20 根就当没有）。
        * 再不行才如实报「取数失败」，绝不合成假 K 线。 */
+      /* v302：国内期货东财断 → 新浪日K */
+      try {
+        if (a && a.sinaf) {
+          const sk = await sinaFutDaily(key, a, m);
+          if (sk.length >= 20) return finalize({ points: dedupe(sk), synthetic: false, src: 'sina' });
+        }
+      } catch (e1) { /* 落腾讯 */ }
       try {
         const code = txStockCode(key);
         if (code && mode === 'd') {
@@ -2184,8 +2300,9 @@
         if (ys) {
           const iv = mode === 'd' ? '1d' : mode === 'w' ? '1wk' : '1mo';
           const y = await yahooBars(ys, iv, 'epoch');
-          if (y && y.points && y.points.length >= 20) {
-            return finalize({ points: dedupe(y.points.slice(-m)), synthetic: false, src: 'yahoo' });
+          const ysc = yahooScale(y && y.points, ys);
+          if (ysc && ysc.length >= 20) {
+            return finalize({ points: dedupe(ysc.slice(-m)), synthetic: false, src: 'yahoo' });
           }
         }
       } catch (e3) { /* Yahoo 也不通就如实失败 */ }
@@ -2784,6 +2901,29 @@
       if (!r.points.length) throw new Error('empty');
       return { points: r.points, preClose: r.preClose, synthetic: false, src: 'em' };
     } catch (e) {
+      /* v302【分时 Yahoo 兜底 · 用户点名缺口】东财 trends2 被掐 / 无该品种时，
+       * 用 Yahoo 1 分钟线补上（日股 .T / 韩股 .KS / 台股 .TW / 期指 =F /
+       * 美债 ^TNX / 外汇 =X 都能出分时）。≥15 点才用，绝不画两三个点的假线。 */
+      /* v302：国内期货（IF/IH/IC/IM/TL/T/TF/TS）东财断 → 新浪分钟线 */
+      try {
+        if (a && a.sinaf) {
+          const mp = await sinaFutMin(key, a);
+          if (mp && mp.length > 10) {
+            const q = cachedQuote(key) || {};
+            return { points: mp, preClose: q.prev || mp[0].close, synthetic: false, src: 'sina' };
+          }
+        }
+      } catch (e0) { /* 落 Yahoo */ }
+      try {
+        const ys = yahooSymbolFor(key, a);
+        if (ys) {
+          const yb = await yahooBars(ys, '1m', '1d');
+          const pts = yahooScale(yb && yb.points, ys);
+          if (pts && pts.length >= 15) {
+            return { points: pts, preClose: (yb.prevClose ? yb.prevClose * yahooUnit(ys) : 0) || pts[0].close, synthetic: false, src: 'yahoo' };
+          }
+        }
+      } catch (e2) { /* Yahoo 也不通就如实失败 */ }
       /* v284：不再编一条假曲线（见 failedRes 注释） */
       return failedRes(e && e.message);
     }
