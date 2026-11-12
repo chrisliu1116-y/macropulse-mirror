@@ -809,7 +809,7 @@
         /* v293-rev【用户口径】均价线只对个股（A股/港股/美股/日韩台股个股）画：
          * 外汇/美债/商品期货/加密的东财 avg ≈ 现价，画出来就是一条贴着主线的
          * 橙线（用户实测美元离岸人民币两条线并在一起），没有信息量。 */
-        const _ua = w.U || null;
+        const _ua = U;   /* v293-bugfix：w.U 不存在（本模块是 U=w.UNIVERSE），上一版因此永远走 stock 兜底 */
         const _kind = _ua && this.key ? ((_ua.get(this.key) || {}).kind || '') : 'stock';
         const avgPts = pts.filter(p => p.avg).map(p => ({ time: p.time, value: p.avg }));
         if (avgPts.length > 5 && _kind === 'stock') {

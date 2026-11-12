@@ -437,7 +437,9 @@
     if (!cred && local && local.account === account) { cred = local; src = '本机哈希缓存'; }
 
     if (!cred) {
-      throw new Error('未找到账号凭据：WorkBuddy 云账号无此凭据且本机无缓存；请先注册，或用「从本地文件还原」恢复设置');
+      throw new Error('登录受阻：该账号的云端凭据未找到（可能注册时云端瞬时失败，且本机无缓存）。'
+        + '请改用【注册】通道重试一次（同账号+同密码+验证码）即可重建凭据；'
+        + '重建前的设置可用「从本地文件还原」先恢复');
     }
     return { cred, src };
   }
@@ -548,16 +550,14 @@
     store.set(USER_KEY, { account, at: new Date().toISOString() });
     /* 用凭据里的 wbId + 哈希派生值重建 WorkBuddy 会话：纯 signInWithPassword，无验证码。
      * best-effort，失败不影响登录（登录态来自本机标记）。 */
-    try {
-      await withTimeout(wbEnsureSession(r.cred.wbId, r.cred.wbKind, r.cred.pwd_hash), WB_TIMEOUT, 'WorkBuddy 主通道');
-      ui.primaryOk = true;
-      ui.primary = '✓ 会话已重建（无需验证码） · ' + now();
-    } catch (e) {
-      ui.primaryOk = false;
-      ui.primary = '✗ 会话未重建：' + errMsg(e) + ' · ' + now();
-    }
+    /* v294-rev【提速】会话重建与云端恢复原来串行（最坏 8s+8s+8s）；
+     * 现在并行跑，登录反馈从最坏 ~24s 缩到 ~8s。 */
+    const sessP = withTimeout(wbEnsureSession(r.cred.wbId, r.cred.wbKind, r.cred.pwd_hash), WB_TIMEOUT, 'WorkBuddy 主通道')
+      .then(() => { ui.primaryOk = true; ui.primary = '✓ 会话已重建（无需验证码） · ' + now(); })
+      .catch((e) => { ui.primaryOk = false; ui.primary = '✗ 会话未重建：' + errMsg(e) + ' · ' + now(); });
+    const pullP = pull(true).catch(function () {});
     ui.info = '登录成功（哈希校验来源：' + r.src + '；登录无需验证码）';
-    try { await pull(true); } catch (e) {}
+    await Promise.all([sessP, pullP]);
   }
 
   async function signout() {
