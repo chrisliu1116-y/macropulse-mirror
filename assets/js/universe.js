@@ -38,15 +38,18 @@
     /* ---------------- 亚太 ----------------
      * 顺序按交易体量：港股 → 韩国 → 日本 → 台湾（A股单独成组排在最前）
      * HSI 用港股时段（收盘 16:00），不用日股时段 */
-    HSI:   { name: '恒生指数',   short: '恒指',    ord: 1, sess: 'hk',  src: 'em', secid: '100.HSI',  dec: 2, grp: 'apac', kind: 'index', unit: '点', tv: 'TVC:HSI', yh: '^HSI' },
-    HSTECH:{ name: '恒生科技指数', short: '恒生科技', ord: 2, sess: 'hk', src: 'em', secid: '124.HSTECH', dec: 2, grp: 'apac', kind: 'index', unit: '点', tv: 'TVC:HSTECH', yh: '^HSTECH' },
+    /* v292：HSI/HSTECH 补 txSym —— 腾讯 hkHSI/hkHSTECH 实测实时
+     * （hkHSI 2026-11-12 16:21:05 收盘快照、~ 格式 f3=现价），报价优先于东财。 */
+    HSI:   { name: '恒生指数',   short: '恒指',    ord: 1, sess: 'hk',  src: 'em', secid: '100.HSI',  dec: 2, grp: 'apac', kind: 'index', unit: '点', tv: 'TVC:HSI', yh: '^HSI', txSym: 'hkHSI' },
+    HSTECH:{ name: '恒生科技指数', short: '恒生科技', ord: 2, sess: 'hk', src: 'em', secid: '124.HSTECH', dec: 2, grp: 'apac', kind: 'index', unit: '点', tv: 'TVC:HSTECH', yh: '^HSTECH', txSym: 'hkHSTECH' },
     KS11:  { name: '韩国KOSPI',  short: 'KOSPI',   ord: 3, src: 'em', secid: '100.KS11', dec: 2, grp: 'apac', sess: 'kr', kind: 'index', unit: '点', tv: 'KRX:KOSPI', yh: '^KS11'},
     N225:  { name: '日经225',    short: '日经',    ord: 4, src: 'em', secid: '100.N225', dec: 2, grp: 'apac', sess: 'jp', kind: 'index', unit: '点', tv: 'TVC:NI225' , hl: 'JP225', yh: '^N225'},
-    /* v291：TWII 兜底链实测结论 —— 台湾加权是全池唯一「腾讯/新浪/TradingView
-     * 三家都没有免费报价符号」的品种（实测 tw2330/rt_tw2330/TVC:TWII/TPE:TWII
-     * 全部无数据），只有 Yahoo ^TWII 可用（实测 2340，与东财 178.TWII 同量级），
-     * 所以东财挂掉时它走 yahooQuoteFallback。 */
-    TWII:  { name: '台湾加权指数', short: '台湾加权', ord: 5, src: 'em', secid: '100.TWII', dec: 2, grp: 'apac', sess: 'tw', kind: 'index', unit: '点', yh: '^TWII' },
+    /* v292：TWII 实时源攻坚结论 —— 台湾加权有官方实时源了：
+     * 证交所 mis.twse.com.tw getStockInfo.jsp?ex_ch=tse_t00.tw（实测
+     * z=43091.87 与 Yahoo ^TWII 收盘快照全等，t=13:33 台北收盘时间为准），
+     * 浏览器无 CORS → api.js twseQuote 走 LiveNews.proxy（APK nativeFetch /
+     * 主站 /__proxy）。Yahoo ^TWII 保留为兜底（与官方 z 全等，同口径）。 */
+    TWII:  { name: '台湾加权指数', short: '台湾加权', ord: 5, src: 'em', secid: '100.TWII', dec: 2, grp: 'apac', sess: 'tw', kind: 'index', unit: '点', yh: '^TWII', twse: 'tse_t00.tw' },
 
     /* ---------------- 美股 ----------------
      * 注意：东财 100.NDX = 纳斯达克综合指数（IXIC），100.NDX100 才是纳斯达克100。
@@ -103,9 +106,14 @@
      * 日 K 仍走东财（secid 不变），不受影响。 */
     BRENT: { name: '布伦特原油', short: '布伦特',  src: 'em', secid: '112.B00Y', dec: 2, grp: 'energy', kind: 'future', unit: '美元/桶', tv: 'ICEEUR:BRN1!' , hl: 'BRENTOIL', rt: 'tx', txSym: 'hf_OIL', sinaSym: 'OIL'},
     WTI:   { name: 'WTI原油',    short: 'WTI',     src: 'em', secid: '102.CL00Y', dec: 2, grp: 'energy', kind: 'future', unit: '美元/桶', tv: 'NYMEX:CL1!' , hl: 'CL', rt: 'tx', txSym: 'hf_CL', sinaSym: 'CL'},
-    /* 天然气：腾讯 hf_NG 和新浪默认 NG 都是**远月合约**（比主力高 13%，实测 3.59 vs 3.18），
-     * 必须用带年月的 NG2612。换月由 sinaRoll 自动纠正。 */
-    NG:    { name: 'NYMEX天然气', short: '天然气', src: 'em', secid: '102.NG00Y', dec: 3, grp: 'energy', kind: 'future', unit: '美元/百万英热', tv: 'NYMEX:NG1!' , hl: 'NATGAS', rt: 'tx', sinaSym: 'NG2612', sinaRoll: 'NG'},
+    /* 天然气：v292 实测新浪/腾讯 hf_NG 是**远月口径**（3.68 vs 主力 3.27，差 12%；
+     * NG2612 等带年月符号新浪全空串），旧行情链（rt:'tx' + sinaSym:'NG2612'）报价
+     * 实际上一直取不到数。现改回东财 102.NG00Y 主力连续口径：
+     *  · 免费源里主力口径全部 ≥10 分钟延迟（EM 600s / TV delayed_streaming_600 /
+     *    CNBC @NG.1 realTime:false）—— 宁可显示延迟 10 分钟的真主力价，
+     *    也不显示实时的错误合约价；东财挂时 TV NYMEX:NG1! 兜底（同为延迟口径）。
+     * 日 K / 分时仍走东财（secid 不变）。 */
+    NG:    { name: 'NYMEX天然气', short: '天然气', src: 'em', secid: '102.NG00Y', dec: 3, grp: 'energy', kind: 'future', unit: '美元/百万英热', tv: 'NYMEX:NG1!' , hl: 'NATGAS'},
 
     /* ---------------- 贵金属 ---------------- */
     // 用户口径：黄金用「黄金兑美元」现货，而非 COMEX 期金
@@ -188,7 +196,7 @@
      * 原来标的字典里没有它，tagUS 就算挂上也会被 U.get() 过滤掉。 */
     ASML:  { name: '阿斯麦',   short: '阿斯麦', src: 'em', secid: '105.ASML',  dec: 2, grp: 'usstock', kind: 'stock', unit: 'USD', tv: 'NASDAQ:ASML',  extSym: 'ASML' },
 
-    '00700': { name: '腾讯控股',   src: 'em', secid: '116.00700', dec: 2, grp: 'hkstock', kind: 'stock', unit: 'HKD', tv: 'HKEX:700' },
+    '00700': { name: '腾讯控股',   src: 'em', secid: '116.00700', dec: 2, grp: 'hkstock', kind: 'stock', unit: 'HKD', tv: 'HKEX:700', txSym: 'hk00700' },
 
     /* ---------------- 海外个股（韩 / 日 / 台）----------------
      * 东财市场号：177=韩股(KRX)、176=日股(JPX)、178=台股(TWSE)
@@ -203,9 +211,12 @@
     '285A':   { name: '铠侠',       short: '铠侠',     src: 'em', secid: '176.285A',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:285A', rt: 'tx', txSym: 'jp285A' },
     '6857':   { name: '爱德万测试', short: '爱德万',   src: 'em', secid: '176.6857',   dec: 2, grp: 'jpstock', kind: 'stock', unit: '日元', tv: 'TSE:6857', rt: 'tx', txSym: 'jp6857' },
     // 台股
-    '2330':   { name: '台积电',     short: '台积电',   src: 'em', secid: '178.2330',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2330' },
-    '2327':   { name: '国巨',       short: '国巨',     src: 'em', secid: '178.2327',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2327' },
-    '2454':   { name: '联发科',     short: '联发科',   src: 'em', secid: '178.2454',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2454' }
+    /* v292：台股三只补 twse 官方实时符号（mis.twse.com.tw，实测 tse_2330.tw
+     * z=2340.00 / t=13:30 收盘，与 Yahoo/TWSE 官网一致）。动态添加的台股由
+     * api.js twseSymOf 按 178.XXXX 推导，不依赖这里的字段。 */
+    '2330':   { name: '台积电',     short: '台积电',   src: 'em', secid: '178.2330',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2330', twse: 'tse_2330.tw' },
+    '2327':   { name: '国巨',       short: '国巨',     src: 'em', secid: '178.2327',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2327', twse: 'tse_2327.tw' },
+    '2454':   { name: '联发科',     short: '联发科',   src: 'em', secid: '178.2454',   dec: 2, grp: 'twstock', kind: 'stock', unit: '新台币', tv: 'TWSE:2454', twse: 'tse_2454.tw' }
   };
 
   /* ---------------- 行情分组 ----------------

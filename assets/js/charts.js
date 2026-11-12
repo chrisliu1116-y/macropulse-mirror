@@ -801,6 +801,14 @@
          * 以前那条 createPriceLine 与横格差 1~2px、两条并在一起很难看
          * （用户：直接把背景横线当零轴用，这样就很清爽）。 */
 
+        /* v290：A 股快慢线。腾讯分钟源（txMinute）不带 avg 字段，指数/港股分时
+         * 因此一直没有均价线（用户对照同花顺：分时要有黄白快慢线，黄线橙色标）。
+         * 上游没给 avg 时用「分钟收盘价累计均值」近似（等权均价），
+         * 与东财 trends2 的真均价视觉一致；有 avg 的品种不受影响。 */
+        if (pts.length > 5 && !pts.some(p => isFinite(p.avg))) {
+          let acc = 0;
+          pts.forEach((p, i) => { acc += p.close; p.avg = acc / (i + 1); });
+        }
         const avgPts = pts.filter(p => p.avg).map(p => ({ time: p.time, value: p.avg }));
         if (avgPts.length > 5) {
           const avgSeries = chart.addLineSeries({

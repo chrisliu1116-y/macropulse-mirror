@@ -463,6 +463,17 @@
     if (n) setTimeout(() => location.reload(), 650);
   }
 
+  /* v290：云通道异常弹窗（用户口径：云应用出问题账号会掉线，掉线时弹窗告知即可） */
+  function cloudNotify(msg) {
+    try {
+      const el = d.createElement('div');
+      el.className = 'acct-cloud-toast';
+      el.textContent = msg;
+      d.body.appendChild(el);
+      setTimeout(() => { try { el.remove(); } catch (e) {} }, 4200);
+    } catch (e) {}
+  }
+
   /* ---------------- 注册 / 登录 / 退出 ---------------- */
   function readField(id) { const el = d.getElementById(id); return el ? (el.value || '') : ''; }
   function accountOf(v) {
@@ -496,8 +507,7 @@
      * 完成后仅刷新同步状态卡片。 */
     (async () => {
       const sync = await saveCred(cred);               // 写 user_profiles；失败不阻断
-      ui.info = '注册成功，已直接登录。' + otpNote +
-        (sync.offline ? '；云端通道暂不可用，凭据已安全存于本机，恢复后可重新同步' : '');
+      if (sync.offline) cloudNotify('云账号暂不可用，账号已保存在本机，恢复后可在「同步账号凭据」重新同步');
       try { renderCard(); } catch (e) {}
       try { await push(); } catch (e) {}               // 顺带备份设置（best-effort）
     })();
@@ -533,19 +543,16 @@
   async function submit(act) {
     const account = accountOf(readField('acctPhone'));
     const pwd = readField('acctPwd');                  // 明文密码只在局部变量中
-    if (!account) throw new Error('请输入账号（或手机号）');
+    if (!account) throw new Error('请输入手机号或邮箱');
     if (!cryptoOK()) throw new Error(noCryptoMsg());
     if (act === 'signup') {
       const pwd2 = readField('acctPwd2');
       if (pwd.length < 8) throw new Error('密码至少 8 位');
       if (pwd2 !== pwd) throw new Error('两次输入的密码不一致');
-      /* wbId 可选：填了才走一次性 OTP；不填则仅本机注册，云通道失败不阻断。 */
-      const wb = wbIdOf(readField('acctWbId'));
-      let wbId = '', wbKind = '';
-      if (wb.wbId) {
-        if (!validWbId(wb.wbId, wb.wbKind)) throw new Error('手机号 / 邮箱格式不正确（手机号 11 位，或有效邮箱）');
-        wbId = wb.wbId; wbKind = wb.wbKind;
-      }
+      /* v290：账号即手机号 / 邮箱（同一输入框），注册必须有效才能收一次性验证码 */
+      const wb = wbIdOf(account);
+      if (!validWbId(wb.wbId, wb.wbKind)) throw new Error('请输入正确的手机号（11 位）或邮箱作为账号');
+      const wbId = wb.wbId, wbKind = wb.wbKind;
       ui.wbId = wbId;
       await signup(account, pwd, wbId, wbKind, readField('acctOtp'));
       return;
@@ -555,14 +562,6 @@
   }
 
   /* ---------------- 卡片 ---------------- */
-  function syncBlock() {
-    return `
-      <div class="acct-sync">
-        <div class="acct-sync-h">同步状态（WorkBuddy 云账号 / 本地文件主保底）</div>
-        <div class="acct-sync-row ${ui.primaryOk ? 'ok' : 'bad'}"><span>WorkBuddy 云账号</span><b>${esc(ui.primary || '尚未检测')}</b></div>
-        <div class="acct-sync-row off"><span>本地文件备份</span><b>主保底手段 · 见下方「备份 / 还原」</b></div>
-      </div>`;
-  }
 
   /* 本地文件备份 / 还原按钮块：登录与已登录两种状态都渲染，不依赖登录态 ——
    * WorkBuddy 云应用失效时仍能导出 / 导入设置与自选。 */
@@ -572,7 +571,6 @@
         <button class="acct-main ghost" data-act="localbackup">备份到本地文件</button>
         <button class="acct-main ghost" data-act="localrestore">从本地文件还原</button>
       </div>
-      <div class="acct-sub">本地文件是主保底手段：把全部设置 / 自选 / 浮窗盯盘 / 事件提醒导出为 JSON 存到本机；WorkBuddy 云应用不可用时也能用备份文件还原。备份不含任何凭据、密钥或验证码，还原不会清空现有设置。</div>
       <input type="file" id="acctRestoreFile" accept="application/json,.json" style="display:none">`;
   }
 
@@ -587,32 +585,27 @@
           <button data-act="mode" data-v="signup" class="${m === 'signup' ? 'on' : ''}">注册</button>
         </div>
         <div class="acct-form">
-          <input id="acctPhone" type="text" maxlength="64" autocomplete="username" placeholder="账号 / 手机号" value="${esc(ui.account || '')}">
+          <input id="acctPhone" type="text" maxlength="64" autocomplete="username" placeholder="手机号 / 邮箱" value="${esc(ui.account || '')}">
           <input id="acctPwd" type="password" autocomplete="${m === 'signup' ? 'new-password' : 'current-password'}" placeholder="${m === 'signup' ? '设置密码（≥8 位）' : '密码'}" value="">
           ${m === 'signup' ? `
           <input id="acctPwd2" type="password" autocomplete="new-password" placeholder="再输一次密码" value="">
-          <input id="acctWbId" type="text" maxlength="64" autocomplete="off" placeholder="手机号 / 邮箱（接收一次性验证码，可选）" value="${esc(ui.wbId || '')}">
           <div class="acct-otp-row">
-            <input id="acctOtp" type="text" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="验证码（仅注册需要）" value="">
+            <input id="acctOtp" type="text" inputmode="numeric" maxlength="8" autocomplete="one-time-code" placeholder="验证码" value="">
             <button type="button" class="acct-otp-btn" data-act="sendotp">获取验证码</button>
           </div>
-          <div class="acct-otp-hint" id="acctOtpHint">验证码仅注册时需要一次，登录不需要验证码；换设备登录也只需账号 + 密码，永不需验证码。</div>
-          ` : '<div class="acct-otp-hint">登录只需账号 + 密码，无需验证码。</div>'}
+          <div class="acct-otp-hint" id="acctOtpMsg" hidden></div>
+          ` : ''}
           ${ui.err ? `<div class="acct-err">${esc(ui.err)}</div>` : ''}
           ${ui.info ? `<div class="acct-ok">${esc(ui.info)}</div>` : ''}
           <button class="acct-main" data-act="${m === 'signup' ? 'signup' : 'login'}">${m === 'signup' ? '创建账号' : '登录'}</button>
-          <div class="acct-sub">${m === 'signup'
-            ? '注册时填手机号 / 邮箱并验证一次即可建立 WorkBuddy 账号；之后登录永不需验证码。密码仅在本机以 PBKDF2 哈希保存；APP 不需要、也不会接触任何密钥。'
-            : '只输账号 + 密码即可登录（登录不需要验证码）。密码仅在本机以 PBKDF2 哈希保存，APP 不需要、也不会接触任何密钥。'}</div>
         </div>
         ${localBackupBlock()}
-        ${syncBlock()}
       </div>`;
     }
     return `
       <div class="set-card" id="acctCard">
         <div class="set-card-h">账号</div>
-        <div class="set-row"><div><b>已登录：${esc(user.account || '')}</b><span>账号 + 密码；密码仅以哈希保存，WorkBuddy 云账号存一份；云端不可用时本机仍可登录；登录永不需验证码</span></div>
+        <div class="set-row"><div><b>已登录：${esc(user.account || '')}</b></div>
           <button class="mini-btn" data-act="out">退出</button></div>
         <div class="acct-btns">
           <button class="acct-main" data-act="synccred">同步账号凭据到 WorkBuddy 云账号</button>
@@ -621,9 +614,7 @@
         </div>
         ${ui.err ? `<div class="acct-err">${esc(ui.err)}</div>` : ''}
         ${ui.info ? `<div class="acct-ok">${esc(ui.info)}</div>` : ''}
-        <div class="acct-sub">恢复会用云端版本覆盖本机同名配置；备份把当前 mm_* 设置写入 WorkBuddy 云账号。凭据始终以哈希保存，不含明文，也不含任何密钥。</div>
         ${localBackupBlock()}
-        ${syncBlock()}
       </div>`;
   }
 
@@ -634,7 +625,6 @@
    * 避免明文进 DOM value）。 */
   function captureInputs() {
     const ph = d.getElementById('acctPhone'); if (ph) ui.account = ph.value || '';
-    const wb = d.getElementById('acctWbId'); if (wb) ui.wbId = wb.value || '';
   }
 
   function renderCard(root) {
@@ -663,7 +653,7 @@
         if (act === 'mode') { ui.mode = b.dataset.v; ui.otp.pending = null; renderCard(host); return; }
         /* 获取验证码：局部更新提示，不整卡重绘，避免清空用户已填的密码 / 验证码。 */
         if (act === 'sendotp') {
-          const wb = wbIdOf(readField('acctWbId'));
+          const wb = wbIdOf(readField('acctPhone'));
           let msg = '';
           if (!validWbId(wb.wbId, wb.wbKind)) {
             msg = '请填写正确的手机号（11 位）或邮箱，用于接收一次性验证码';
@@ -676,8 +666,8 @@
               msg = '验证码发送失败：' + errMsg(err) + '（可先完成本机注册，启用 Provider 后重试）';
             }
           }
-          const hint = host.querySelector('#acctOtpHint');
-          if (hint) hint.textContent = msg;
+          const hint = host.querySelector('#acctOtpMsg');
+          if (hint) { hint.textContent = msg; hint.hidden = false; }
           return;
         }
         if (act === 'login' || act === 'signup') { await submit(act); renderCard(host); return; }
@@ -703,6 +693,9 @@
         if (act === 'out') { await signout(); renderCard(host); return; }
       } catch (err) {
         ui.err = (err && err.message) ? err.message : '操作失败，请稍后再试';
+        if (act === 'push' || act === 'pull' || act === 'synccred') {
+          cloudNotify('云账号连接失败：' + ui.err + '（本机功能不受影响，可用本地文件备份/还原）');
+        }
         renderCard(host);
       } finally { busy = false; }
     });

@@ -1385,7 +1385,6 @@
         ${n.noAsset
           ? `<div class="c-imp macro">
               <div class="imp-h"><span class="imp-tag">全局事件</span><span class="imp-l">未落到单一品种</span></div>
-              <p class="imp-note">这类消息不打某一个品种的价格，改的是整体风险偏好 —— 美股、美债、黄金、美元会一起重定价。点开看影响链。</p>
             </div>`
           : `<div class="c-imp" data-imp="${esc(n.id)}" hidden></div>`}
         ${dir ? `<div class="c-row" data-chips="${esc(n.id)}"><span class="c-lab">关联标的</span><div class="chips">${dir}</div></div>` : ''}
@@ -2777,9 +2776,8 @@
       if (j.phase === 'post') return name + '盘后';
       return name + '盘中';
     });
-    if (!live.length) return '全球股市休市 · 7×24 品种优先';
-    return '交易中：' + live.slice(0, 3).join('、') + (live.length > 3 ? '…' : '')
-      + ' · 按实时时段排序，休市后置';
+    if (!live.length) return '全球股市休市';
+    /* v290：用户口径「交易中：…按实时时段排序，休市后置」说明性长句占位置，整行删掉 */
   }
 
   /* 编辑态里的 ▲▼：只在同一交易时段区内交换，跨区交给时段排序去决定 */
@@ -3251,7 +3249,8 @@
         (sessGroups[sk] = sessGroups[sk] || []).push(k);
       });
       const order = sessionOrder().filter(sk => sessGroups[sk]);
-      body.innerHTML = `<div class="mkt-hint">${esc(orderHint())}${S.marketEdit ? ' · 用 ▲▼ 调整组内顺序' : ''}</div>`
+      const _hint = orderHint() || (S.marketEdit ? '用 ▲▼ 调整组内顺序' : '');
+      body.innerHTML = `${_hint ? `<div class="mkt-hint">${esc(_hint)}</div>` : ''}`
         + order.map(sk => {
         const meta = sessionMeta(sk);
         const list = (S.marketSort === 'fixed')
@@ -3749,10 +3748,14 @@
       } catch (e) { /* 桥不可用 → 落回 JS 三源降级 */ }
     }
     try { w.__searchProbe = { q, via: 'js-fallback', n: 0, codes: [], at: Date.now() }; } catch (e) {}
-    let box = null, cn = null, em = null, left = 3, fin = false;
+    /* v290：007709 这类 0 开头 6 位数字，同时补一次去前导零的 5 位港股查询
+     * （007709→07709 南方东英SK海力士2x）。补查结果排在前；公募基金已被
+     * parseBox / emSearchSug 的 jj~ / 150. 过滤排除，不会混进来。 */
+    const q2 = /^0\d{5}$/.test(q) ? q.replace(/^0+/, '') : null;
+    let box = null, cn = null, em = null, box2 = null, em2 = null, left = q2 ? 5 : 3, fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
-      (cn || []).concat(em || []).concat(box || []).forEach(x => {
+      (box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
         if (!x || !x.secid || x.secid.indexOf('.') < 0 || seen[x.code]) return;
         seen[x.code] = 1; out.push(x);
       });
@@ -3763,6 +3766,10 @@
     smartboxSug(q, h => { box = parseBox(h); done(); });
     etfCNSug(q, rows => { cn = rows; done(); });
     emSearchSug(q, rows => { em = rows; done(); });
+    if (q2) {
+      smartboxSug(q2, h => { box2 = parseBox(h); done(); });
+      emSearchSug(q2, rows => { em2 = rows; done(); });
+    }
   }
 
   /* ---------------- v273：浮窗盯盘（安卓系统悬浮窗） ----------------
@@ -4162,7 +4169,7 @@
       </div>
 
       <div class="set-card">
-        <div class="set-row"><div><b>标级纠错</b><span>长按任意快讯卡片 0.55 秒弹出改判面板：选 S / A / B / C，下面的输入框自己写一句原因（可留空）。改判立刻生效（排序、计数、筛选全部跟着变），并记入纠错单。</span></div>
+        <div class="set-row"><div><b>标级纠错</b><span>长按快讯卡片可改级纠错</span></div>
           <em class="fix-n${fixStore.list.length ? ' on' : ''}">${fixStore.list.length} 条</em></div>
         <div class="set-row"><div><b>纠错单</b><span>${fixStore.list.length
           ? '攒够一批再点「复制」，一次性粘给 AI —— 它会按这批样本改规则、记台账、补回归用例。'
@@ -5357,9 +5364,6 @@
         <div class="icfg-sec">指标参数</div>
         <div class="icfg-head"><span>参数名</span><span>最小值</span><span>当前值</span><span>最大值</span></div>
         ${rows}
-        <div class="icfg-sec">使用说明</div>
-        <ul class="icfg-tips">${tips}</ul>
-        <div class="icfg-note">参数与通达信一致，改完点「保存」立即重算（只影响主图显示，不改原始 K 线数据）。</div>
       </div>
       <div class="icfg-ft"><button id="icfgReset">恢复默认值</button></div>`;
     d.body.appendChild(el);
@@ -7133,20 +7137,20 @@
         <div class="ev-icon">${esc(ev.icon || '◉')}</div>
         <div class="ev-hdt">
           <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
-          <div class="ev-cat">${esc(view.cat || '')} · 叙事维护于 ${esc(view.updated || '--')}${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}${view.autoProgress ? ' · 进度自动跟随快讯' : ''}</div>
+          <div class="ev-cat">${esc(view.cat || '')} · 叙事维护于 ${esc(view.updated || '--')}${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
       </div>
       <div class="ev-sum">${esc(ev.summary || '')}</div>
       ${headline}
-      ${metrics ? `<div class="ev-sec"><div class="ev-sec-h">关键指标<span class="ev-hint-inline">标「实时」= 当前报价；其余为人工快照</span></div>${metrics}</div>` : ''}
+      ${metrics ? `<div class="ev-sec"><div class="ev-sec-h">关键指标</div>${metrics}</div>` : ''}
       ${eventSeats(ev)}
-      ${autoTl ? `<div class="ev-sec"><div class="ev-sec-h">${(view.seedNews || []).length ? '最新进展（快讯自动归集 · 人工核实兜底）' : '最新进展（自动抓取 · 每 25 秒更新）'}</div><div class="ev-tlx">${autoTl}</div></div>` : ''}
-      ${timeline ? `<div class="ev-sec"><div class="ev-sec-h">时间线（已报道 = 事实转述 · 预期 = 预测/关键节点）</div><div class="ev-tlx">${timeline}</div></div>` : ''}
+      ${autoTl ? `<div class="ev-sec"><div class="ev-sec-h">最新进展</div><div class="ev-tlx">${autoTl}</div></div>` : ''}
+      ${timeline ? `<div class="ev-sec"><div class="ev-sec-h">时间线</div><div class="ev-tlx">${timeline}</div></div>` : ''}
       ${battleground ? `<div class="ev-sec"><div class="ev-sec-h">关键变量 / 战场</div><div class="ev-chips">${battleground}</div></div>` : ''}
       ${themes ? `<div class="ev-sec"><div class="ev-sec-h">主题</div><div class="ev-chips">${themes}</div></div>` : ''}
-      ${assets ? `<div class="ev-sec"><div class="ev-sec-h">相关标的（点击看行情）</div><div class="ev-assets">${assets}</div></div>` : ''}
-      <div class="ev-sec"><div class="ev-sec-h">${(view.seedNews || []).length ? '相关报道（实时抓取 · 人工核实兜底）' : '相关报道（实时抓取，每 25 秒更新）'}</div>${newsHTML}</div>
-      <div class="ev-src"><b>行情与报道实时更新</b>（每 30 秒刷新报价 · 每 25 秒刷新快讯${liveAt ? ' · 最近报价 ' + liveAt : ''}）；<b>叙事部分为人工维护快照</b>，非本终端核验。${(view.metrics || []).some(mm => mm.pred) ? '<b>预测概率已接 Polymarket 合约价</b>（标「预测市场」，每 5 分钟刷新，并显示较昨日变化）' : '<b>本卡片不接预测市场概率</b>；状态与进度由归集快讯自动推进，标「核实」的条目为人工核实后内置、只标日期'}；人工估算类指标仍为维护时点值。参考来源：${esc(view.src || '--')}</div>
+      ${assets ? `<div class="ev-sec"><div class="ev-sec-h">相关标的</div><div class="ev-assets">${assets}</div></div>` : ''}
+      <div class="ev-sec"><div class="ev-sec-h">相关报道</div>${newsHTML}</div>
+      ${(liveAt || view.src) ? `<div class="ev-src">${liveAt ? '<b>最近报价</b> ' + liveAt : ''}${liveAt && view.src ? ' · ' : ''}${view.src ? '参考来源：' + esc(view.src) : ''}</div>` : ''}
       <div class="ev-tapback">轻点页面任意处返回事件列表</div>
     </div>`;
   }
@@ -7420,7 +7424,20 @@
       Object.keys(S.session).forEach(k => delete S.session[k]);
       renderRadar(radar ? Object.values(radar.state) : [], radar);
     }
-    if (tab === 'effect') ensureEffectFrame();
+    if (tab === 'effect') {
+      ensureEffectFrame();
+      /* v290：切到本页时通知 iframe 重绘。隐藏容器里加载时 clientWidth=0，
+       * draw() 会早退，用户首次进入看到的是空/旧帧、要拖一下才出图。
+       * 0/600/1500ms 各发一次，覆盖首帧未加载完与慢加载两种情形。 */
+      try {
+        const f = $('#effectFrame');
+        if (f && f.contentWindow) {
+          [0, 600, 1500].forEach(ms => setTimeout(() => {
+            try { f.contentWindow.postMessage({ mm_effect_show: 1 }, location.origin); } catch (e) {}
+          }, ms));
+        }
+      } catch (e) {}
+    }
     syncAlerts(radar);
   }
 

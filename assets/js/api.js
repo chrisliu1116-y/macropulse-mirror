@@ -182,7 +182,7 @@
    * 与 charts.js 的 SRC_NAME 白名单保持一致。 */
   const REAL_SOURCES = Object.freeze([
     'em', 'tencent', 'sina', 'cboe', 'cnbc', 'yahoo', 'binance',
-    'nasdaq', 'naver', 'mixed', 'tx', 'tv', 'jp-pts'
+    'nasdaq', 'naver', 'mixed', 'tx', 'tv', 'jp-pts', 'twse'
   ]);
   function trusted(res) {
     if (!res || res.failed || res.synthetic) return false;
@@ -430,9 +430,13 @@
     const syms = [];
     keys.forEach(k => {
       const a = U.get(k);
-      if (!a || !a.txSym) return;
-      map[a.txSym] = k;
-      syms.push(a.txSym);
+      if (!a) return;
+      /* v292：没有显式 txSym 时按 secid 推导（105/106/107→usXXX、116→hkXXX、
+       * 100.HSI→hkHSI 等，见 txStockCode）。美股 27 只 / 港股全部实测命中。 */
+      const sym = a.txSym || txStockCode(k);
+      if (!sym) return;
+      map[sym] = k;
+      syms.push(sym);
     });
     if (!syms.length) return {};
     const ck = syms.join(',');
@@ -806,23 +810,144 @@
     } finally { sinaRollBusy[key] = false; }
   }
 
+  /* ---------------- TWSE 证交所官方实时（台股加权 + 台股个股） ----------------
+   * v292：TWII/台股个股此前只有东财（延 20 分钟）与 Yahoo ^TWII 兜底。
+   * 攻坚实测（2026-11-12）：证交所 mis.twse.com.tw 的 getStockInfo.jsp 是官方
+   * **实时**接口 —— tse_t00.tw 返回 z=43091.87 / y=44257.15 / t=13:33（台北收盘），
+   * 与 Yahoo ^TWII 快照全等；tse_2330.tw 返回 z=2340.00、五档、量全有。
+   * 多符号逗号分隔实测无效，只能一符号一请求（4 个台股品种可接受，15s 缓存）。
+   * 【CORS】该接口不回 Access-Control-Allow-Origin —— 浏览器直连必被拦：
+   *   · APK 壳内：LiveNews.proxy → NativePulse.nativeFetch（Java 直连无 CORS）；
+   *   · 主站 H5：LiveNews.proxy → 同源 /__proxy（服务端转发）；
+   *   · 都不行时补漏链走 TV（TWSE:2330，延 20 分钟）/ Yahoo ^TWII。 */
+  const TWSE_API = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp';
+  const twseCache = new Map();
+
+  function twseSymOf(key) {
+    const a = U.get(key);
+    if (!a) return null;
+    if (a.twse) return a.twse;
+    /* 动态合成的台股：secid 178.XXXX → tse_XXXX.tw */
+    const m = /^178\.(\d{4})$/.exec(String(a.secid || ''));
+    return m ? 'tse_' + m[1] + '.tw' : null;
+  }
+
+  async function twseJSON(sym) {
+    const url = TWSE_API + '?ex_ch=' + encodeURIComponent(sym) + '&json=1&delay=0&_=' + Date.now();
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error('twse HTTP ' + r.status);
+      return await r.json();
+    } catch (e) {
+      /* 直连失败（浏览器 CORS / 区域墙）→ 统一代理池 */
+      const P = w.LiveNews && w.LiveNews.proxy;
+      if (typeof P !== 'function') throw e;
+      const t = await P(url, { timeout: 14000, check: b => String(b).indexOf('msgArray') >= 0 });
+      const i = String(t).indexOf('{');
+      if (i < 0) throw new Error('twse bad payload');
+      return JSON.parse(String(t).slice(i));
+    }
+  }
+
+  /** 字段（实测）：z=成交价 / y=昨收 / o,h,l=开高低 / t=时间 / n=名称。
+   *  收盘后 z 停在最后一笔成交 —— 与腾讯/东财收盘快照同口径。 */
+  async function twseQuote(key) {
+    const sym = twseSymOf(key);
+    if (!sym) throw new Error('no twse sym');
+    const hit = twseCache.get(sym);
+    if (hit && Date.now() - hit.t < 15000) return hit.d;
+    const d = await twseJSON(sym);
+    const r = ((d && d.msgArray) || [])[0] || {};
+    const price = +r.z;
+    if (!(price > 0)) throw new Error('twse empty');
+    const prev = +r.y || 0;
+    const out = {
+      price: price,
+      pct: prev ? (price - prev) / prev * 100 : 0,
+      chg: prev ? price - prev : null,
+      prev: prev || null,
+      high: +r.h || null, low: +r.l || null, open: +r.o || null,
+      at: Date.now(), src: 'twse'
+    };
+    twseCache.set(sym, { t: Date.now(), d: out });
+    return out;
+  }
+
   /* ---------------- 批量报价（一次请求覆盖全部东财品种） ---------------- */
 
   let batchSeq = 0;
 
+  /** v292：东财批量报价的「纯取数」部分（不含兜底链）。
+   *  主链（em 组）与 tvq/补漏的降级路径共用这一份，返回填充的品种数。 */
+  async function emQuoteBatch(keys, out) {
+    const list = keys.filter(k => U.get(k) && U.get(k).secid);
+    if (!list.length) return 0;
+    const secids = list.map(k => U.get(k).secid);
+    const url = `${EM_LIST}?fltt=2&secids=${secids.map(encodeURIComponent).join(',')}`
+      /* v167：多带 f15/f16/f17（最高/最低/今开）—— 股价预警的「创新高/创新低」
+       * 要用当日高低，同一个请求里就有，不用额外再打一次接口。 */
+      + `&fields=f2,f3,f4,f12,f13,f14,f15,f16,f17&ut=${EM_UT}&_=${++batchSeq}`;
+    const d = await getJSON(url, 0, 'em');
+    const diff = (d && d.data && d.data.diff) || [];
+    const byId = {};
+    diff.forEach(r => { byId[r.f13 + '.' + r.f12] = r; });
+    let n = 0;
+    list.forEach(k => {
+      const a = U.get(k);
+      const r = byId[a.secid];
+      if (!r) return;
+      const price = typeof r.f2 === 'number' ? r.f2 : null;
+      const pct = typeof r.f3 === 'number' ? r.f3 : null;
+      if (price == null) return;
+      /* 只做锚点、不进 out（东财这 5 个商品延 10 分钟，不能用它显示） */
+      if (a.rt === 'tx') {
+        cache.set('anc:' + k, { t: Date.now(), d: { price: price } });
+        return;
+      }
+      out[k] = {
+        price: price,
+        pct: pct == null ? 0 : pct,
+        chg: typeof r.f4 === 'number' ? r.f4 : null,
+        prev: pct != null ? price / (1 + pct / 100) : null,
+        high: typeof r.f15 === 'number' ? r.f15 : null,
+        low: typeof r.f16 === 'number' ? r.f16 : null,
+        open: typeof r.f17 === 'number' ? r.f17 : null,
+        at: Date.now(),
+        src: 'em'
+      };
+      n++;
+    });
+    return n;
+  }
+
   async function batchQuote(keys) {
     keys = keys.filter(k => U.get(k));
-    const em = [], bn = [], yh = [], cb = [], tx = [], cn = [];
+    /* v292【按分组接实时源优先链】各组的「实时源在前、延迟源在后」：
+     *   us(美股指数 5 只)  → CNBC 官方实时（realTime:true，实测 .VIX 盘外仍在跳）
+     *   usstock/hkstock/HSI/HSTECH → 腾讯（us/hk 前缀实测实时，27 只美股全命中）
+     *   twstock/TWII       → TWSE 证交所官方实时（mis.twse.com.tw）
+     *   fx/rate/N225/KS11  → TV scanner（官方 streaming 实时，实测逐秒跳）
+     *   energy/metal(除NG) → 腾讯 hf_（与 CNBC 主力合约昨收逐一吻合，实时）
+     *   crypto             → 币安（实时）
+     *   cn/cnstock         → 东财批量（A股官方实时）→ 挂时腾讯兜底（实时）
+     *   NG                 → 东财（主力口径只有延迟源，见 universe.js v292 注）
+     * 各组没拿到的，最后统一「补漏」：TV → 东财 → Yahoo。 */
+    const em = [], bn = [], yh = [], cb = [], tx = [], cn = [], tvq = [], tw = [];
     keys.forEach(k => {
       const a = U.get(k);
       const s = a.src;
-      if (a.rt === 'cnbc') cn.push(k);
-      else if (a.rt === 'tx') {
+      if (a.rt === 'cnbc' || a.grp === 'us') cn.push(k);
+      else if (a.rt === 'tx'
+        || a.grp === 'usstock' || a.grp === 'hkstock'
+        || (a.grp === 'apac' && (k === 'HSI' || k === 'HSTECH'))) {
         tx.push(k);
         /* 天然气这类新浪符号带年月、会换月，需要东财的连续合约价当锚点，
          * 所以它仍然进 em 批次 —— 但只用来做锚点，不写进 out。 */
         if (a.sinaRoll) em.push(k);
       }
+      else if (a.grp === 'twstock' || k === 'TWII') tw.push(k);
+      else if (a.grp === 'fx' || a.grp === 'rate'
+        || (a.grp === 'apac' && (k === 'N225' || k === 'KS11'))) tvq.push(k);
       else if (s === 'binance') bn.push(k);
       else if (s === 'yahoo') yh.push(k);
       // cboe 必须单独拎出来：它既没有 secid（进 em 会让东财整批请求失败），
@@ -836,39 +961,7 @@
     if (em.length) {
       jobs.push((async () => {
         try {
-          const secids = em.map(k => U.get(k).secid);
-          const url = `${EM_LIST}?fltt=2&secids=${secids.map(encodeURIComponent).join(',')}`
-            /* v167：多带 f15/f16/f17（最高/最低/今开）—— 股价预警的「创新高/创新低」
-             * 要用当日高低，同一个请求里就有，不用额外再打一次接口。 */
-            + `&fields=f2,f3,f4,f12,f13,f14,f15,f16,f17&ut=${EM_UT}&_=${++batchSeq}`;
-          const d = await getJSON(url, 0, 'em');
-          const diff = (d && d.data && d.data.diff) || [];
-          const byId = {};
-          diff.forEach(r => { byId[r.f13 + '.' + r.f12] = r; });
-          em.forEach(k => {
-            const a = U.get(k);
-            const r = byId[a.secid];
-            if (!r) return;
-            const price = typeof r.f2 === 'number' ? r.f2 : null;
-            const pct = typeof r.f3 === 'number' ? r.f3 : null;
-            if (price == null) return;
-            /* 只做锚点、不进 out（东财这 5 个商品延 10 分钟，不能用它显示） */
-            if (a.rt === 'tx') {
-              cache.set('anc:' + k, { t: Date.now(), d: { price: price } });
-              return;
-            }
-            out[k] = {
-              price: price,
-              pct: pct == null ? 0 : pct,
-              chg: typeof r.f4 === 'number' ? r.f4 : null,
-              prev: pct != null ? price / (1 + pct / 100) : null,
-              high: typeof r.f15 === 'number' ? r.f15 : null,
-              low: typeof r.f16 === 'number' ? r.f16 : null,
-              open: typeof r.f17 === 'number' ? r.f17 : null,
-              at: Date.now(),
-              src: 'em'
-            };
-          });
+          await emQuoteBatch(em, out);
         } catch (e) {
           /* v287：东财挂了不能只「保留缓存」——那会让旧价被当成实时价。
            * ① 记下失败原因供设置页/顶栏显示；② 对能映射腾讯代码的品种补真实报价；
@@ -877,7 +970,7 @@
            *   一级 腾讯（真实时）：A股/港股/美股个股/美股指数/商品/日韩股
            *   二级 TV scanner 批量（一次 POST）：美债/外汇/商品/亚太指数/台股等
            *        全部 tv 符号（带官方延迟口径 update_mode）
-           *   三级 Yahoo 末点：全池只剩 TWII 一只（腾讯/新浪/TV 三家均无符号） */
+           *   三级 Yahoo 末点：TWII 等腾讯/TV 都没有符号的品种 */
           status.em = 'fail';
           status.lastErr = '东财批量报价失败：' + ((e && e.message) || e);
           try {
@@ -911,12 +1004,42 @@
             if (!sym) continue;
             out[k] = await cnbcQuoteOne(sym);
           } catch (e) {
-            /* CNBC 挂了 → 退回 CBOE 那条（延 15 分钟，但仍是真价，不是合成价） */
-            try {
-              const q = await cboeQuote();
-              out[k] = Object.assign({}, q, { src: 'cboe' });
-            } catch (e2) { /* 两个都挂就维持缓存里的旧价 */ }
+            /* v292：只有 VIX（src=cboe）退回 CBOE（延 15 分钟，但仍是真价）。
+             * SPX/NDX/SOX/DJI 的 src 是 em —— 绝不能退 CBOE，那会把 VIX 的价
+             * 错填给标普（旧代码在 CNBC 失败时会把 cboeQuote 写进任意 key）。
+             * 指数这边交给后面的补漏链：TV（延 15 分钟）→ 东财。 */
+            const a2 = U.get(k);
+            if (a2 && a2.src === 'cboe') {
+              try {
+                const q = await cboeQuote();
+                out[k] = Object.assign({}, q, { src: 'cboe' });
+              } catch (e2) { /* 补漏继续 */ }
+            }
           }
+        }
+      })());
+    }
+
+    if (tvq.length) {
+      jobs.push((async () => {
+        /* TV scanner：外汇/美债/日经/KOSPI 全是官方 streaming 实时（实测），
+         * 一次 POST 拿全部。挂了退东财（延 15 分钟级），再挂交给补漏。 */
+        try { await tvScanFallback(tvq, out); }
+        catch (e) { /* 退东财 */ }
+        const miss = tvq.filter(k => !out[k]);
+        if (miss.length) {
+          try { await emQuoteBatch(miss, out); } catch (e) { /* 补漏继续 */ }
+        }
+      })());
+    }
+
+    if (tw.length) {
+      jobs.push((async () => {
+        /* TWSE 官方实时（一符号一请求，15s 缓存）。挂了交给补漏：
+         * TV（台股延 20 分钟）→ Yahoo ^TWII。 */
+        for (const k of tw) {
+          try { out[k] = await twseQuote(k); }
+          catch (e) { /* 补漏继续 */ }
         }
       })());
     }
@@ -1008,6 +1131,21 @@
     }
 
     await Promise.all(jobs);
+    /* v292【补漏】：各分组实时源都没拿到的品种，按「实时优先的兜底」再过一遍。
+     * 覆盖：CNBC 挂的美股指数（TV→东财）、腾讯挂的美股/港股（TV→东财）、
+     * TWSE 挂的台股（TV 延 20min → Yahoo ^TWII）、TV 挂的外汇美债（东财）。 */
+    const missing = keys.filter(k => !out[k]);
+    if (missing.length) {
+      try { await tvScanFallback(missing, out); } catch (e) { /* 下一级 */ }
+      const miss2 = missing.filter(k => !out[k]);
+      if (miss2.length) {
+        try { await emQuoteBatch(miss2, out); } catch (e) { /* 下一级 */ }
+      }
+      const miss3 = miss2.filter(k => !out[k]);
+      if (miss3.length) {
+        try { await yahooQuoteFallback(miss3, out); } catch (e) { /* 全挂，如实报失败 */ }
+      }
+    }
     Object.keys(out).forEach(k => { cache.set('q:' + k, { t: Date.now(), d: out[k] }); });
     return out;
   }

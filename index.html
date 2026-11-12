@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=289">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=289">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=289">
-<link rel="stylesheet" href="assets/css/app.css?v=289">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=290">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=290">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=290">
+<link rel="stylesheet" href="assets/css/app.css?v=290">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -86,17 +86,7 @@
       <div class="snr" id="snr"></div>
       <div class="srcgrid" id="srcGrid"></div>
     </div>
-    <p class="feed-note sm">只抓真实快讯 · <b>S 级仅限宏观政策与剧烈地缘</b> · 公司公告不进流 · 多源自动合并</p>
     <div class="feed" id="feedList"></div>
-    <details class="sec-more">
-      <summary>快讯筛选口径</summary>
-      <div class="sec-more-b">
-        <p>本终端<b>只呈现真实抓取到的快讯</b>，抓不到就显示为空，不会用任何编造新闻兜底。带「演示数据」角标的条目是手动插入的示例，不是新闻；带灰色「示例」角标的条目未标记为真实抓取来源，请自行核实。</p>
-        <p><b>S 级只给宏观政策与剧烈地缘</b>（关税落地、开战、紧急降息、924 那种一揽子政策）。公司层面的公告默认不进信息流——定增获批、实控人被立案、减持、业绩、发债、ETF 停牌申赎都属于公司/产品事务，不改变宏观判断，只有十亿级回购或重大资产重组这类重磅事件才留 A 级「公司事件」。</p>
-        <p><b>观点、推演、直播式分析一律不进流</b>：标题带「| Live」「分析更新中」，或以「观点 / 解读 / 前瞻」开头，或是设问句（「…会上涨？」「…会跌破60美元吗」），都是评论而非事件。</p>
-        <p><b>同一件事多源报道会合并</b>：6 小时内标题指向同一事件即归为一条，来源并列显示，不会隔两分钟又刷一遍。</p>
-      </div>
-    </details>
   </section>
 
   <!-- ==================== 异动矩阵 ==================== -->
@@ -110,19 +100,6 @@
     <div id="radarActive"></div>
     <div class="sec-h sm"><h2>异动日志</h2><span class="sec-tip" id="radarTick">--</span></div>
     <div class="radar-log" id="radarLog"></div>
-    <details class="sec-more">
-      <summary>方块规则 / 阈值标定 / 新闻补获 说明</summary>
-      <div class="sec-more-b">
-        <div class="mx-lg">
-          <div class="mx-lg-g"><span>弱</span><i class="g0"></i><i class="g1"></i><i class="g2"></i><i class="g3"></i><i class="g4"></i><span>强</span><em>底色＝阈值消耗</em></div>
-          <div class="mx-lg-g"><b class="mx-ring"></b><em>已击穿阈值</em><b class="mx-gn"></b><em>绿＝下跌</em></div>
-          <div class="mx-lg-g"><b class="mx-sz1"></b><b class="mx-sz2"></b><b class="mx-sz3"></b><em>方块越大＝异动越大</em></div>
-        </div>
-        <p>六个尺度并联（1 / 2 / 3 / 5 / 15 / 30 分钟），阈值按各品种自身波动率逐档标定，任一越线即报警。异动越大、方块越大、排得越靠前：领跑者用 2×2 大块，紧随其后的用宽块，其余 1×1，休市/取数失败沉底。可在「设置 → 异动矩阵展示」切成「按颜色」的等大热力图。格内数字是真实振幅，不是排名。点任意格子，倒查它当时前后的消息。</p>
-        <p><b>阈值不拍脑袋定</b>，每个品种按自己的波动率单独标定，并且六个时间尺度并联。最快的三档为什么要切到 1~3 分钟——闪崩与垂直拉升的真实时间常数就是几十秒到两三分钟，只盯 30 分钟等于事后复述。5/15/30 分钟用 TradingView 真实 5 分钟 K 线（A股 106 个交易日）按「触发日占比」反解；1/2/3 分钟用近 5 个交易日真实 1 分钟数据量出「等稀有度比例」（r1=0.66 / r2=0.78 / r3=0.88 · t5），分类下限对短窗等比缩放，不垫高外汇等低波品种。例：科创50 1 分钟 1.37% / 5 分钟 2.07% / 30 分钟 4.24%；上证 0.46 / 0.70 / 1.36%；VIX 3.44 / 5.20 / 7.99%。短尺度还有一道闸门：1~3 分钟越线时，5 分钟窗口必须同向走掉自身阈值一半以上。阈值每天都在自己漂移：平静期收紧、高波日放宽（双向 ±15%），40 个交易日后以实盘分布为主、仍夹紧防脏数据。重复提醒只认 1~5 分钟瞬时脉冲——横盘磨洋工不重报、快速 V 反立即报、再下一台阶立即升级报「跌幅已扩大至 X%」。</p>
-        <p><b>还有一条兜底通道</b>：如果行情链路没抓到，而媒体报道了「某品种突然拉升 / 跳水」，就用真实分钟线按新闻发布那一刻回溯去核对（试 0 / +10 / +20 分钟三个锚点，因为新闻常在行情走完才发）；核对通过才补进异动名单，标成「新闻补获」，不弹全屏。行情链路已经自己抓到的，不会重复补。</p>
-      </div>
-    </details>
   </section>
 
   <!-- ==================== 事件追踪 ==================== -->
@@ -131,17 +108,8 @@
       <h2>事件追踪</h2>
       <button class="sec-act" id="eventEdit">编辑</button>
       <button class="sec-act" id="eventBack" hidden>← 返回</button>
-      <p class="sec-hint one">行情与相关报道实时更新（报价 30 秒 · 快讯 25 秒）· 叙事部分为人工维护快照 · 点卡片看详情</p>
     </div>
     <div id="eventBody"></div>
-    <details class="sec-more">
-      <summary>本模块的口径</summary>
-      <div class="sec-more-b">
-        <p>当前全球瞩目的重点事件进度：预测、现状、时间线与相关报道。点卡片查看详情。</p>
-        <p><b>行情与相关报道是实时更新的</b>：卡片上标「实时」的数字与相关标的报价来自实时行情源，每 30 秒刷新一次；「相关报道」每 25 秒抓取一次快讯并自动补充。</p>
-        <p>时间线里标「已报道」的是来源已报道的既成事实，标「预期」的是预测与关键节点；概率、席位、民调、人工指数这类<b>无法实时化</b>的指标仍是人工维护截止时点的记录值，卡片上会标明「叙事维护于」的具体时间。</p>
-      </div>
-    </details>
   </section>
 
   <!-- ==================== 赚钱效应指标（insum 市场宽度，iframe 嵌入） ==================== -->
@@ -206,38 +174,38 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=289">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=289">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=289">
-  <link rel="preload" as="script" href="assets/js/app.js?v=289">
-  <link rel="preload" as="script" href="assets/js/api.js?v=289">
-<script src="vendor/lightweight-charts.standalone.production.js?v=289"></script>
-<script src="assets/js/cn-stocks.js?v=289"></script>
-<script src="assets/js/universe.js?v=289"></script>
-<script src="assets/js/session.js?v=289"></script>
-<script src="assets/js/topics.js?v=289"></script>
-<script src="assets/js/news-crypto.js?v=289"></script>
-<script src="assets/js/news-zh.js?v=289"></script>
-<script src="assets/js/pool.js?v=289"></script>
-<script src="assets/js/news-live-client.js?v=289"></script>
-<script src="assets/js/api.js?v=289"></script>
-<script src="assets/js/alert.js?v=289"></script>
-<script src="assets/js/indicator.js?v=289"></script>
-<script src="assets/js/drawing.js?v=289"></script>
-<script src="assets/js/charts.js?v=289"></script>
-<script src="assets/js/news-spike.js?v=289"></script>
-<script src="assets/js/anomaly.js?v=289"></script>
-<script src="assets/js/volprofile.js?v=289"></script>
-<script src="assets/js/verify.js?v=289"></script>
-<script src="assets/js/predict.js?v=289"></script>
-<script src="assets/js/hot-events.js?v=289"></script>
-<script src="assets/js/events.js?v=289"></script>
-<script src="assets/js/account.js?v=289"></script>
-<script src="assets/js/app.js?v=289"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=290">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=290">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=290">
+  <link rel="preload" as="script" href="assets/js/app.js?v=290">
+  <link rel="preload" as="script" href="assets/js/api.js?v=290">
+<script src="vendor/lightweight-charts.standalone.production.js?v=290"></script>
+<script src="assets/js/cn-stocks.js?v=290"></script>
+<script src="assets/js/universe.js?v=290"></script>
+<script src="assets/js/session.js?v=290"></script>
+<script src="assets/js/topics.js?v=290"></script>
+<script src="assets/js/news-crypto.js?v=290"></script>
+<script src="assets/js/news-zh.js?v=290"></script>
+<script src="assets/js/pool.js?v=290"></script>
+<script src="assets/js/news-live-client.js?v=290"></script>
+<script src="assets/js/api.js?v=290"></script>
+<script src="assets/js/alert.js?v=290"></script>
+<script src="assets/js/indicator.js?v=290"></script>
+<script src="assets/js/drawing.js?v=290"></script>
+<script src="assets/js/charts.js?v=290"></script>
+<script src="assets/js/news-spike.js?v=290"></script>
+<script src="assets/js/anomaly.js?v=290"></script>
+<script src="assets/js/volprofile.js?v=290"></script>
+<script src="assets/js/verify.js?v=290"></script>
+<script src="assets/js/predict.js?v=290"></script>
+<script src="assets/js/hot-events.js?v=290"></script>
+<script src="assets/js/events.js?v=290"></script>
+<script src="assets/js/account.js?v=290"></script>
+<script src="assets/js/app.js?v=290"></script>
 <!-- v287：账号 SDK 改为 async 且排在 app.js 之后。它此前是同步脚本，
      会让整个 HTML 解析停下等 CDN（实测 0.35~1.24s），而 boot() 挂在
      DOMContentLoaded 上，等于每段首屏都被外部 SDK 拖住。async 后
      DOMContentLoaded 不再等它；account.js 的 sdk() 已有明确容错。 -->
-<script async src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js?v=289"></script>
+<script async src="https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js?v=290"></script>
 </body>
 </html>

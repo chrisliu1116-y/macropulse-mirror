@@ -5,6 +5,7 @@
     d: null,
     from: 0,
     to: 0,
+    userMoved: false,    /* v290：用户手动拖/捏过就不再自动对齐最右 */
     cursor: -1,          /* 十字游标所在索引，-1 = 不在游标模式 */
     cursorMode: false,
     ptrs: new Map(),
@@ -292,6 +293,23 @@
       if (e.data && typeof e.data.mm_theme === 'string') applyTheme(e.data.mm_theme);
       /* v1.5.10：原生返回键 → 父页面 postMessage 通知退出全屏。
        * 赚钱效应是在 iframe 里全屏的，父页面无法替它调 exitFullscreen。 */
+      if (e.data && e.data.mm_effect_show) {
+        /* v290：主站每次切到本页都发。重绘一次（隐藏加载后 draw 曾因宽 0 早退）；
+         * 只要用户没手动拖/捏过，就把窗口对齐回最右最新
+         * （30日/60日/120日/全部按当前激活按钮）。 */
+        setTimeout(function () {
+          try {
+            if (!S.d) return;
+            if (!S.userMoved) {
+              var on = document.querySelector('#ranges button.on');
+              setRange(on ? (parseInt(on.dataset.n, 10) || 0) : 30);
+              S.cursor = -1; S.cursorMode = false;
+              updateCards(S.d.dates.length - 1);
+            }
+            draw();
+          } catch (err) {}
+        }, 120);
+      }
       if (e.data && e.data.mm_exit_fs) {
         var cur = document.fullscreenElement || document.webkitFullscreenElement;
         if (cur) {
@@ -738,6 +756,7 @@
         var ratio = span0 > 0 ? (S.pinch.mid - S.pinch.from) / span0 : 0.5;
         S.from = S.pinch.mid - span * ratio;
         S.to = S.pinch.mid + span * (1 - ratio);
+        S.userMoved = true;
         clampView();
         clearRangeBtns();
         draw();
@@ -756,6 +775,7 @@
         var dy = e.clientY - S.drag.y;
         if (!S.drag.moved && Math.hypot(dx, dy) > 6) {
           S.drag.moved = true;
+          S.userMoved = true;
           cancelLP();
         }
         if (!S.drag.moved) return;
