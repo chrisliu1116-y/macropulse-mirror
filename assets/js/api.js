@@ -61,6 +61,25 @@
    * 这里统一封装：先试同源，失败再试 Cloudflare Worker 的 /__proxy。
    * Worker 已加同路由（白名单放行行情源），两条路任一可用即可。 */
   const WORKER_BASE = 'https://macropulse-edge.mp-7962af18.workers.dev';
+  /* v303【Worker 熔断】workers.dev 在国内被网络封锁，实测连接超时 12s。
+   * 若每次请求都去等它，手机端每个数据请求白卡 12 秒 —— 这是比数据缺失更糟的体验。
+   * 策略：① 只用 1500ms 超时探测；② 探测失败后全局熔断，本次会话不再尝试；
+   * ③ 熔断后所有代理请求只走同源（同源 404 就直接失败，由调用方切腾讯/新浪直连）。 */
+  let _workerDead = false;
+  function _workerTry(q) {
+    if (_workerDead) return Promise.reject(new Error('worker circuit open'));
+    return new Promise((resolve, reject) => {
+      const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = setTimeout(() => {
+        if (ctrl) { try { ctrl.abort(); } catch (e) {} }
+        _workerDead = true;                 // 一旦超时，本次会话永久跳过
+        reject(new Error('worker timeout'));
+      }, 1500);
+      fetch(WORKER_BASE + '/__proxy?u=' + q, ctrl ? { cache: 'no-store', signal: ctrl.signal } : { cache: 'no-store' })
+        .then(r => { clearTimeout(timer); if (r.ok) return resolve(r); _workerDead = true; reject(new Error('worker HTTP ' + r.status)); })
+        .catch(e => { clearTimeout(timer); _workerDead = true; reject(e); });
+    });
+  }
   async function proxyFetch(target, opts) {
     const q = encodeURIComponent(target);
     const o = Object.assign({ cache: 'no-store' }, opts || {});
@@ -70,9 +89,11 @@
       if (r.ok) return r;
       firstErr = new Error('same-origin HTTP ' + r.status);
     } catch (e) { firstErr = e; }
-    const r2 = await fetch(WORKER_BASE + '/__proxy?u=' + q, o);
-    if (r2.ok) return r2;
-    throw firstErr || new Error('proxy HTTP ' + r2.status);
+    try {
+      return await _workerTry(q);
+    } catch (e2) {
+      throw firstErr || e2;
+    }
   }
 
   async function getJSON(url, ttl, tag) {
@@ -340,6 +361,46 @@
     if (s === '100.DJIA') return 'usDJI';
     if (s === '100.NDX') return 'usIXIC';
     return null;
+  }
+
+  /* ---------------- 期权主力合约链（v303） ----------------
+   * 用户要求：搜「50ETF期权 / 300ETF期权 / 沪深300期权 / 黄金期权 / NVDA期权」
+   * → 出最活跃的主力认购/认沽合约 → 点任意合约直接看报价+分时+K线。
+   * 国内走东财 clist（按成交额 f6 降序，fs=m:10 上交所期权 / m:8 中金所 / m:113~115 商品），
+   * 合约 secid 原样用东财返回的 f13.f12（10.xxx / 8.xxx / 113.xxx），
+   * 注册后现有 em 报价/分时/K线链路自动生效。
+   * 东财不可达时如实返回空（不编合约代码）。 */
+  const EM_CLIST = 'https://push2.eastmoney.com/api/qt/clist/get';
+  const OPT_MARKETS = [
+    { re: /50ETF期权|510050期权|50etf/i, fs: 'm:10', label: '50ETF期权' },
+    { re: /300ETF期权|510300期权|300etf/i, fs: 'm:10', label: '300ETF期权' },
+    { re: /科创50期权|588000期权/i, fs: 'm:10', label: '科创50ETF期权' },
+    { re: /IO期权|沪深300期权/i, fs: 'm:8', label: '沪深300股指期权' },
+    { re: /MO期权|中证1000期权/i, fs: 'm:8', label: '中证1000股指期权' },
+    { re: /HO期权|上证50期权/i, fs: 'm:8', label: '上证50股指期权' },
+    { re: /黄金期权|沪金期权|au期权/i, fs: 'm:113', label: '沪金期权' },
+    { re: /铜期权|沪铜期权|cu期权/i, fs: 'm:114', label: '沪铜期权' },
+    { re: /原油期权|sc期权/i, fs: 'm:115', label: '原油期权' }
+  ];
+  async function optionChain(q) {
+    const hit = OPT_MARKETS.filter(x => x.re.test(String(q || '')))[0];
+    if (!hit) return [];
+    const url = EM_CLIST + '?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f6&fs='
+      + encodeURIComponent(hit.fs) + '&fields=f12,f13,f14,f2,f3,f6';
+    const txt = await proxyText(url, 'https://quote.eastmoney.com/');
+    const cut = String(txt || '').indexOf('{');
+    if (cut < 0) return [];
+    let d;
+    try { d = JSON.parse(String(txt).slice(cut)); } catch (e) { return []; }
+    const rows = ((d.data || {}).diff) || [];
+    return rows.filter(r => r && r.f12 && r.f13 != null).slice(0, 20).map(r => ({
+      code: String(r.f12),
+      name: String(r.f14 || r.f12),
+      secid: String(r.f13) + '.' + String(r.f12),
+      type: hit.label,
+      grp: 'option',
+      px: r.f2, pct: r.f3
+    }));
   }
 
   /* ---------------- 新浪国内期货（v302） ----------------
@@ -3182,7 +3243,7 @@
 
   w.API = {
     candles, intraday, minutes, quote, batchQuote, dexQuote, extQuote, extQuotes, hlQuote, hlMids, jpPtsQuote, krNaverMinutes,
-    status, tradingViewURL, tMin, tDay, flash, news, newsSoft,
+    status, tradingViewURL, tMin, tDay, flash, news, newsSoft, optionChain,
     probeSources, altTickers, bnJSON, cboeQuote, cboeMinutes, cboeDaily,
     cachedQuote,
     /* v286：行情可信白名单与校验器（供回归测试 / 外部校验复用） */

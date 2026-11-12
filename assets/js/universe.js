@@ -232,7 +232,12 @@
     'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
     'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
     'US5Y': { name: '美债5年期收益率', short: '5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
-    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'em', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' }
+    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'em', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    /* ===== v303【中债实时参考】中债 10Y/30Y 收益率没有稳定免费直连，
+     * 用两只国债 ETF（腾讯/东财双源、交易时段逐笔）作为高可靠实时参考，
+     * 搜「中国国债 / 中债10Y / 30年国债」都能命中；国债期货 TL/T 已在 bondfut 组。 */
+    '511260': { name: '十年国债ETF（中债10Y参考）', short: '十年国债ETF', src: 'em', secid: '1.511260', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511260' },
+    '511090': { name: '30年国债ETF（中债30Y参考）', short: '30年国债ETF', src: 'em', secid: '1.511090', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511090' }
   };
 
   /* ---------------- 行情分组 ----------------
@@ -257,7 +262,8 @@
     twstock: { label: '台股个股',  full: '台股',         color: '#ffa94d', order: 15, session: 'tw' },
     cffex:   { label: '股指期货',  full: '中金所股指期货', color: '#e599f7', order: 16, session: 'cn' },
     bondfut: { label: '国债期货',  full: '中金所国债期货', color: '#96f2d7', order: 17, session: 'cn' },
-    glbfut:  { label: '海外期指',  full: '海外股指期货',  color: '#ffd8a8', order: 18, session: 'us' }
+    glbfut:  { label: '海外期指',  full: '海外股指期货',  color: '#ffd8a8', order: 18, session: 'us' },
+    option:  { label: '期权',      full: '期权主力合约',  color: '#c0eb75', order: 19, session: 'cn' }
   };
 
   /* ---------------- 异动矩阵监控池 ----------------

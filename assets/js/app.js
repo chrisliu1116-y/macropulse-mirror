@@ -3807,11 +3807,15 @@
      * （007709→07709 南方东英SK海力士2x）。补查结果排在前；公募基金已被
      * parseBox / emSearchSug 的 jj~ / 150. 过滤排除，不会混进来。 */
     const q2 = /^0\d{5}$/.test(q) ? q.replace(/^0+/, '') : null;
-    let box = null, cn = null, em = null, box2 = null, em2 = null, yh = null, left = q2 ? 6 : 4, fin = false;
+    /* v303：查询含「期权」时追加东财主力合约链一路（50ETF/300ETF/IO/MO/HO/黄金/铜/原油期权） */
+    const isOptQ = /期权/.test(q);
+    let box = null, cn = null, em = null, box2 = null, em2 = null, yh = null, opt = null;
+    let left = (q2 ? 6 : 4) + (isOptQ ? 1 : 0);
+    fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
       /* v301：Yahoo 结果没有东财 secid（只有 yh 符号），不能按旧条件过滤掉 */
-      (yh || []).concat(box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
+      (opt || []).concat(yh || []).concat(box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
         if (!x || !x.code || seen[x.code]) return;
         if (!x.yh && (!x.secid || x.secid.indexOf('.') < 0)) return;
         seen[x.code] = 1; out.push(x);
@@ -3824,6 +3828,12 @@
     etfCNSug(q, rows => { cn = rows; done(); });
     emSearchSug(q, rows => { em = rows; done(); });
     yahooSug(q, rows => { yh = rows; done(); });
+    if (isOptQ) {
+      try {
+        w.API.optionChain(q).then(rows => { opt = rows || []; done(); })
+          .catch(() => { opt = []; done(); });
+      } catch (e) { opt = []; done(); }
+    }
     if (q2) {
       smartboxSug(q2, h => { box2 = parseBox(h); done(); });
       emSearchSug(q2, rows => { em2 = rows; done(); });

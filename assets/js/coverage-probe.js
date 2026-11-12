@@ -23,8 +23,8 @@
     ['美债', [['US10Y', null], ['US30Y', null], ['US2Y', null]]],
     ['商品期货', [['WTI', '原油'], ['GOLD', '黄金'], ['NG', '天然气'], ['COPPER', null]]],
     ['股指期货', [['IF', null], ['NQ', null], ['A50', null]]],
-    ['国债期货', [['TL', null], ['T', null]]],
-    ['期权', [['510050', null], ['IO', null]]]
+    ['国债期货', [['TL', null], ['T', null], ['511260', null], ['511090', null]]],
+    ['期权', [['50ETF期权', null], ['沪深300期权', null]]]
   ];
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -63,6 +63,8 @@
       for (const [key, name] of items) {
         const r = { cat, key, search: '', quote: '', intra: '', kline: '' };
         r.search = await searchOne(name || key, key);
+        if (cat === '期权') { r.quote = 'n/a'; r.intra = 'n/a'; r.kline = 'n/a'; rows.push(r);
+          lines.push('SEARCH ' + cat.padEnd(6) + String(key).padEnd(8) + ' S=' + r.search); flush(); await sleep(400); continue; }
         try {
           const q = (await w.API.batchQuote([key]))[key];
           if (!q) r.quote = 'nil';
