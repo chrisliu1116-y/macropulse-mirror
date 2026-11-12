@@ -3538,13 +3538,12 @@
     return out;
   }
 
-  /* ---------------- 搜索建议 · 唯一规范 SPEC（v277，H5 与原生 Activity 共用） ----------------
-   * 【为什么要有这份 SPEC】行情页「添加自选」(openPicker) 与原生「浮窗添加股票」
-   * 曾各自写了一套搜索，结果同一标的「一个搜得到、一个搜不到」。二者不能字面共享
-   * JS 代码（原生 Activity 是纯 Java、无 WebView，@JavascriptInterface 只是把 Java
-   * 注入 WebView 的 JS 上下文，方向 JS→Java，反过来调不到），故把「源/编码/参数/
-   * 解析」固定为下面唯一一份规范，Java 严格镜像；可复跑 tools/test_search_parity.py
-   * 对同一批关键词分别复刻 H5 与 Java 逻辑，比对结果，防止再次分叉。
+  /* ---------------- 搜索建议 · 单一引擎（v286+，H5 与原生 Activity 共用一份实现） ----------------
+   * 【方案4】行情页「添加自选」(openPicker) 与原生「浮窗添加股票」现在共用唯一实现
+   * StockSearchEngine.search(ctx,q)（Java，四源并发收集+解析+合并+去重）。APP 壳内 H5
+   * 经 NativePulse.nativeSearch 桥调它，原生 Activity 直接调它，结果天然一致；
+   * 下面 JS 三源仅在无桥（PWA/浏览器）或桥异常时作降级。tools/test_search_parity.py
+   * 现为「单实现输出快照 + 结构护栏」回归测试，不再是两份镜像的比对。
    *
    * 规范（三层，顺序即优先级，参数两边必须一致）：
    *  ① 稳定主源 腾讯 smartbox  https://smartbox.gtimg.cn/s3/?v=2&q=<UTF-8>&t=all
@@ -3703,6 +3702,17 @@
    * 后面到达的源结果被静默丢弃 —— 表面「双源合并」实为「竞态取最快」，
    * 正是「同一个词这边搜得到、那边搜不到」的元凶之一。现等三路齐/超时再合并。 */
   function sugList(q, cb) {
+    /* v286+ 方案4：APP 壳内优先走唯一引擎 NativePulse.nativeSearch（Java 单实现），
+     * H5 行情页与原生浮窗共用同一份「请求+解码+解析+合并+去重」，结果天然一致。
+     * 无桥（PWA/浏览器）或桥异常时，整段落到下面 JS 三源合并作降级。 */
+    const np = w.NativePulse;
+    if (np && typeof np.nativeSearch === 'function') {
+      try {
+        const rows = JSON.parse(np.nativeSearch(q) || '[]');
+        cb(Array.isArray(rows) ? rows : []);
+        return;
+      } catch (e) { /* 桥不可用 → 落回 JS 三源降级 */ }
+    }
     let box = null, cn = null, em = null, left = 3, fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
@@ -7869,6 +7879,23 @@
     const tick = () => {
       const t = new Date();
       el.textContent = [t.getHours(), t.getMinutes(), t.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
+      /* v287：这行原来只是页面时钟，用户会误当成「行情刚更新」。
+       * 现在把真实数据时间写进 title，并在数据陈旧时标出来。 */
+      const st = w.API && w.API.status;
+      const at = st && st.lastOk ? st.lastOk : 0;
+      if (!at) {
+        el.title = '本机时钟 · 行情数据尚未成功刷新';
+        el.classList.remove('clock-stale');
+        return;
+      }
+      const ago = Math.max(0, Math.round((Date.now() - at) / 1000));
+      const hhmm = new Date(at);
+      const hms = [hhmm.getHours(), hhmm.getMinutes(), hhmm.getSeconds()]
+        .map(n => String(n).padStart(2, '0')).join(':');
+      const stale = ago > 180;
+      el.title = '本机时钟（上行为当前时间）· 行情数据最后更新 ' + hms
+        + (stale ? ' · 已 ' + Math.round(ago / 60) + ' 分钟未刷新，报价可能延迟' : ' · 数据 ' + ago + ' 秒前');
+      el.classList.toggle('clock-stale', stale);
     };
     tick(); setInterval(tick, 1000);
   }

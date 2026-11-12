@@ -485,6 +485,52 @@
     return out;
   }
 
+  /* v287：东财批量报价失败时的腾讯兜底。
+   * 背景：em 组约 79 个品种原本只有东财一个报价源，getJSON 抛错时
+   * `catch(e){}` 什么都不做 → 缓存里的旧价继续被当成实时价显示，
+   * 活线还每 8 秒用这个旧价续点，看起来「价格在走」其实根本没刷新。
+   * 这里只对**能由 secid 推导腾讯代码**的品种（A股/港股，实测 31 个）
+   * 补一次真实报价，带 at=Date.now()、src='tx'；拿不到的品种绝不编数，
+   * 由 status 明确报失败，界面显示「上次更新」。
+   * 不复制 txQuote：那个依赖 universe 的 txSym 字段，em 组没有。 */
+  async function emFallbackTx(keys, out) {
+    const map = {}, syms = [];
+    keys.forEach(k => {
+      if (out[k]) return;
+      const code = txStockCode(k);
+      if (!code) return;
+      map[code] = k;
+      syms.push(code);
+    });
+    if (!syms.length) return 0;
+    const r = await fetch(TX_Q + syms.join(','), { cache: 'no-store' });
+    if (!r.ok) throw new Error('tx-fallback HTTP ' + r.status);
+    const buf = await r.arrayBuffer();
+    let txt;
+    try { txt = new TextDecoder('gbk').decode(buf); }
+    catch (e) { txt = new TextDecoder().decode(buf); }
+    const re = /v_([a-zA-Z0-9._]+)="([^"]*)"/g;
+    let m, n = 0;
+    while ((m = re.exec(txt))) {
+      const k = map[m[1]];
+      if (!k) continue;
+      const f = m[2].split('~');
+      if (f.length < 5) continue;              // 逗号格式是商品，这里不处理
+      const price = +f[3], prev = +f[4];
+      if (!(price > 0)) continue;
+      out[k] = {
+        price: price,
+        pct: prev ? (price - prev) / prev * 100 : 0,
+        chg: prev ? price - prev : null,
+        prev: prev || null,
+        high: null, low: null, open: null,
+        at: Date.now(), src: 'tx'
+      };
+      n++;
+    }
+    return n;
+  }
+
   /* ---------------- CNBC（VIX 实时源 + 1 分钟线） ----------------
    * VIX 这个指数很特殊：CBOE 官方 cdn-api 的路径本身就叫 delayed_quotes（延 15 分钟），
    * Yahoo ^VIX 实测滞后 912 秒，TradingView CBOE:VIX 是 delayed_streaming_900 ——
@@ -746,7 +792,22 @@
               src: 'em'
             };
           });
-        } catch (e) { /* 单次失败不致命，保留缓存 */ }
+        } catch (e) {
+          /* v287：东财挂了不能只「保留缓存」——那会让旧价被当成实时价。
+           * ① 记下失败原因供设置页/顶栏显示；② 对能映射腾讯代码的品种补真实报价；
+           * ③ 补不到的品种绝不编数，交给 UI 明确标「延迟」。 */
+          status.em = 'fail';
+          status.lastErr = '东财批量报价失败：' + ((e && e.message) || e);
+          try {
+            const n = await emFallbackTx(em, out);
+            if (n > 0) {
+              status.emFallback = 'tx:' + n;
+              status.lastOk = Date.now();
+            }
+          } catch (e2) {
+            status.emFallback = 'fail';
+          }
+        }
       })());
     }
 
