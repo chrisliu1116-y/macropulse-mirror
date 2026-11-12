@@ -127,6 +127,7 @@
              用定位隐藏替代 hidden 属性，保证 input.click() 稳定拉起系统选择器 -->
         <input type="file" id="acctRestoreFile" style="position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0">
       </div>`;
+    bindRestoreInput(host);
   }
 
   function refresh(root) {
@@ -181,9 +182,8 @@
     }
   });
 
-  d.addEventListener('change', async (e) => {
-    const input = e.target;
-    if (!input || input.id !== 'acctRestoreFile') return;
+  async function handleRestoreFile(input) {
+    if (!input) return;
     const file = input.files && input.files[0];
     input.value = '';
     if (!file || busy) return;
@@ -198,6 +198,21 @@
       busy = false;
       refresh($('#acctHost'));
     }
+  }
+
+  /* v299【还原选文件没反应根因】此前用 document 级 change 委托，而 Android WebView 里
+   * input 的 change 事件不一定冒泡到 document —— 选了文件点「添加」后监听不到。
+   * 改为在 paint() 里给 input 直接绑定 onchange，不依赖冒泡，选完必触发。 */
+  function bindRestoreInput(host) {
+    const input = host ? host.querySelector('#acctRestoreFile') : null;
+    if (!input) return;
+    input.onchange = function (e) { handleRestoreFile(input); };
+  }
+
+  d.addEventListener('change', async (e) => {
+    const input = e.target;
+    if (!input || input.id !== 'acctRestoreFile') return;
+    handleRestoreFile(input);
   });
 
   w.MPAccount = {
