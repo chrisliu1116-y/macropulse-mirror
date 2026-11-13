@@ -2371,6 +2371,17 @@
       : ('interval=' + interval + '&range=' + range);
     const target = `${YAHOO_CHART}${encodeURIComponent(sym)}?${qs}`;
     let url = target;
+    /* v310【Yahoo 通道修复】此前只走 fetch + LiveNews.proxy，APP 的原生直连桥
+     * (NativePulse.nativeFetch) 完全没接上：WebView 对 Yahoo 无 CORS，每个请求
+     * 都先撞一次失败再落代理。现在优先 proxyText（原生直连 → 代理池），
+     * 失败才回退原路径，不改变任何兜底语义。 */
+    try {
+      const raw = await proxyText(target, 'https://finance.yahoo.com/');
+      const c0 = String(raw || '').indexOf('{');
+      if (c0 >= 0 && String(raw).indexOf('"chart"') >= 0) {
+        return JSON.parse(String(raw).slice(c0));
+      }
+    } catch (e) { /* 落原 fetch 路径 */ }
     try {
       const r = await fetch(target, { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
