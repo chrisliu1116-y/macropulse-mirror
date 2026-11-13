@@ -3811,7 +3811,7 @@
     const isOptQ = /期权/.test(q);
     let box = null, cn = null, em = null, box2 = null, em2 = null, yh = null, opt = null;
     let left = (q2 ? 6 : 4) + (isOptQ ? 1 : 0);
-    fin = false;
+    let fin = false;
     const merge = () => {
       const seen = Object.create(null), out = [];
       /* v301：Yahoo 结果没有东财 secid（只有 yh 符号），不能按旧条件过滤掉 */

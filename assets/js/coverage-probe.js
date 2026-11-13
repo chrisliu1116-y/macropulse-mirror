@@ -28,6 +28,11 @@
   ];
 
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  /* 每条断言最多等 6 秒：上游挂了别把整轮拖到十几分钟 */
+  const limit = (p, fallback) => Promise.race([
+    p.catch(e => fallback + '(' + String(e && e.message || e).slice(0, 20) + ')'),
+    new Promise(r => setTimeout(() => r(fallback + '(6s)'), 6000))
+  ]);
 
   function searchOne(q, key) {
     return new Promise(resolve => {
@@ -35,6 +40,7 @@
       let done = false;
       const t = setTimeout(() => { if (!done) { done = true; resolve('timeout'); } }, 2200);
       try {
+        if (typeof w.__sugList !== 'function') { done = true; clearTimeout(t); resolve('err(no __sugList)'); return; }
         w.__sugList(q, rows => {
           if (done) return;
           done = true; clearTimeout(t);
@@ -45,7 +51,7 @@
             (want && String(x.secid) === want)));
           resolve((hit ? 'ok' : 'miss') + '(' + (rows || []).length + ',' + ms + 'ms)');
         });
-      } catch (e) { clearTimeout(t); resolve('err'); }
+      } catch (e) { clearTimeout(t); resolve('err(' + String(e && e.message || e).slice(0, 24) + ')'); }
     });
   }
 
@@ -57,24 +63,30 @@
     const lines = [];
     const flush = () => { host.textContent = lines.join('\n'); host.scrollTop = host.scrollHeight; };
     const rows = [];
-    lines.push('全品种四断言自检开始（约 2~4 分钟）…'); flush();
+    let idx = 0;
+    const CASES_N = CASES.reduce((n, c) => n + c[1].length, 0);
+    lines.push('全品种四断言自检开始，共 ' + CASES_N + ' 项（每项最多 6 秒 × 3 + 400ms）…');
+    lines.push('页面底部会在结束后出现「下载 JSON / 复制 JSON」按钮。'); flush();
 
     for (const [cat, items] of CASES) {
       for (const [key, name] of items) {
         const r = { cat, key, search: '', quote: '', intra: '', kline: '' };
+        idx++;
         r.search = await searchOne(name || key, key);
         if (cat === '期权') { r.quote = 'n/a'; r.intra = 'n/a'; r.kline = 'n/a'; rows.push(r);
           lines.push('SEARCH ' + cat.padEnd(6) + String(key).padEnd(8) + ' S=' + r.search); flush(); await sleep(400); continue; }
         try {
-          const q = (await w.API.batchQuote([key]))[key];
-          if (!q) r.quote = 'nil';
+          const q = (await limit(w.API.batchQuote([key]), 'timeout').then(x => x || {}))[key];
+          if (typeof q === 'string') r.quote = q;
+          else if (!q) r.quote = 'nil';
           else if (q.failed) r.quote = 'failed';
           else if (!isFinite(q.price) || q.price <= 0) r.quote = 'bad';
           else r.quote = 'ok(' + q.price + ')';
         } catch (e) { r.quote = 'err'; }
         try {
-          const i = await w.API.intraday(key);
-          if (!i) r.intra = 'nil';
+          const i = await limit(w.API.intraday(key), 'timeout');
+          if (typeof i === 'string') r.intra = i;
+          else if (!i) r.intra = 'nil';
           else if (i.failed) r.intra = 'failed';
           else {
             const n = (i.points || []).length;
@@ -83,8 +95,9 @@
           }
         } catch (e) { r.intra = 'err'; }
         try {
-          const k = await w.API.candles(key, 'day');
-          if (!k) r.kline = 'nil';
+          const k = await limit(w.API.candles(key, 'day'), 'timeout');
+          if (typeof k === 'string') r.kline = k;
+          else if (!k) r.kline = 'nil';
           else if (k.failed) r.kline = 'failed';
           else {
             const n = (k.points || []).length;
@@ -94,7 +107,7 @@
         } catch (e) { r.kline = 'err'; }
         rows.push(r);
         const pass = [r.search, r.quote, r.intra, r.kline].every(v => String(v).startsWith('ok'));
-        lines.push((pass ? 'PASS ' : 'FAIL ') + cat.padEnd(6) + String(key).padEnd(8) +
+        lines.push('[' + idx + '/' + CASES_N + '] ' + (pass ? 'PASS ' : 'FAIL ') + cat.padEnd(6) + String(key).padEnd(8) +
           ' S=' + r.search.padEnd(16) + ' Q=' + r.quote.padEnd(14) +
           ' I=' + r.intra.padEnd(12) + ' K=' + r.kline);
         flush();
@@ -113,10 +126,51 @@
     lines.push('===== 覆盖矩阵汇总 =====');
     Object.keys(byCat).forEach(c => lines.push(c.padEnd(8) + byCat[c].pass + '/' + byCat[c].n));
     lines.push('总合格：' + passN + '/' + total);
+    const payload = JSON.stringify({ at: new Date().toISOString(), passN, total, byCat, rows }, null, 2);
     lines.push('');
-    lines.push('—— 复制下面 JSON 发给开发者 ——');
-    lines.push(JSON.stringify({ at: new Date().toISOString(), passN, total, byCat, rows }));
+    lines.push('===== 自检完成：' + passN + '/' + total + ' 合格 =====');
+    lines.push('下面 JSON 可直接下载或复制发给开发者：');
+    lines.push('');
     flush();
+    /* 按钮：下载 .json / 复制到剪贴板（手机可用） */
+    const bar = d.createElement('div');
+    bar.style.cssText = 'position:sticky;bottom:0;padding:10px 0;background:#0b1017;display:flex;gap:8px;flex-wrap:wrap';
+    const mk = (txt, fn) => {
+      const b = d.createElement('button');
+      b.textContent = txt;
+      b.style.cssText = 'padding:8px 14px;border:1px solid #4f9dff;border-radius:6px;background:#16243c;color:#cfe3ff;font:14px sans-serif';
+      b.onclick = fn;
+      bar.appendChild(b);
+      return b;
+    };
+    mk('下载 JSON', () => {
+      try {
+        const blob = new Blob([payload], { type: 'application/json' });
+        const url = w.URL.createObjectURL(blob);
+        const a = d.createElement('a');
+        a.href = url; a.download = 'macropulse-coverage-' + new Date().toISOString().slice(0, 10) + '.json';
+        d.body.appendChild(a); a.click(); d.body.removeChild(a);
+        setTimeout(() => w.URL.revokeObjectURL(url), 1000);
+      } catch (e) { alert('下载失败：' + e.message); }
+    });
+    mk('复制 JSON', () => {
+      const done = () => { alert('已复制，粘贴发给开发者即可'); };
+      if (w.navigator && w.navigator.clipboard) {
+        w.navigator.clipboard.writeText(payload).then(done, () => fallbackCopy());
+      } else fallbackCopy();
+      function fallbackCopy() {
+        const ta = d.createElement('textarea');
+        ta.value = payload; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+        d.body.appendChild(ta); ta.select();
+        try { d.execCommand('copy'); done(); } catch (e) { alert('复制失败，请长按下方文本全选复制'); }
+        d.body.removeChild(ta);
+      }
+    });
+    host.appendChild(bar);
+    const pre = d.createElement('pre');
+    pre.style.cssText = 'white-space:pre-wrap;word-break:break-all;font:11px/1.45 Menlo,monospace;color:#9fb3cf';
+    pre.textContent = payload;
+    host.appendChild(pre);
     try { w.__coverageResult = { passN, total, byCat, rows }; } catch (e) {}
   }
 
