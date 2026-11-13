@@ -143,16 +143,38 @@
       bar.appendChild(b);
       return b;
     };
-    mk('下载 JSON', () => {
+    /* v306：跑完自动触发下载（用户不用手动复制那一大段 JSON）；
+     * 手机浏览器若拦截非手势下载，仍可点下面的「下载 JSON」按钮兜底。 */
+    const fileName = 'macropulse-coverage-' + new Date().toISOString().slice(0, 10) + '.json';
+    let autoDone = false;
+    const doDownload = (silent) => {
       try {
         const blob = new Blob([payload], { type: 'application/json' });
         const url = w.URL.createObjectURL(blob);
         const a = d.createElement('a');
-        a.href = url; a.download = 'macropulse-coverage-' + new Date().toISOString().slice(0, 10) + '.json';
+        a.href = url; a.download = fileName;
         d.body.appendChild(a); a.click(); d.body.removeChild(a);
-        setTimeout(() => w.URL.revokeObjectURL(url), 1000);
-      } catch (e) { alert('下载失败：' + e.message); }
-    });
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 1500);
+        if (!silent) { alert('已下载：' + fileName); }
+        autoDone = true;
+        return true;
+      } catch (e) {
+        if (!silent) alert('下载失败：' + e.message);
+        return false;
+      }
+    };
+    mk('下载 JSON', () => doDownload(false));
+    /* 自动下载 + 自动复制（剪贴板权限被拒时静默跳过，不影响主流程） */
+    setTimeout(() => {
+      doDownload(true);
+      try {
+        if (w.navigator && w.navigator.clipboard) {
+          w.navigator.clipboard.writeText(payload).catch(() => {});
+        }
+      } catch (e) {}
+      lines.push('>>> 已自动下载 ' + fileName + '（手机的「下载」目录）；若没看到请点下面「下载 JSON」。');
+      flush();
+    }, 400);
     mk('复制 JSON', () => {
       const done = () => { alert('已复制，粘贴发给开发者即可'); };
       if (w.navigator && w.navigator.clipboard) {
