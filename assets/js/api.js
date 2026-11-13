@@ -2343,6 +2343,15 @@
     }));
   }
 
+  /* v308【K线不卡死】emHistJSON 会串行试 2 个东财域名 + 代理，最坏 27s；
+   * 给它 4 秒硬闸，超时立即进并行兜底，别让自检/页面白等。 */
+  function klineFast(p, ms) {
+    return Promise.race([
+      p,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('em kline slow')), ms || 4000))
+    ]);
+  }
+
   async function candles(key, mode) {
     const a = U.get(key);
     if (!a) throw new Error('unknown asset ' + key);
@@ -2361,9 +2370,9 @@
         pts = shift(await bnKline(a.sym, BN_IV[mode] || '1d', m), 28800); // 币安是 UTC，统一成北京时区分量
       } else {
         const klt = mode === 'd' ? 101 : mode === 'w' ? 102 : 103;
-        pts = await emKline(a.secid, klt, m, 1);
+        pts = await klineFast(emKline(a.secid, klt, m, 1), 4000);
         if (!klineValid(pts)) {
-          const raw = await emKline(a.secid, klt, m, 0);
+          const raw = await klineFast(emKline(a.secid, klt, m, 0), 4000);
           if (raw.length && klineValid(raw)) pts = raw;
           else pts = pts.filter(p => p.close > 0 && p.low > 0);
         }
@@ -2388,6 +2397,9 @@
           } catch (e) { /* 拿不到就维持现有那段 */ }
         }
         pts = pts.slice(-m);
+        /* v308：东财偶发只给几根（688825 实测只给 5 根，而腾讯/新浪/Yahoo 都有 74 根），
+         * 不能当成功返回 —— 主动抛错进并行兜底，拿足历史再画。 */
+        if (pts.length < 20) throw new Error('em kline too few ' + pts.length);
         /* 外盘商品的日 K 也来自东财（延时 10 分钟），最后一根是「今日进行中」的那根，
          * 收盘价会比分时末价晚 10 分钟 —— 用新浪的实时末价补一下，两边对得上。
          * 只补最后一根（历史 K 不受影响）。 */
@@ -2410,33 +2422,25 @@
       /* v284：东财 kline 挂了 → 腾讯日K 补一次（实测 A股/港股给满 320 天；
        * 美股/韩股只给当日 1 根，1 根画不出历史，所以 <20 根就当没有）。
        * 再不行才如实报「取数失败」，绝不合成假 K 线。 */
-      /* v302：国内期货东财断 → 新浪日K */
-      try {
-        if (a && a.sinaf) {
-          const sk = await sinaFutDaily(key, a, m);
-          if (sk.length >= 20) return finalize({ points: dedupe(sk), synthetic: false, src: 'sina' });
-        }
-      } catch (e1) { /* 落腾讯 */ }
-      try {
-        const code = txStockCode(key);
-        if (code && mode === 'd') {
-          const tp = await txDaily(code, m);
-          if (tp.length >= 20) return finalize({ points: dedupe(tp), synthetic: false, src: 'tencent' });
-        }
-      } catch (e2) { /* 腾讯也没有就继续走 Yahoo */ }
-      /* v301【Yahoo 兜底】东财被掐时 Yahoo chart 覆盖 A股/港/美/日/韩/台/指数/外汇/
-       * 美债收益率/商品/海外期指。够 20 根才用（1~2 根画不出历史）。 */
-      try {
-        const ys = yahooSymbolFor(key, a);
-        if (ys) {
-          const iv = mode === 'd' ? '1d' : mode === 'w' ? '1wk' : '1mo';
-          const y = await yahooBars(ys, iv, 'epoch');
-          const ysc = yahooScale(y && y.points, ys);
-          if (ysc && ysc.length >= 20) {
-            return finalize({ points: dedupe(ysc.slice(-m)), synthetic: false, src: 'yahoo' });
-          }
-        }
-      } catch (e3) { /* Yahoo 也不通就如实失败 */ }
+      /* v308【并行竞速兜底】新浪期货 / 腾讯 / Yahoo 同时打，谁先给够 20 根用谁；
+       * 原来串行三层各 9s，手机端必然被 10s 超时掐断（v307 矩阵 K线 19 个 timeout 即此）。 */
+      const iv = mode === 'd' ? '1d' : mode === 'w' ? '1wk' : '1mo';
+      const tasks = [];
+      const wrap = (pr, src) => pr.then(p => {
+        if (p && p.length >= 20) return { p: p, src: src };
+        throw new Error(src + ' too few');
+      }).catch(() => { throw new Error(src + ' fail'); });
+      if (a && a.sinaf) tasks.push(wrap(sinaFutDaily(key, a, m), 'sina'));
+      const code = txStockCode(key);
+      if (code) tasks.push(wrap(txDaily(code, m), 'tencent'));
+      const ys = yahooSymbolFor(key, a);
+      if (ys) tasks.push(wrap(yahooBars(ys, iv, 'epoch').then(y => yahooScale(y && y.points, ys)), 'yahoo'));
+      if (tasks.length) {
+        try {
+          const got = await Promise.any(tasks);
+          return finalize({ points: dedupe(got.p.slice(-m)), synthetic: false, src: got.src });
+        } catch (e4) { /* 全挂 */ }
+      }
       return failedRes(e && e.message);
     }
   }
