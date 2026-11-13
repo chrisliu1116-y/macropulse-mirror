@@ -231,13 +231,21 @@
     'YM':  { name: '道指期货',         short: 'YM', src: 'yahoo', sym: 'YM=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CBOT_MINI:YM1!' },
     'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
     'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
-    'US5Y': { name: '美债5年期收益率', short: '5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
-    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'em', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    'US5Y': { name: '美债5年期收益率', short: '5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' , cnbc: 'US5Y' },
+    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'cnbc', cnbc: 'US2Y', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    /* v310【中债真指数】CNBC restQuote 实测 CN10Y 返回 China 10 Year Bond；
+     * 与 511260/511090 国债 ETF 并存，指数本身不冒充、ETF 作实时参考。 */
+    'CN10Y': { name: '中债10年期国债收益率', short: '中债10Y', src: 'cnbc', cnbc: 'CN10Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    'CN30Y': { name: '中债30年期国债收益率', short: '中债30Y', src: 'cnbc', cnbc: 'CN30Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
     /* ===== v303【中债实时参考】中债 10Y/30Y 收益率没有稳定免费直连，
      * 用两只国债 ETF（腾讯/东财双源、交易时段逐笔）作为高可靠实时参考，
      * 搜「中国国债 / 中债10Y / 30年国债」都能命中；国债期货 TL/T 已在 bondfut 组。 */
     '511260': { name: '十年国债ETF（中债10Y参考）', short: '十年国债ETF', src: 'em', secid: '1.511260', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511260' },
     '511090': { name: '30年国债ETF（中债30Y参考）', short: '30年国债ETF', src: 'em', secid: '1.511090', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511090' },
+    /* v310【静态注册】此前只靠搜索动态注册，本机脚本/直接进详情会 unknown asset */
+    '688825': { name: '长鑫科技', short: '长鑫科技', src: 'em', secid: '1.688825', dec: 2, grp: 'cnstock', kind: 'stock', unit: '元' },
+    '000001': { name: '平安银行', short: '平安银行', src: 'em', secid: '0.000001', dec: 2, grp: 'cnstock', kind: 'stock', unit: '元' },
+    '09988':  { name: '阿里巴巴-W', short: '阿里', src: 'em', secid: '116.09988', dec: 2, grp: 'hkstock', kind: 'stock', unit: '港元' },
     /* v307【手机矩阵 unknown asset 补齐】 */
     '07709': { name: '南方东英SK海力士2x', short: '海力士2x', src: 'em', secid: '116.07709', dec: 3, grp: 'hkstock', kind: 'stock', unit: '港元' },
     'SPY':   { name: 'SPDR标普500ETF', short: 'SPY', src: 'em', secid: '107.SPY', dec: 2, grp: 'usstock', kind: 'stock', unit: 'USD', tv: 'AMEX:SPY' },
@@ -531,6 +539,17 @@
     ASSETS[c] = a;
     return a;
   }
+  /* v310【动态注册新浪 ETF 期权合约】CON_OP_ 代码只有新浪源，没有东财 secid。 */
+  function regSinaOption(code, name) {
+    const c = String(code || '');
+    if (!c) return null;
+    if (ASSETS[c]) return ASSETS[c];
+    const nm = String(name || c);
+    const a = { name: nm, short: nm, src: 'sinaopt', opSina: c,
+      dec: 4, grp: 'option', kind: 'option', unit: '元', _synth: true };
+    ASSETS[c] = a;
+    return a;
+  }
   function name(key) { const a = get(key); return a ? (a.short || a.name) : key; }
   function fullName(key) { const a = get(key); return a ? a.name : key; }
   function grp(key) { const a = get(key); return a ? (GROUPS[a.grp] || { label: '', color: '#8b95a6', order: 99 }) : { label: '', color: '#8b95a6', order: 99 }; }
@@ -591,7 +610,7 @@
     get, name, fullName, grp, decimals, fmt, pct, changeLabel, keys, orderOf,
     cnName, shortNames: GLOBAL_SHORT,
     /* v149：全市场名录搜索命中后现场合成品种用（synthCN 写 ASSETS，后续照常取报价） */
-    synthCN, synthGlobal, synthSecid, regYahooSym,
+    synthCN, synthGlobal, synthSecid, regYahooSym, regSinaOption,
     adrOf
   };
 })(window);

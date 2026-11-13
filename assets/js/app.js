@@ -3926,10 +3926,11 @@
          * 渲染前先 synthSecid 预写进 ASSETS，点「＋」时现有委托直接能加。 */
         /* v288：桥结果不再被本地名录的 seen 过滤掉（那正是分叉的直接原因） */
         const sug = (S._pkSug || []).filter(x =>
-          x && x.secid && S.watch.indexOf(String(x.code)) < 0);
+          x && (x.secid || x.yh || x.opSina) && S.watch.indexOf(String(x.code)) < 0);
         const sugHTML = sug.map(x => {
           try {
             if (x.secid) U.synthSecid(x.secid, x.code, x.name);
+            else if (x.opSina && U.regSinaOption) U.regSinaOption(x.code, x.name);
             else if (x.yh && U.regYahooSym) U.regYahooSym(x.code, x.name, x.yh, x.grp || 'option', 'option');
           } catch (e) { }
           return `<button class="pk-i" data-k="${esc(x.code)}">

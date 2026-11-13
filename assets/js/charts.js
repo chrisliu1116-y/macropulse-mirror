@@ -17,7 +17,8 @@
   const SRC_NAME = Object.freeze({
     em: '东财', tencent: '腾讯', sina: '新浪', cboe: 'CBOE', cnbc: 'CNBC',
     yahoo: 'Yahoo', binance: '币安', nasdaq: '纳斯达克', naver: 'Naver',
-    mixed: '多源合并', tx: '腾讯外盘', tv: 'TradingView', 'jp-pts': '日股'
+    mixed: '多源合并', tx: '腾讯外盘', tv: 'TradingView', 'jp-pts': '日股',
+    twse: '台湾证交所', treasury: '美国财政部', sinaopt: '新浪期权', cboeopt: 'CBOE期权'
   });
 
   // 图表配色跟随深浅主题（每次建图时重新取，切主题后重绘即可生效）

@@ -221,7 +221,9 @@
    * 与 charts.js 的 SRC_NAME 白名单保持一致。 */
   const REAL_SOURCES = Object.freeze([
     'em', 'tencent', 'sina', 'cboe', 'cnbc', 'yahoo', 'binance',
-    'nasdaq', 'naver', 'mixed', 'tx', 'tv', 'jp-pts', 'twse'
+    'nasdaq', 'naver', 'mixed', 'tx', 'tv', 'jp-pts', 'twse',
+    /* v310：财政部官方日频收益率 / 新浪 ETF 期权 / CBOE 期权链 */
+    'treasury', 'sinaopt', 'cboeopt'
   ]);
   function trusted(res) {
     if (!res || res.failed || res.synthetic) return false;
@@ -371,6 +373,11 @@
    * 这些品类直接打主源，东财只作兜底。 */
   function directKind(a) {
     const g = (a && a.grp) || '';
+    /* v310：动态注册的期权合约（新浪 CON_OP / CBOE OCC）也要直达主源 */
+    if (a && a.src === 'sinaopt') return 'sinaopt';
+    if (a && a.src === 'yahoo' && g === 'option') return 'yahoo';
+    /* v310：src:yahoo 的指数（IXIC ^IXIC）也要直达实时 Yahoo，不落 TV 延时源 */
+    if (g === 'us' && a && a.src === 'yahoo') return 'yahoo';
     if (g === 'cffex' || g === 'bondfut') return 'sinafut';
     if (g === 'fx') return 'sinafx';
     if (g === 'rate') return 'cnbc';
@@ -451,13 +458,28 @@
       else if (kind === 'sinafx') r = await sinaFxQuote(key, a);
       else if (kind === 'cnbc') r = await cnbcRateQuote(key, a);
       else if (kind === 'tencent') r = await txQuoteOne(key, a);
-      else if (kind === 'yahoo' && a.sym) {
-        const hd = await yahooChart(a.sym, '1d', '1d');
-        const m = (((hd.chart || {}).result || [])[0] || {}).meta || {};
-        if (m.regularMarketPrice > 0) {
-          const price = m.regularMarketPrice;
-          const prev = m.chartPreviousClose || m.previousClose || price;
-          r = { price, prev, src: 'yahoo' };
+      else if (kind === 'sinaopt') r = await sinaOptionQuote((a && a.opSina) || key);
+      else if (kind === 'yahoo') {
+        /* v310：台股第一主源用 TWSE 官方实时（非延时 TV） */
+        if (a && a.grp === 'twstock') {
+          try {
+            const q = await twseQuote(key);
+            if (q && q.price > 0) r = { price: q.price, prev: q.prev, src: 'twse' };
+          } catch (e) { /* 落 Yahoo */ }
+        }
+        if (!r) {
+          /* v310：不再依赖 a.sym（7203/005930/2330 此前因此落回 TV 延时源），
+           * 用 yahooSymbolFor 统一映射，并打 1m/1d 的实时 meta.regularMarketPrice。 */
+          const ys = (a && a.sym && a.src === 'yahoo') ? a.sym : yahooSymbolFor(key, a);
+          if (ys) {
+            const hd = await yahooChart(ys, '1m', '1d');
+            const m = (((hd.chart || {}).result || [])[0] || {}).meta || {};
+            if (m.regularMarketPrice > 0) {
+              const price = m.regularMarketPrice;
+              const prev = m.chartPreviousClose || m.previousClose || price;
+              r = { price, prev, src: 'yahoo' };
+            }
+          }
         }
       }
       if (r && r.price > 0) {
@@ -469,6 +491,137 @@
       }
     } catch (e) { /* 落原链路 */ }
     return false;
+  }
+
+  /* ================== v310 真实源补齐（本机实测 2026-11-13） ==================
+   * 用户指定 CNBC `ts-api` bars 为首选；本机 4 个路径实测 404，因此同时接入
+   * 已实测可用的美国财政部官方日频收益率曲线（真实 2Y/10Y/30Y）。
+   * 期权：国内走新浪 OP_UP/OP_DOWN + CON_OP 分钟线；美股走 CBOE 官方 CDN
+   *   （SPY.json / NVDA.json / _SPX.json 实测 200，_SPY 403 → 双前缀自动试）+
+   *   Yahoo OCC 合约分时/日K（实测 79 点 / 154 根）。全程不合成、不冒充。 */
+  const CNBC_BARS = 'https://ts-api.cnbc.com/harmony/app/bars/';
+  const TREASURY_CSV = 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/'
+    + 'daily-treasury-rates.csv/2026/all?type=daily_treasury_yield_curve&field_tdr_date_value=2026&page&_format=csv';
+  const SINA_OPT_LIST = 'https://hq.sinajs.cn/list=';
+  const SINA_OPT_API = 'https://stock.finance.sina.com.cn/futures/api/openapi.php/StockOptionDaylineService.';
+  const CBOE_OPT = 'https://cdn.cboe.com/api/global/delayed_quotes/options/';
+  const SINA_REF = 'https://finance.sina.com.cn/';
+
+  /* CNBC bars：用户给的 1M/1D、1D/1Y 路径。返回 barData.priceBars。 */
+  async function cnbcBars(sym, iv, rg) {
+    const url = CNBC_BARS + encodeURIComponent(sym) + '/' + iv + '/' + rg + '.json';
+    const txt = await proxyText(url, 'https://www.cnbc.com/');
+    const d = JSON.parse(String(txt || '').slice(String(txt || '').indexOf('{')));
+    const bars = ((d.barData || {}).priceBars) || ((d.data || {}).priceBars) || [];
+    return bars.map(b => ({
+      time: Math.floor((+(b.tradeTimeinMills || b.tradeTime || 0)) / 1000),
+      open: +(b.open || 0), high: +(b.high || 0), low: +(b.low || 0),
+      close: +(b.close || 0), volume: +(b.volume || 0)
+    })).filter(p => p.time > 0 && p.close > 0);
+  }
+
+  /* 美国财政部官方日频收益率曲线（CSV 真实值，含 2 Yr / 10 Yr / 30 Yr 列） */
+  async function treasuryDaily(key, n) {
+    const txt = String(await proxyText(TREASURY_CSV, 'https://home.treasury.gov/') || '');
+    const lines = txt.trim().split(/\r?\n/);
+    if (lines.length < 3) return [];
+    const head = lines[0].split(',').map(x => x.replace(/"/g, '').trim());
+    const want = key === 'US2Y' ? '2 Yr' : key === 'US10Y' ? '10 Yr' : key === 'US30Y' ? '30 Yr' : '2 Yr';
+    const col = head.indexOf(want);
+    if (col < 0) return [];
+    const out = [];
+    for (let i = 1; i < lines.length; i++) {
+      const f = lines[i].split(',');
+      const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((f[0] || '').trim());
+      const v = +f[col];
+      if (!m || !(v > 0)) continue;
+      out.push({ time: Math.floor(Date.UTC(+m[3], +m[1] - 1, +m[2]) / 1000),
+        open: v, high: v, low: v, close: v, volume: 0 });
+    }
+    out.sort((a, b) => a.time - b.time);
+    return out.slice(-(n || 200));
+  }
+
+  /* ---- 新浪 ETF 期权：OP_UP/OP_DOWN 拿合约码，CON_OP 拿报价，getOptionMinline 拿分时 ---- */
+  const SINA_OPT_UND = [
+    { re: /50ETF期权|510050期权|50etf/i, und: '510050', label: '50ETF期权' },
+    { re: /300ETF期权|510300期权|300etf/i, und: '510300', label: '300ETF期权' },
+    { re: /科创50期权|588000期权/i, und: '588000', label: '科创50ETF期权' },
+    /* 中金所 IO 股指期权本机无免风控源；这里明确以「300ETF 期权（沪深300 系列）」呈现，
+     * 名称已标注，绝不冒充 IO 合约。 */
+    { re: /沪深300期权|IO期权|io期权/i, und: '510300', label: '300ETF期权(沪深300系列)' }
+  ];
+  function optMonths() {
+    const d = new Date(), y = String(d.getFullYear()).slice(2), m = d.getMonth() + 1;
+    const n2 = m + 1 > 12 ? 1 : m + 1, y2 = m + 1 > 12 ? String(d.getFullYear() + 1).slice(2) : y;
+    return [y + String(m).padStart(2, '0'), y2 + String(n2).padStart(2, '0')];
+  }
+  async function sinaOptionChain(q) {
+    const hit = SINA_OPT_UND.filter(x => x.re.test(String(q || '')))[0];
+    if (!hit) return [];
+    const codes = [];
+    optMonths().forEach(mo => codes.push('OP_UP_' + hit.und + mo, 'OP_DOWN_' + hit.und + mo));
+    const txt = String(await proxyText(SINA_OPT_LIST + codes.join(','), SINA_REF) || '');
+    const re = /hq_str_OP_(UP|DOWN)_\d+="([^"]*)"/g;
+    const out = []; let m;
+    while ((m = re.exec(txt))) {
+      (m[2] || '').split(',').filter(x => /^CON_OP_\d+$/.test(x)).slice(0, 8).forEach(code => {
+        out.push({ code: code, name: hit.label + ' ' + (m[1] === 'UP' ? '购' : '沽') + ' ' + code.slice(-5),
+          secid: '', opSina: code, grp: 'option', type: hit.label });
+      });
+    }
+    return out.slice(0, 20);
+  }
+  /* 新浪期权分时（真实分钟序列，i=HH:MM:SS, p=价格, v=量, d=日期） */
+  async function sinaOptionMin(code) {
+    const txt = String(await proxyText(SINA_OPT_API + 'getOptionMinline?symbol=' + code, SINA_REF) || '');
+    const cut = txt.indexOf('{'); if (cut < 0) return [];
+    const d = JSON.parse(txt.slice(cut));
+    const arr = (((d.result || {}).data) || []);
+    const out = [];
+    /* v310【实测字段】新浪 getOptionMinline 只有第一条带 d（日期），其余 N 条
+     * 只有 i/p/v——旧版按 d 过滤把 119/120 个点全丢了。日期沿用首条。 */
+    const firstD = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String((arr[0] || {}).d || ''));
+    if (!firstD) return [];
+    arr.forEach(r => {
+      const p = +r.p, mm = /^(\d{2}):(\d{2})/.exec(String(r.i || ''));
+      if (!(p > 0) || !mm) return;
+      out.push({ time: Math.floor(Date.UTC(+firstD[1], +firstD[2] - 1, +firstD[3], +mm[1], +mm[2]) / 1000),
+        open: p, high: p, low: p, close: p, volume: +r.v || 0 });
+    });
+    return out;
+  }
+  /* 报价用分时尾点（同源，避免顶部价和图尾不一致）；首点作日内基准 */
+  async function sinaOptionQuote(code) {
+    const pts = await sinaOptionMin(code);
+    if (!pts.length) return null;
+    return { price: pts[pts.length - 1].close, prev: pts[0].close, src: 'sinaopt' };
+  }
+
+  /* ---- 美股期权：CBOE CDN 期权链（免 Key、无 429），OCC 代码走 Yahoo 三图 ---- */
+  async function cboeOptionChain(ticker) {
+    const t = String(ticker || '').toUpperCase().replace(/[^A-Z.\-]/g, '');
+    if (!/^[A-Z.\-]{1,6}$/.test(t)) return [];
+    let d = null;
+    for (const pre of [t, '_' + t]) {
+      try {
+        const txt = String(await fastText(CBOE_OPT + pre + '.json', 'https://www.cboe.com/', 2500) || '');
+        const cut = txt.indexOf('{'); if (cut < 0) continue;
+        const j = JSON.parse(txt.slice(cut));
+        if (j && j.data && j.data.options && j.data.options.length) { d = j; break; }
+      } catch (e) { /* 试下一个前缀 */ }
+    }
+    if (!d) return [];
+    const rows = d.data.options
+      .filter(o => o && /^[A-Z]{1,6}\d{6}[CP]\d{8}$/.test(String(o.option || '')))
+      .sort((a, b) => (+b.volume || 0) - (+a.volume || 0))
+      .slice(0, 20);
+    return rows.map(o => ({
+      code: String(o.option), name: t + ' ' + String(o.option),
+      secid: '', yh: String(o.option), grp: 'option',
+      type: '美股期权(延15m)', px: o.last_trade_price || ((+o.bid + +o.ask) / 2) || 0,
+      bid: o.bid, ask: o.ask, vol: o.volume
+    }));
   }
 
   /* ---------------- 期权主力合约链（v303） ----------------
@@ -495,24 +648,27 @@
     new Promise((_, rej) => setTimeout(() => rej(new Error('option source timeout')), ms || 2500))
   ]);
   async function optionChain(q) {
+    /* v310：国内 ETF 期权主源改新浪（本机 200，零东财依赖）；东财 clist 仅兜底 */
+    try {
+      const sr = await sinaOptionChain(q);
+      if (sr.length) return sr;
+    } catch (e) { /* 落兜底 */ }
     const hit = OPT_MARKETS.filter(x => x.re.test(String(q || '')))[0];
     if (!hit) return [];
-    const url = EM_CLIST + '?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f6&fs='
-      + encodeURIComponent(hit.fs) + '&fields=f12,f13,f14,f2,f3,f6';
-    const txt = await fastText(url, 'https://quote.eastmoney.com/', 2500);
-    const cut = String(txt || '').indexOf('{');
-    if (cut < 0) return [];
-    let d;
-    try { d = JSON.parse(String(txt).slice(cut)); } catch (e) { return []; }
-    const rows = ((d.data || {}).diff) || [];
-    return rows.filter(r => r && r.f12 && r.f13 != null).slice(0, 20).map(r => ({
-      code: String(r.f12),
-      name: String(r.f14 || r.f12),
-      secid: String(r.f13) + '.' + String(r.f12),
-      type: hit.label,
-      grp: 'option',
-      px: r.f2, pct: r.f3
-    }));
+    try {
+      const url = EM_CLIST + '?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f6&fs='
+        + encodeURIComponent(hit.fs) + '&fields=f12,f13,f14,f2,f3,f6';
+      const txt = await fastText(url, 'https://quote.eastmoney.com/', 2500);
+      const cut = String(txt || '').indexOf('{');
+      if (cut < 0) return [];
+      const d = JSON.parse(String(txt).slice(cut));
+      const rows = ((d.data || {}).diff) || [];
+      return rows.filter(r => r && r.f12 && r.f13 != null).slice(0, 20).map(r => ({
+        code: String(r.f12), name: String(r.f14 || r.f12),
+        secid: String(r.f13) + '.' + String(r.f12),
+        type: hit.label, grp: 'option', px: r.f2, pct: r.f3
+      }));
+    } catch (e) { return []; }
   }
 
   /* ---------------- 美股期权链（v304 · Yahoo v7） ----------------
@@ -523,6 +679,11 @@
   async function usOptionChain(ticker) {
     const t = String(ticker || '').toUpperCase().replace(/[^A-Z.\-]/g, '');
     if (!/^[A-Z.\-]{1,6}$/.test(t)) return [];
+    /* v310：CBOE 官方 CDN 主源（本机 SPY/QQQ/NVDA/TSLA/_SPX 实测 200、无 429） */
+    try {
+      const cr = await cboeOptionChain(t);
+      if (cr.length) return cr;
+    } catch (e) { /* 落 Yahoo v7 兜底 */ }
     let txt = '';
     try {
       txt = await fastText(YAHOO_OPT + encodeURIComponent(t),
@@ -541,16 +702,11 @@
       (list || []).slice(0, 10).forEach(o => {
         const cs = String(o.contractSymbol || '');
         if (!cs) return;
-        rows.push({
-          code: cs,
-          name: t + ' ' + exp + ' ' + side + ' ' + (o.strike != null ? o.strike : ''),
-          secid: '', yh: cs, grp: 'option', type: '美股期权',
-          px: o.lastPrice, pct: o.percentChange
-        });
+        rows.push({ code: cs, name: t + ' ' + exp + ' ' + side + ' ' + (o.strike != null ? o.strike : ''),
+          secid: '', yh: cs, grp: 'option', type: '美股期权', px: o.lastPrice, pct: o.percentChange });
       });
     };
-    pushRows(opt.calls, 'C');
-    pushRows(opt.puts, 'P');
+    pushRows(opt.calls, 'C'); pushRows(opt.puts, 'P');
     return rows;
   }
 
@@ -2501,10 +2657,26 @@
           const fx = await sinaFxDaily(key, a, m);
           if (fx.length >= 20) return finalize({ points: dedupe(fx), synthetic: false, src: 'sina' });
         }
+        if (dk === 'cnbc') {
+          /* v310：CNBC bars 首选；本机 404 → 美国财政部官方日频收益率曲线（真实 2Y/10Y/30Y） */
+          try {
+            const cb = await cnbcBars(a.cnbc || key, '1D', '1Y');
+            if (cb.length >= 20) return finalize({ points: dedupe(cb.slice(-m)), synthetic: false, src: 'cnbc' });
+          } catch (e) { /* 落财政部 */ }
+          /* 财政部曲线是美国国债：只对美债 2Y/10Y/30Y 用，绝不冒充中债 */
+          if (/^US(2|10|30)Y$/.test(key)) {
+            try {
+              const td = await treasuryDaily(key, m);
+              if (td.length >= 20) return finalize({ points: dedupe(td), synthetic: false, src: 'treasury' });
+            } catch (e) { /* 落 Yahoo */ }
+          }
+        }
         if (dk === 'yahoo' || dk === 'cnbc' || dk === 'sinafx') {
           const ysd = yahooSymbolFor(key, a);
           if (ysd) {
-            const y = await yahooBars(ysd, ivd, 'epoch');
+            /* v310：期权合约（OCC）对 epoch 模式只回 1 根，改用 range=6mo（实测 34 根）*/
+            const yRange = (a && a.grp === 'option') ? (mode === 'd' ? '6mo' : '1mo') : 'epoch';
+            const y = await yahooBars(ysd, ivd, yRange);
             const p = yahooScale(y && y.points, ysd);
             if (p && p.length >= 20) return finalize({ points: dedupe(p), synthetic: false, src: 'yahoo' });
           }
@@ -2983,6 +3155,23 @@
             synthetic: false, src: 'sina' };
         }
       }
+      if (a && dk === 'sinaopt') {
+        const om = await sinaOptionMin(a.opSina || key);
+        if (om && om.length > 10) {
+          return { points: om, preClose: (cachedQuote(key) || {}).prev || om[0].close,
+            synthetic: false, src: 'sinaopt' };
+        }
+      }
+      if (a && dk === 'cnbc') {
+        /* v310：用户指定的 CNBC bars 首选（本机 404 时快速落 Yahoo） */
+        try {
+          const cb = await cnbcBars(a.cnbc || key, '1M', '1D');
+          if (cb.length > 10) {
+            return { points: cb, preClose: (cachedQuote(key) || {}).prev || cb[0].close,
+              synthetic: false, src: 'cnbc' };
+          }
+        } catch (e) { /* 落 Yahoo */ }
+      }
       if (a && (dk === 'yahoo' || dk === 'cnbc' || dk === 'sinafx')) {
         const ys = yahooSymbolFor(key, a);
         if (ys) {
@@ -3301,7 +3490,25 @@
   }
 
   async function intraday(key) {
-    return finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
+    const r = finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
+    /* v310【同源校准硬规则】分时数组加载完且非空时，用尾点价对齐顶部快照，
+     * 消除「顶部价来自 A 源、分时尾点来自 B 源」拉出的 90° 竖线（美债历史问题）。 */
+    try {
+      if (r && !r.failed && r.points && r.points.length) {
+        const last = r.points[r.points.length - 1];
+        const hit = cache.get('q:' + key);
+        if (last && last.close > 0 && hit && hit.d && hit.d.price > 0 && hit.d.price !== last.close) {
+          const q = hit.d;
+          cache.set('q:' + key, { t: Date.now(), d: Object.assign({}, q, {
+            price: last.close,
+            chg: q.prev ? last.close - q.prev : q.chg,
+            pct: q.prev ? (last.close - q.prev) / q.prev * 100 : q.pct,
+            at: Date.now(), aligned: true
+          }) });
+        }
+      }
+    } catch (e) { /* 校准失败不影响出图 */ }
+    return r;
   }
 
   // 分钟序列（供异动雷达计算窗口涨跌幅）
@@ -3491,7 +3698,7 @@
 
   w.API = {
     candles, intraday, minutes, quote, batchQuote, dexQuote, extQuote, extQuotes, hlQuote, hlMids, jpPtsQuote, krNaverMinutes,
-    status, tradingViewURL, tMin, tDay, flash, news, newsSoft, optionChain, usOptionChain,
+    status, tradingViewURL, tMin, tDay, flash, news, newsSoft, optionChain, usOptionChain, cboeOptionChain, sinaOptionChain, sinaOptionMin,
     probeSources, altTickers, bnJSON, cboeQuote, cboeMinutes, cboeDaily,
     cachedQuote,
     /* v286：行情可信白名单与校验器（供回归测试 / 外部校验复用） */
