@@ -363,6 +363,114 @@
     return null;
   }
 
+  /* ================= v309 品类精准主源直达 =================
+   * 用户口径：不许「所有品种先撞东财、超时后再串行试别的源」。
+   * 本机实测（Chrome UA + Referer，单次低频）：
+   *   腾讯 qt/minute/fqkline 200 且 CORS:*；新浪 nf_IF0 / fx_susdcnh 200；
+   *   CNBC US2Y 返回 last:"4.867%"；Yahoo 2330.TW 5m/5d 239 点。
+   * 这些品类直接打主源，东财只作兜底。 */
+  function directKind(a) {
+    const g = (a && a.grp) || '';
+    if (g === 'cffex' || g === 'bondfut') return 'sinafut';
+    if (g === 'fx') return 'sinafx';
+    if (g === 'rate') return 'cnbc';
+    if (g === 'twstock' || g === 'jpstock' || g === 'krstock' || g === 'glbfut') return 'yahoo';
+    if (g === 'cn' || g === 'cnstock' || g === 'hkstock' || g === 'usstock') return 'tencent';
+    return null;
+  }
+  async function sinaFxQuote(key, a) {
+    const sym = (a && a.fxSym) || ('fx_s' + String(key).toLowerCase().replace(/^\w+?_?/, ''));
+    const map = { USDCNH: 'fx_susdcnh', USDJPY: 'fx_susdjpy', EURUSD: 'fx_seurusd' };
+    const code = map[key] || 'fx_s' + String(key).toLowerCase();
+    const txt = await proxyText('https://hq.sinajs.cn/list=' + code,
+      'https://finance.sina.com.cn/');
+    const m = /="([^"]*)"/.exec(String(txt || ''));
+    if (!m || !m[1]) return null;
+    const f = m[1].split(',');
+    const price = +f[1];            // 买价/最新价
+    const prev = +f[8] || +f[3];    // 昨收
+    if (!isFinite(price) || price <= 0) return null;
+    return { price, prev, src: 'sina' };
+  }
+  /* v309【外汇日K】Yahoo 的 CNH=X 日线只有 1 根，本机实测新浪
+   * NewForexService.getDayKLine?symbol=fx_susdcnh 返回 2014 年至今的日线字符串。 */
+  async function sinaFxDaily(key, a, n) {
+    const map = { USDCNH: 'fx_susdcnh', USDJPY: 'fx_susdjpy', EURUSD: 'fx_seurusd' };
+    const code = map[key] || 'fx_s' + String(key).toLowerCase();
+    const url = 'https://vip.stock.finance.sina.com.cn/forex/api/jsonp.php/var%20_=/NewForexService.getDayKLine?symbol=' + code;
+    const txt = await proxyText(url, 'https://finance.sina.com.cn/');
+    const m = /\("([^"]*)"\)/.exec(String(txt || ''));
+    if (!m || !m[1]) return [];
+    const out = [];
+    m[1].split('|').forEach(seg => {
+      const f = seg.split(',');
+      if (f.length < 5) return;
+      const t = tDay(f[0]);
+      const o = +f[1], lo = +f[2], hi = +f[3], c = +f[4];
+      if (!t || !(c > 0)) return;
+      out.push({ time: t, open: o || c, high: hi || c, low: lo || c, close: c, volume: 0 });
+    });
+    return out.slice(-(n || 200));
+  }
+
+  async function cnbcRateQuote(key, a) {
+    const sym = (a && a.cnbc) || key;
+    const url = 'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol'
+      + '?symbols=' + encodeURIComponent(sym)
+      + '&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json';
+    let txt = '';
+    try { txt = await fastText(url, 'https://www.cnbc.com/', 2500); }
+    catch (e0) { txt = await fastText(url, 'https://www.cnbc.com/', 2500); }
+    const cut = String(txt || '').indexOf('{');
+    if (cut < 0) return null;
+    const d = JSON.parse(String(txt).slice(cut));
+    const q = (((d.FormattedQuoteResult || {}).FormattedQuote) || [])[0];
+    if (!q) return null;
+    const price = parseFloat(String(q.last || '').replace('%', ''));
+    if (!isFinite(price) || price <= 0) return null;
+    const chg = parseFloat(String(q.change || '0').replace('%', '')) || 0;
+    return { price, prev: price - chg, src: 'cnbc' };
+  }
+  async function txQuoteOne(key, a) {
+    const code = txStockCode(key);
+    if (!code) return null;
+    const txt = await proxyText('https://qt.gtimg.cn/q=' + code, 'https://gu.qq.com/');
+    const m = /="([^"]*)"/.exec(String(txt || ''));
+    if (!m || !m[1]) return null;
+    const f = m[1].split('~');
+    const price = +f[3], prev = +f[4];
+    if (!isFinite(price) || price <= 0) return null;
+    return { price, prev, src: 'tencent' };
+  }
+  /* 直达报价：按品类一次命中，不经过东财批次 */
+  async function directQuote(key, a, out) {
+    const kind = directKind(a);
+    try {
+      let r = null;
+      if (kind === 'sinafut') r = await sinaFutQuote(key, a);
+      else if (kind === 'sinafx') r = await sinaFxQuote(key, a);
+      else if (kind === 'cnbc') r = await cnbcRateQuote(key, a);
+      else if (kind === 'tencent') r = await txQuoteOne(key, a);
+      else if (kind === 'yahoo' && a.sym) {
+        const hd = await yahooChart(a.sym, '1d', '1d');
+        const m = (((hd.chart || {}).result || [])[0] || {}).meta || {};
+        if (m.regularMarketPrice > 0) {
+          const price = m.regularMarketPrice;
+          const prev = m.chartPreviousClose || m.previousClose || price;
+          r = { price, prev, src: 'yahoo' };
+        }
+      }
+      if (r && r.price > 0) {
+        const prev = r.prev || 0;
+        out[key] = { price: r.price, prev, chg: prev ? r.price - prev : 0,
+          pct: prev ? (r.price - prev) / prev * 100 : 0,
+          at: Date.now(), src: r.src };
+        return true;
+      }
+    } catch (e) { /* 落原链路 */ }
+    return false;
+  }
+
   /* ---------------- 期权主力合约链（v303） ----------------
    * 用户要求：搜「50ETF期权 / 300ETF期权 / 沪深300期权 / 黄金期权 / NVDA期权」
    * → 出最活跃的主力认购/认沽合约 → 点任意合约直接看报价+分时+K线。
@@ -382,12 +490,16 @@
     { re: /铜期权|沪铜期权|cu期权/i, fs: 'm:114', label: '沪铜期权' },
     { re: /原油期权|sc期权/i, fs: 'm:115', label: '原油期权' }
   ];
+  const fastText = (url, ref, ms) => Promise.race([
+    proxyText(url, ref),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('option source timeout')), ms || 2500))
+  ]);
   async function optionChain(q) {
     const hit = OPT_MARKETS.filter(x => x.re.test(String(q || '')))[0];
     if (!hit) return [];
     const url = EM_CLIST + '?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f6&fs='
       + encodeURIComponent(hit.fs) + '&fields=f12,f13,f14,f2,f3,f6';
-    const txt = await proxyText(url, 'https://quote.eastmoney.com/');
+    const txt = await fastText(url, 'https://quote.eastmoney.com/', 2500);
     const cut = String(txt || '').indexOf('{');
     if (cut < 0) return [];
     let d;
@@ -413,8 +525,8 @@
     if (!/^[A-Z.\-]{1,6}$/.test(t)) return [];
     let txt = '';
     try {
-      txt = await proxyText(YAHOO_OPT + encodeURIComponent(t),
-        'https://finance.yahoo.com/quote/' + t + '/options');
+      txt = await fastText(YAHOO_OPT + encodeURIComponent(t),
+        'https://finance.yahoo.com/quote/' + t + '/options', 2500);
     } catch (e) { return []; }
     const cut = String(txt || '').indexOf('{');
     if (cut < 0) return [];
@@ -477,8 +589,10 @@
     if (!m || !m[1]) return null;
     const f = m[1].split(',');
     if (f.length < 6) return null;
-    const price = +f[4];          // 最新价
-    const prev = +f[10] || +f[3]; // 昨结（部分品种在 10 位）
+    /* v309【本机实测修正】nf_IF0 = "4011,4023,4000,4004(最新),23696(量),...,4002.4(昨结),..."
+     * 旧代码取 f[4] 把成交量当价格、f[10] 把跌停价当昨结 —— 全错。 */
+    const price = +f[3];
+    const prev = +f[13] || +f[0];
     if (!isFinite(price) || price <= 0) return null;
     return { price: price, prev: isFinite(prev) && prev > 0 ? prev : null, src: 'sina' };
   }
@@ -517,7 +631,8 @@
       const tm = String(r.d || r.time || '');           // 2026-11-13 09:01:00
       const mm = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(tm);
       if (!mm) return;
-      const c = +r.p || +r.price || +r.c;
+      /* v309：新浪分钟线 p=持仓量，价格必须用 c */
+      const c = +r.c || +r.close || +r.price;
       if (!(c > 0)) return;
       out.push({
         time: Math.floor(Date.UTC(+mm[1], +mm[2] - 1, +mm[3], +mm[4], +mm[5]) / 1000),
@@ -1134,6 +1249,9 @@
 
   async function batchQuote(keys) {
     keys = keys.filter(k => U.get(k));
+    /* v309：按品类分流，直达主源与原链路并行，东财只兜底 */
+    const directKeys = keys.filter(k => directKind(U.get(k)));
+    const restKeys = keys.filter(k => !directKind(U.get(k)));
     /* v292【按分组接实时源优先链】各组的「实时源在前、延迟源在后」：
      *   us(美股指数 5 只)  → CNBC 官方实时（realTime:true，实测 .VIX 盘外仍在跳）
      *   usstock/hkstock/HSI/HSTECH → 腾讯（us/hk 前缀实测实时，27 只美股全命中）
@@ -1145,7 +1263,7 @@
      *   NG                 → 东财（主力口径只有延迟源，见 universe.js v292 注）
      * 各组没拿到的，最后统一「补漏」：TV → 东财 → Yahoo。 */
     const em = [], bn = [], yh = [], cb = [], tx = [], cn = [], tvq = [], tw = [];
-    keys.forEach(k => {
+    restKeys.forEach(k => {
       const a = U.get(k);
       const s = a.src;
       if (a.rt === 'cnbc' || a.grp === 'us') cn.push(k);
@@ -1169,6 +1287,10 @@
     });
     const out = {};
     const jobs = [];
+    /* 直达主源并行（腾讯 qt / 新浪期货 / 新浪外汇 / CNBC / Yahoo meta） */
+    if (directKeys.length) {
+      jobs.push(Promise.all(directKeys.map(k => directQuote(k, U.get(k), out))));
+    }
 
     if (em.length) {
       jobs.push((async () => {
@@ -2314,6 +2436,8 @@
     };
     if (Object.prototype.hasOwnProperty.call(MAP, k)) return MAP[k];
     /* 代码型 */
+    /* v309：韩股 6 位（005930）必须先判，否则被当成 A 股深市 005930.SZ（实测 404） */
+    if (a && a.grp === 'krstock' && /^\d{6}$/.test(k)) return k + '.KS';
     if (/^\d{6}$/.test(k)) {                       // A股：6/9 开头沪，其余深
       return (k[0] === '6' || k[0] === '9') ? k + '.SS' : k + '.SZ';
     }
@@ -2358,6 +2482,34 @@
     const m = LIMIT[mode] || 200;
     try {
       let pts;
+      /* v309【K线直达】主源一次命中，不再先撞东财 4 秒 */
+      const dk = directKind(a);
+      const ivd = mode === 'd' ? '1d' : mode === 'w' ? '1wk' : '1mo';
+      try {
+        if (dk === 'sinafut') {
+          const sk = await sinaFutDaily(key, a, m);
+          if (sk.length >= 20) return finalize({ points: dedupe(sk), synthetic: false, src: 'sina' });
+        }
+        if (dk === 'tencent') {
+          const tc = txStockCode(key);
+          if (tc) {
+            const tp = await txDaily(tc, m);
+            if (tp.length >= 20) return finalize({ points: dedupe(tp), synthetic: false, src: 'tencent' });
+          }
+        }
+        if (dk === 'sinafx') {
+          const fx = await sinaFxDaily(key, a, m);
+          if (fx.length >= 20) return finalize({ points: dedupe(fx), synthetic: false, src: 'sina' });
+        }
+        if (dk === 'yahoo' || dk === 'cnbc' || dk === 'sinafx') {
+          const ysd = yahooSymbolFor(key, a);
+          if (ysd) {
+            const y = await yahooBars(ysd, ivd, 'epoch');
+            const p = yahooScale(y && y.points, ysd);
+            if (p && p.length >= 20) return finalize({ points: dedupe(p), synthetic: false, src: 'yahoo' });
+          }
+        }
+      } catch (eD) { /* 落原链路兜底 */ }
       if (a.src === 'cboe') {
         // CBOE 只给日线，周/月直接在客户端聚合，不额外打接口
         const daily = await cboeDaily(1400);
@@ -2821,6 +2973,28 @@
 
   async function intradayRaw(key) {
     const a = U.get(key);
+    /* v309【分时直达】不等东财 trends2，按品类第一主源直接出图 */
+    try {
+      const dk = directKind(a);
+      if (a && dk === 'sinafut') {
+        const mp = await sinaFutMin(key, a);
+        if (mp && mp.length > 10) {
+          return { points: mp, preClose: (cachedQuote(key) || {}).prev || mp[0].close,
+            synthetic: false, src: 'sina' };
+        }
+      }
+      if (a && (dk === 'yahoo' || dk === 'cnbc' || dk === 'sinafx')) {
+        const ys = yahooSymbolFor(key, a);
+        if (ys) {
+          const yb = await yahooBars(ys, '5m', '5d');
+          const pts = yahooScale(yb && yb.points, ys);
+          if (pts && pts.length > 15) {
+            return { points: pts, preClose: yb.prevClose || pts[0].close,
+              synthetic: false, src: 'yahoo' };
+          }
+        }
+      }
+    } catch (e0) { /* 落原链路 */ }
     /* 未知品种也走「失败」返回而不是抛错：调用方（缩略图队列）是 fire-and-forget，
      * 抛出去会变成没人接的 Promise 异常，把整轮补图打断。 */
     if (!a) return failedRes('unknown asset ' + key);

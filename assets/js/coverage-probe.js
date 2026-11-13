@@ -8,7 +8,18 @@
  * ============================================================ */
 (function (w, d) {
   'use strict';
-  if (!/[?&]coverage=1/.test(location.search)) return;
+  /* v309【分类单测】用户禁止再用手机跑 41 标的全量轰炸。
+   * ?coverage=us|fut|fx|rate|jp|kr|tw|cn|hk|option|crypto|cmdty 只跑该分类；
+   * ?coverage=1 默认只跑「每类 1 个标的」快速抽检（14 项）；
+   * ?coverage=full 才是 41 全量（不推荐，仅本机用）。 */
+  const mCov = /[?&]coverage=([^&]+)/.exec(location.search);
+  if (!mCov) return;
+  const covMode = decodeURIComponent(mCov[1]);
+  const CAT_ALIAS = {
+    cn: 'A股个股', hk: '港股', us: '美股', jp: '日股', kr: '韩股', tw: '台股',
+    idx: '指数', crypto: '加密', fx: '外汇', rate: '美债', cmdty: '商品期货',
+    fut: '股指期货', bond: '国债期货', option: '期权'
+  };
 
   const CASES = [
     ['A股个股', [['600519', '贵州茅台'], ['300750', '宁德时代'], ['688825', '长鑫科技'], ['000001', null]]],
@@ -64,6 +75,12 @@
   }
 
   async function run() {
+    let groups = CASES;
+    const wanted = CAT_ALIAS[covMode];
+    if (wanted) groups = CASES.filter(c => c[0] === wanted);
+    else if (covMode === '1') groups = CASES.map(c => [c[0], c[1].slice(0, 1)]);
+    else if (covMode !== 'full') groups = CASES.map(c => [c[0], c[1].slice(0, 1)]);
+    if (covMode === 'fut') groups = CASES.filter(c => c[0] === '股指期货' || c[0] === '国债期货');
     const host = d.createElement('div');
     host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0b1017;color:#dbe3ef;' +
       'font:12px/1.5 Menlo,monospace;overflow:auto;padding:10px 12px;white-space:pre-wrap';
@@ -72,19 +89,23 @@
     const flush = () => { host.textContent = lines.join('\n'); host.scrollTop = host.scrollHeight; };
     const rows = [];
     let idx = 0;
-    const CASES_N = CASES.reduce((n, c) => n + c[1].length, 0);
-    lines.push('全品种四断言自检开始，共 ' + CASES_N + ' 项（每项最多 6 秒 × 3 + 400ms）…');
+    const CASES_N = groups.reduce((n, c) => n + c[1].length, 0);
+    lines.push('分类自检：mode=' + covMode + '，共 ' + CASES_N + ' 项（间隔 1000ms，不并发）…');
+    lines.push('每条显示 耗时ms + 实际命中源。');
     lines.push('页面底部会在结束后出现「下载 JSON / 复制 JSON」按钮。'); flush();
 
-    for (const [cat, items] of CASES) {
+    for (const [cat, items] of groups) {
       for (const [key, name] of items) {
         const r = { cat, key, search: '', quote: '', intra: '', kline: '' };
         idx++;
         r.search = await searchOne(name || key, key);
         if (cat === '期权') { r.quote = 'n/a'; r.intra = 'n/a'; r.kline = 'n/a'; rows.push(r);
-          lines.push('SEARCH ' + cat.padEnd(6) + String(key).padEnd(8) + ' S=' + r.search); flush(); await sleep(400); continue; }
+          lines.push('SEARCH ' + cat.padEnd(6) + String(key).padEnd(8) + ' S=' + r.search); flush(); await sleep(1000); continue; }
         try {
+          const qT = Date.now();
           const q = (await limit(w.API.batchQuote([key]), 'timeout').then(x => x || {}))[key];
+          r.qms = Date.now() - qT;
+          r.qsrc = (q && q.src) || '';
           if (typeof q === 'string') r.quote = q;
           else if (!q) r.quote = 'nil';
           else if (q.failed) r.quote = 'failed';
@@ -92,7 +113,10 @@
           else r.quote = 'ok(' + q.price + ')';
         } catch (e) { r.quote = 'err'; }
         try {
+          const iT = Date.now();
           const i = await limit(w.API.intraday(key), 'timeout');
+          r.ims = Date.now() - iT;
+          r.isrc = (i && i.src) || '';
           if (typeof i === 'string') r.intra = i;
           else if (!i) r.intra = 'nil';
           else if (i.failed) r.intra = 'failed';
@@ -103,7 +127,10 @@
           }
         } catch (e) { r.intra = 'err'; }
         try {
+          const kT = Date.now();
           const k = await limit(w.API.candles(key, 'day'), 'timeout');
+          r.kms = Date.now() - kT;
+          r.ksrc = (k && k.src) || '';
           if (typeof k === 'string') r.kline = k;
           else if (!k) r.kline = 'nil';
           else if (k.failed) r.kline = 'failed';
@@ -117,9 +144,11 @@
         const pass = [r.search, r.quote, r.intra, r.kline].every(v => String(v).startsWith('ok'));
         lines.push('[' + idx + '/' + CASES_N + '] ' + (pass ? 'PASS ' : 'FAIL ') + cat.padEnd(6) + String(key).padEnd(8) +
           ' S=' + r.search.padEnd(16) + ' Q=' + r.quote.padEnd(14) +
-          ' I=' + r.intra.padEnd(12) + ' K=' + r.kline);
+          ' I=' + r.intra.padEnd(12) + ' K=' + r.kline +
+          ' | ' + r.qms + '/' + r.ims + '/' + r.kms + 'ms' +
+          ' @' + [r.qsrc, r.isrc, r.ksrc].join('/'));
         flush();
-        await sleep(400);   // 节流：不给上游风控任何理由
+        await sleep(1000);   // 节流：不给上游风控任何理由
       }
     }
     const total = rows.length;
