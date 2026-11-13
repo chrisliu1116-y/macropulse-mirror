@@ -858,4 +858,22 @@
   boot();
   bind();
   startIntradayRefresh();   // 收盘窗口内静默追新，不整页重载
+
+  /* v313【Cron 静默失效兜底唤醒】2026-11-13 实测 CF Cron 当天 0 次触发，
+   * 数据停在上一交易日。只要用户在交易日收盘后打开本页面，就静默唤醒一次
+   * Worker /breadth.json（Worker 侧检查新鲜度并 dispatch 补跑）。
+   * sessionStorage 防重复、收盘窗口外不发、失败完全静默，不打扰用户。 */
+  (function wakeOnce() {
+    try {
+      var n = new Date(), wd = n.getDay();
+      if (wd === 0 || wd === 6) return;
+      var hm = n.getHours() * 100 + n.getMinutes();
+      if (hm < 1500 || hm > 1800) return;
+      var key = 'mp_breadth_wake_' + n.toDateString();
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+      fetch('https://macropulse-edge.mp-7962af18.workers.dev/breadth.json?wake=1',
+            { cache: 'no-store' }).catch(function () {});
+    } catch (e) {}
+  })();
 })();
