@@ -1327,7 +1327,22 @@
       jobs.push((async () => {
         for (const k of yh) {
           try {
-            const y = await yahooBars(U.get(k).sym, '5m', '5d');
+            /* v307：先用 1d 轻量 chart 的 meta 取实时价（一个请求、几百字节），
+             * 比 5m/5d 序列快得多；拿不到再走原序列。 */
+            const a0 = U.get(k);
+            try {
+              const hd = await yahooChart(a0.sym, '1d', '1d');
+              const m = (((hd.chart || {}).result || [])[0] || {}).meta || {};
+              if (m && m.regularMarketPrice > 0) {
+                const price = m.regularMarketPrice;
+                const prev = m.chartPreviousClose || m.previousClose || price;
+                out[k] = { price, prev, chg: price - prev,
+                  pct: prev ? (price - prev) / prev * 100 : 0,
+                  at: Date.now(), src: 'yahoo' };
+                continue;
+              }
+            } catch (e0) { /* 落序列 */ }
+            const y = await yahooBars(a0.sym, '5m', '5d');
             if (!y.points.length) continue;
             const price = y.points[y.points.length - 1].close;
             const prev = y.prevClose || y.points[0].close;
@@ -1348,8 +1363,24 @@
      * TWSE 挂的台股（TV 延 20min → Yahoo ^TWII）、TV 挂的外汇美债（东财）。 */
     const missing = keys.filter(k => !out[k]);
     if (missing.length) {
-      try { await tvScanFallback(missing, out); } catch (e) { /* 下一级 */ }
-      const miss2 = missing.filter(k => !out[k]);
+      /* v307【新浪期货报价补漏】v302 写了 sinaFutQuote 却从未接进 batchQuote，
+       * 导致东财 8. 段一断 IF/TL 等 8 个品种顶部价全空（手机矩阵已证实）。 */
+      await Promise.all(missing.filter(k => (U.get(k) || {}).sinaf).map(async k => {
+        try {
+          const r = await sinaFutQuote(k, U.get(k));
+          if (r && r.price > 0) {
+            const prev = r.prev || 0;
+            out[k] = { price: r.price, prev: prev, chg: prev ? r.price - prev : 0,
+              pct: prev ? (r.price - prev) / prev * 100 : 0,
+              at: Date.now(), src: 'sina' };
+          }
+        } catch (e) { /* 下一级 */ }
+      }));
+      const miss0 = missing.filter(k => !out[k]);
+      if (miss0.length) {
+        try { await tvScanFallback(miss0, out); } catch (e) { /* 下一级 */ }
+      }
+      const miss2 = miss0.filter(k => !out[k]);
       if (miss2.length) {
         try { await emQuoteBatch(miss2, out); } catch (e) { /* 下一级 */ }
       }

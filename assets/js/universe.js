@@ -237,7 +237,11 @@
      * 用两只国债 ETF（腾讯/东财双源、交易时段逐笔）作为高可靠实时参考，
      * 搜「中国国债 / 中债10Y / 30年国债」都能命中；国债期货 TL/T 已在 bondfut 组。 */
     '511260': { name: '十年国债ETF（中债10Y参考）', short: '十年国债ETF', src: 'em', secid: '1.511260', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511260' },
-    '511090': { name: '30年国债ETF（中债30Y参考）', short: '30年国债ETF', src: 'em', secid: '1.511090', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511090' }
+    '511090': { name: '30年国债ETF（中债30Y参考）', short: '30年国债ETF', src: 'em', secid: '1.511090', dec: 3, grp: 'cnstock', kind: 'stock', unit: '元', rt: 'tx', txSym: 'sh511090' },
+    /* v307【手机矩阵 unknown asset 补齐】 */
+    '07709': { name: '南方东英SK海力士2x', short: '海力士2x', src: 'em', secid: '116.07709', dec: 3, grp: 'hkstock', kind: 'stock', unit: '港元' },
+    'SPY':   { name: 'SPDR标普500ETF', short: 'SPY', src: 'em', secid: '107.SPY', dec: 2, grp: 'usstock', kind: 'stock', unit: 'USD', tv: 'AMEX:SPY' },
+    'IXIC':  { name: '纳斯达克综合指数', short: '纳指', src: 'yahoo', sym: '^IXIC', dec: 2, grp: 'us', kind: 'index', unit: '点' }
   };
 
   /* ---------------- 行情分组 ----------------

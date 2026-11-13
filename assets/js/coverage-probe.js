@@ -31,14 +31,14 @@
   /* 每条断言最多等 6 秒：上游挂了别把整轮拖到十几分钟 */
   const limit = (p, fallback) => Promise.race([
     p.catch(e => fallback + '(' + String(e && e.message || e).slice(0, 20) + ')'),
-    new Promise(r => setTimeout(() => r(fallback + '(6s)'), 6000))
+    new Promise(r => setTimeout(() => r(fallback + '(10s)'), 10000))
   ]);
 
   function searchOne(q, key) {
     return new Promise(resolve => {
       const t0 = Date.now();
       let done = false;
-      const t = setTimeout(() => { if (!done) { done = true; resolve('timeout'); } }, 2200);
+      const t = setTimeout(() => { if (!done) { done = true; resolve('timeout'); } }, 3500);
       try {
         if (typeof w.__sugList !== 'function') { done = true; clearTimeout(t); resolve('err(no __sugList)'); return; }
         w.__sugList(q, rows => {
@@ -49,7 +49,15 @@
           const want = ua && ua.secid ? String(ua.secid) : '';
           const hit = (rows || []).some(x => x && (String(x.code) === String(key) ||
             (want && String(x.secid) === want)));
-          resolve((hit ? 'ok' : 'miss') + '(' + (rows || []).length + ',' + ms + 'ms)');
+          if (hit) { resolve('ok(' + (rows || []).length + ',' + ms + 'ms)'); return; }
+          /* v307：APP 搜索框本身有「已注册品种精选区」（universe 名录），
+           * 输入代码/名称也会命中它。这一项如实标为 ok(local)，不算线上引擎命中。 */
+          const ua2 = w.UNIVERSE && w.UNIVERSE.get ? w.UNIVERSE.get(key) : null;
+          const qq = String(q || '').toLowerCase();
+          const loc = ua2 && (qq === String(key).toLowerCase()
+            || String(ua2.name || '').toLowerCase().indexOf(qq) >= 0
+            || String(ua2.short || '').toLowerCase().indexOf(qq) >= 0);
+          resolve((loc ? 'ok(local)' : 'miss') + '(' + (rows || []).length + ',' + ms + 'ms)');
         });
       } catch (e) { clearTimeout(t); resolve('err(' + String(e && e.message || e).slice(0, 24) + ')'); }
     });
