@@ -6961,6 +6961,29 @@
     const x = new Date(t), p = (n) => String(n).padStart(2, '0');
     return p(x.getMonth() + 1) + '-' + p(x.getDate()) + ' ' + p(x.getHours()) + ':' + p(x.getMinutes());
   }
+  /* 「多久没更新」始终显示成 N 天前，不退化成日期字符串 —— 用于人工叙事快照 */
+  function ageText(ts) {
+    const t = Number(ts || 0);
+    if (!isFinite(t) || t <= 0) return '--';
+    const d = Math.max(0, Date.now() - t);
+    if (d < 60e3) return '刚刚';
+    if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前';
+    if (d < 24 * 3600e3) return Math.floor(d / 3600e3) + ' 小时前';
+    return Math.floor(d / 86400000) + ' 天前';
+  }
+  /** events.js 的 updated 是「YYYY-MM-DD HH:mm」北京时，转成真实时间戳 */
+  function evNarrativeTs(ev) {
+    const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(String((ev && ev.updated) || ''));
+    if (!m) return 0;
+    const t = Date.parse(m[1] + 'T' + m[2] + ':00+08:00');
+    return isFinite(t) ? t : 0;
+  }
+  function evNarrativeHTML(ev) {
+    const ts = evNarrativeTs(ev);
+    const short = String((ev && ev.updated) || '').slice(5, 10);
+    if (!ts) return esc(String((ev && ev.updated) || '--').slice(5, 16) || '--');
+    return esc(short) + ' · <span data-age-ts="' + ts + '">' + ageText(ts) + '</span>';
+  }
   let _evLastCheck = 0;
   function evTouch() { _evLastCheck = Date.now(); }
   function evStageAt(id) {
@@ -6972,6 +6995,10 @@
     $$('[data-rel-ts]').forEach(el => {
       const ts = +el.getAttribute('data-rel-ts') || 0;
       if (ts > 0) el.textContent = relTime(ts);
+    });
+    $$('[data-age-ts]').forEach(el => {
+      const ts = +el.getAttribute('data-age-ts') || 0;
+      if (ts > 0) el.textContent = ageText(ts);
     });
   }
 
@@ -7075,6 +7102,30 @@
     const days = Math.max(1, Math.floor((Date.now() - d) / 86400000) + 1);
     return Object.assign({}, m, { value: days, max: Math.max(m.max || 7, days + 2) });
   }
+  /* v351【headline 自动推算】卡片正面的「第 2 天 · 续谈中」原本写死在
+   * events.js，日期一过就失真（11-14 看 11-10 启动的会谈仍显示第 2 天）。
+   * metrics 里的 daysSince 只作用于详情页「关键指标」，卡片根本不渲染 metrics，
+   * 所以必须在 headline 这一层也算一遍。卡片与详情共用本函数，值不会分叉。
+   * 若 autoProgress 已把 headline 推进成「停火达成」这类真实进展，阶段值优先，
+   * 天数退到副行，绝不覆盖真实进展。 */
+  function eventAutoHeadline(ev, view) {
+    const h = ev.headline, a = h && h.auto;
+    if (!a || a.type !== 'daysSince') return view;
+    const d = Date.parse(String(a.date) + 'T00:00:00+08:00');
+    if (!isFinite(d)) return view;
+    const n = Math.max(1, Math.floor((Date.now() - d) / 86400000) + 1);
+    /* view.status 已经包含 autoProgress 的阶段推进结果，直接拼进模板即可，
+     * 不必再用 autoProgress 的 headline.value 覆盖（那会把「第 N 天」冲掉）。 */
+    const status = String((view && view.status) || ev.status || '').trim();
+    const terminal = (a.terminal || []).indexOf(status) >= 0;
+    const value = terminal ? status
+      : String(a.template || '第 {n} 天').replace(/\{n\}/g, n).replace(/\{status\}/g, status);
+    const sub = String(a.sub || '自 {date} 起 · 已进行 {n} 天')
+      .replace(/\{n\}/g, n).replace(/\{date\}/g, String(a.date).slice(5))
+      .replace(/\{status\}/g, status);
+    return Object.assign({}, view, { headline: Object.assign({}, h, { value, sub }) });
+  }
+
   /* 兜底资讯不标「示例」（那是编造数据的角标），改成在副行写明来源与口径 */
   function evNewsWhen(n) {
     return n.seed ? (esc(n.dateLabel || '') + ' · 人工核实') : hhmm(n.ts);
@@ -7141,9 +7192,14 @@
     }
     const q = evLive(h.asset);
     if (!q) {
+      /* v351：没实时报价时必须说清这个数有多旧。snapTs 是人工录入的真实时刻，
+       * 「N 天前」由 30 秒 tick 自动走，不会冒充实时值。 */
+      const snapTs = h.snapTs ? Date.parse(String(h.snapTs).replace(' ', 'T') + ':00+08:00') : 0;
+      const age = (snapTs && isFinite(snapTs))
+        ? ' · <span data-age-ts="' + snapTs + '">' + ageText(snapTs) + '</span>' : '';
       // 没有行情源 —— 人工快照，原样显示并标明
       return `<div class="${cls}"><span>${esc(h.label)}</span><b>${esc(h.value)}</b>`
-        + `<em>${esc(h.sub || '')}</em></div>`;
+        + `<em>${esc(h.sub || '')}${age}</em></div>`;
     }
     const up = q.pct >= 0;
     const disp = U.fmt(h.asset, q.price) + evUnit(h.asset);
@@ -7250,7 +7306,7 @@
 
   function eventDetailHTML(ev) {
     const news = eventNews(ev);
-    const view = eventAutoView(ev, news);
+    const view = eventAutoHeadline(ev, eventAutoView(ev, news));
     const metrics = (view.metrics || []).map(eventAutoMetric).map(eventMetricBar).join('');
     const battleground = (ev.battleground || []).map(x => `<span class="ev-chip">${esc(x)}</span>`).join('');
     // 时间线节点区分「已报道的既成事实」与「预期/关键节点」，避免把预测读成已发生
@@ -7284,7 +7340,7 @@
         <div class="ev-icon">${esc(ev.icon || '◉')}</div>
         <div class="ev-hdt">
           <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
-          <div class="ev-cat">${esc(view.cat || '')} · 人工叙事 ${esc(String(view.updated || '--').slice(5, 16) || '--')}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
+          <div class="ev-cat">${esc(view.cat || '')} · 人工叙事 ${evNarrativeHTML(view)}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
       </div>
       <div class="ev-sum">${esc(plain(ev.summary))}</div>
@@ -7304,7 +7360,7 @@
 
   function eventCardHTML(ev) {
     const news = eventNews(ev);
-    const view = eventAutoView(ev, news);
+    const view = eventAutoHeadline(ev, eventAutoView(ev, news));
     /* 人工核实的 seed 条目是兜底叙事，不算「实时」；只有抓到的快讯才算。 */
     const liveNews = news.filter(n => !n.seed && (n.ts || 0) > 0);
     const latest = liveNews[0];
@@ -7339,11 +7395,13 @@
       : '';
     /* 脚注明确区分：人工叙事（静态）/ 实时快讯（动态）/ 最近检查（心跳）。
      * 旧文案「叙事维护于 2026-11-05 · 相关快讯 8」会把兜底条目也当成实时更新。 */
-    const narrative = String(view.updated || '').slice(5, 16) || '--';
+    /* v351：人工叙事的「多久没更新」也自动走（9 天前 → 10 天前），
+     * 用户一眼能分清「静态快照有多旧」与「实时快讯/心跳有多新」。 */
+    const narrative = evNarrativeHTML(view);
     const newsTag = (liveNews.length === news.length)
       ? `实时快讯 ${liveNews.length} 条`
       : `实时快讯 ${liveNews.length} 条 · 人工核实 ${news.length - liveNews.length} 条`;
-    const ft = `${esc(view.cat || '')} · 人工叙事 ${esc(narrative)}`
+    const ft = `${esc(view.cat || '')} · 人工叙事 ${narrative}`
       + ` · ${newsTag}`
       + ` · 最近检查 <span data-rel-ts="${checkTs}">${relTime(checkTs)}</span>`;
     return `<button class="ev-card" data-evid="${esc(ev.id)}">
@@ -8541,7 +8599,8 @@
     // 事件页的实时报价与渲染句柄，便于核对「卡片上的实时值到底取自哪
     window.__quoteHub = QuoteHub;
     window.__event = { eventQuoteKeys, eventMetricBar, eventCardHTML, eventDetailHTML,
-      renderEvent, eventNews, relTime, refreshEvRelTimes, lastCheck: () => _evLastCheck };
+      renderEvent, eventNews, relTime, ageText, evNarrativeHTML, eventAutoHeadline,
+      refreshEvRelTimes, lastCheck: () => _evLastCheck };
     /* v349：相对时间自己走（「刚刚 → 1 分钟前 → 2 分钟前」），
      * 只改文字不重建 DOM，卡片在两次重绘之间也能看出是活的。 */
     setInterval(refreshEvRelTimes, 30000);
