@@ -489,6 +489,67 @@
       try { L.paint(np); } catch (e) {}
     }
 
+    /* v318：初次渲染时用 CNBC 延展报价校准盘前/盘后段尾点。
+     * 只在「图上确实接了该延展段」时动手；报价取不到/超时/时段不符
+     * 一律不动原数据 —— 绝不猜价。gap>5 分钟视为报价陈旧，也不动。 */
+    async _syncExtTail(pts, key) {
+      try {
+        if (!w.API || typeof w.API.extQuotes !== 'function') return;
+        const m = await w.API.extQuotes([key]);
+        const e = m && m[key];
+        if (!e || !(e.price > 0) || !e.phase) return;
+        const last = pts[pts.length - 1];
+        if (!last || last.seg !== e.phase) return;
+        const nowMin = Math.floor((Date.now() + 8 * 3600e3) / 60000) * 60;
+        const gap = nowMin - last.time;
+        if (gap < 0 || gap > 300) return;
+        if (gap === 0) {
+          last.close = e.price;
+          if (!(last.high >= e.price)) last.high = e.price;
+          if (!(last.low <= e.price)) last.low = e.price;
+        } else {
+          pts.push({
+            time: nowMin, open: last.close, close: e.price,
+            high: Math.max(last.close, e.price), low: Math.min(last.close, e.price),
+            volume: 0, seg: e.phase,
+            avg: last.avg, amount: last.amount
+          });
+        }
+      } catch (err) { /* 保持分钟线原样 */ }
+    }
+
+    /* v331：分时图左下/右下角标 —— 开盘 HH:MM / 收盘 HH:MM（北京时间）。
+     * 只在固定开收盘时段的品种上画（加密 7×24 无收盘，不画）。 */
+    _paintSessionEdges(key, view) {
+      const pane = this.paneMain;
+      if (!pane || !view || !view.length) return;
+      if (this._edgeL && this._edgeL.parentNode) this._edgeL.parentNode.removeChild(this._edgeL);
+      if (this._edgeR && this._edgeR.parentNode) this._edgeR.parentNode.removeChild(this._edgeR);
+      this._edgeL = this._edgeR = null;
+      const a = U.get(key);
+      if (!a || a.grp === 'crypto') return;
+      const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
+      const cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[type] : null;
+      if (!cfg || cfg.always || !cfg.segs || !cfg.segs.length) return;   // 连续交易不画
+      const full = (w.Session.fullMinutes ? w.Session.fullMinutes(type) : 0);
+      if (!full) return;
+      const hm = (t) => {
+        const d = new Date(t * 1000);
+        const p2 = (n) => String(n).padStart(2, '0');
+        return p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes());
+      };
+      const start = view[0].time;
+      const mk = (txt, cls) => {
+        const el = document.createElement('span');
+        el.className = 'axis-edge ' + cls;
+        el.textContent = txt;
+        pane.appendChild(el);
+        return el;
+      };
+      this._edgeL = mk('开盘 ' + hm(start), 'l');
+      this._edgeR = mk('收盘 ' + hm(start + full * 60), 'r');
+    }
+
     /* v213/v215：分时模式下在面板宽度定稿后重新铺满可视范围。
      * 用 fitContent 而不是「按主图首尾 setVisibleRange」—— 盘前/盘后段是
      * **独立的 line series**（不在主图里），只按主图范围钉会把它们切掉。
@@ -567,6 +628,37 @@
       const priceFmt = (v) => U.fmt(key, v);
       const chart = this._mk(mode);
 
+      /* v325 用户口径：固定开收盘品种的分时图锁死时间轴 ——
+       * 最左＝开盘时刻、最右＝收盘时刻，不允许拖动/缩放
+       * （图末已铺到收盘的 whitespace，拖动不会带来任何新信息，
+       * 反而把「现在走到哪了」挪离右边缘）。加密是 7×24 全天交易、
+       * 没有收盘时刻，保留拖动缩放。日K/周K/月K 不受影响，仍可拖动翻历史。
+       * 【v326 致命修复】此前这段写的是 `if (isMin)`，而 isMin 的 const 声明
+       * 在本段**之后** —— 每次 render 都在这行抛 ReferenceError（isMin before
+       * initialization），被 app.js 的 .catch 吞掉，页面永远停「加载中」，
+       * 分时和日K一起挂。现在直接用 mode 判断，彻底消除这个引用顺序问题。 */
+      if (mode === 'min') {
+        const _g24 = (U && U.grp) ? U.grp(key) : '';
+        if (_g24 !== 'crypto') {
+          try {
+            /* v329：该版本库的布尔简写在部分构建里只作用于拖动，滚轮仍会缩放
+             * （实测 wheel 后 visibleRange 变 4.4~76.2）。改成**逐项显式关闭**
+             * 海报级手势，并在 pane 上以捕获阶段拦掉 wheel，双保险。 */
+            chart.applyOptions({
+              handleScroll: { mouseWheel: false, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
+              handleScale: { axisPressedMouseMove: false, axisDoubleClickReset: false, mouseWheel: false, pinch: false }
+            });
+            chart.timeScale().applyOptions({ handleScroll: false, handleScale: false });
+            const pane = this.paneMain;
+            if (pane && this._wheelGuardEl !== pane) {
+              this._wheelGuardEl = pane;
+              pane.addEventListener('wheel', (e) => { e.preventDefault(); e.stopPropagation(); },
+                { passive: false, capture: true });
+            }
+          } catch (e) { }
+        }
+      }
+
       const isMin = mode === 'min';
       let data;
       try {
@@ -608,6 +700,18 @@
       /* v284【来源三要素】数据源 + 时间戳（图例里的 HH:MM）+ 是否延迟（app.js 的
        * 「延迟」角标）。来源直接标在图例上，用户不必猜这条线是谁给的。 */
       const srcName = SRC_NAME[data.src];
+      /* v318【盘前/盘后与图例一致】初次渲染就用 CNBC 延展报价校准图尾。
+       * 分钟序列（Yahoo/腾讯）与 CNBC 实时延展报价是两套数据，打开瞬间
+       * 图例「盘前 ±x%」会和报价差半个点（美光 11-13 22:17 截图：头部
+       * -0.71% vs 图例 -0.46%）。头部报价块已按用户口径删除，图例成为
+       * 唯一显示位 —— 所以画图前必须先把尾点对齐到报价源；之后活线
+       * 每 8 秒继续用同一条报价续尾，始终一致。 */
+      if (isMin && pts.length) {
+        /* v325 用户指令：彻底去掉这里的等待 —— 延展报价校准改为后台执行，
+         * 绝不参与出图时序（连 1.5 秒上限也不要）。校准成功与否都不影响本轮
+         * 已经画出的分钟线；尾点在 8 秒后由活线自动对齐到实时报价。 */
+        try { this._syncExtTail(pts, key).catch(() => { }); } catch (e) { }
+      }
       /* v183：K 线缺口只算一次（含「是否已被回补」判定），重绘时只做筛选 */
       this._buildGaps(pts);
 
@@ -639,6 +743,12 @@
       };
       /* v204：无副图的品种，主面板铺满整个 host */
       this.host.classList.toggle('no-vol', !hasSub);
+      /* v330：没有成交量/成交额副图时（外汇日K、美债、指数等「量 --」品种），
+       * 主图自己的时间轴必须显示刻度 —— 否则整张K线没有任何日期（用户实测
+       * 美元离岸人民币日K 全图无日期）。有副图时仍由副图底部统一显示。 */
+      if (!hasSub) {
+        try { chart.timeScale().applyOptions({ visible: true }); } catch (e) { }
+      }
       if (hasSub) {
         /* v204：成交量 / 成交额画进**独立的副图面板**（自己的 chart、自己的数轴），
          * 右轴刻度是量/额自己的值，不再是主图的价格。 */
@@ -707,7 +817,9 @@
          * 用户看到的就是「盘后分时没加载出来」。 */
         this.extAvailable = !!data.ext;
         const regPts = hasSeg ? pts.filter(p => p.seg === 'reg') : pts;
-        view = (hasSeg && !useExt && regPts.length > 3) ? regPts : pts;
+        /* v319：不开延展段时只要存在常规点就只画常规段（哪怕刚开盘只有
+         * 1~3 根）—— 不再把盘前点混进主图装成常规分时（11-13 22:33 SK海力士）。 */
+        view = (hasSeg && !useExt && regPts.length > 0) ? regPts : pts;
         let mainPts = view;
         if (hasSeg && useExt) mainPts = regPts.length ? regPts : view;
         liveArr = mainPts; liveHasSeg = hasSeg;
@@ -1121,6 +1233,10 @@
        * 这时交给 fitContent 铺满全部点，两段都完整可见。 */
       this._extView = !!(isMin && useExt);
       if (isMin) this._pinMin(this._minPts, this._minKey, false);
+      /* v331：分时图标出「开盘 / 收盘」边界（北京时间）。用户看到右侧留白
+       * 但没有刻度文字，会误判「最右不是收盘位置」——有了这两个角标，
+       * 一眼能确认整段就是今天开盘→收盘，右侧空白就是还没走完的时段。 */
+      if (isMin) { try { this._paintSessionEdges(key, view); } catch (e) { } }
       /* v169：主图指标按钮 / 着色 / 卖点图标 */
       this._applyMainInd();
       /* 图表重建后 applyOptions 会回到默认值，这里按当前是否有选中线恢复 */

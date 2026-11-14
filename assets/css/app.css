@@ -221,7 +221,7 @@ b,strong{font-weight:600}
 .hdr{
   display:flex;align-items:center;justify-content:space-between;
   padding:11px 14px 9px;
-  padding-top:calc(11px + env(safe-area-inset-top));
+  padding-top:calc(11px + max(env(safe-area-inset-top,0px),var(--safe-top,0px)));
 }
 .brand{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
 .bdot{
@@ -392,7 +392,7 @@ body.light .clock.clock-stale{color:#c2610d;border-bottom-color:#c2610d}
 .main{
   /* 底栏高度由 JS 量出来写进 --tabH：不同机型字号/安全区不一样，
      写死 78px 在刘海机上会挡住最后一行内容 */
-  padding-bottom:calc(var(--tabH,64px) + 18px + env(safe-area-inset-bottom));
+  padding-bottom:calc(var(--tabH,64px) + 18px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
 }
 .view{display:none;animation:fade .22s ease}
 .view.on{display:block}
@@ -521,7 +521,7 @@ button.sg:active{transform:scale(.94)}
 }
 @keyframes fixFade{from{opacity:0}to{opacity:1}}
 .fixpanel{
-  width:100%;padding:16px 16px calc(16px + env(safe-area-inset-bottom));
+  width:100%;padding:16px 16px calc(16px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   border-radius:16px 16px 0 0;background:var(--panel2);
   border-top:1px solid var(--hair2);
   animation:fixUp .18s ease-out;
@@ -1169,7 +1169,7 @@ body.light .run-tag.exp{color:#b4530c;background:#fff3e6;border-color:rgba(180,8
   background:linear-gradient(180deg,var(--panel),var(--bg2));
   border-radius:18px 18px 0 0;border-top:1px solid var(--hair2);
   animation:up .28s cubic-bezier(.2,.9,.3,1);
-  padding-bottom:calc(12px + env(safe-area-inset-bottom));
+  padding-bottom:calc(12px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
 }
 @keyframes up{from{transform:translateY(24px);opacity:.5}to{transform:none;opacity:1}}
 .pk-h{display:flex;align-items:center;padding:15px;border-bottom:1px solid var(--line)}
@@ -1256,7 +1256,7 @@ input[type=range]::-webkit-slider-thumb{
   background:var(--bg2);
   border-top:1px solid var(--line);
   box-shadow:var(--top-sh);
-  padding-bottom:env(safe-area-inset-bottom);
+  padding-bottom:max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px));
 }
 .tabbar button{
   position:relative;display:flex;flex-direction:column;align-items:center;gap:2px;
@@ -1289,7 +1289,7 @@ input[type=range]::-webkit-slider-thumb{
   max-height:94vh;overflow-y:auto;-webkit-overflow-scrolling:touch;
   background:linear-gradient(180deg,var(--panel),var(--bg2));
   border-radius:18px 18px 0 0;border-top:1px solid var(--hair2);
-  padding-bottom:calc(16px + env(safe-area-inset-bottom));
+  padding-bottom:calc(16px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   animation:up .30s cubic-bezier(.2,.9,.3,1);
   box-shadow:0 -20px 60px -20px rgba(0,0,0,.9);
 }
@@ -1460,7 +1460,7 @@ input[type=range]::-webkit-slider-thumb{
 .fs-hint{display:none}
 @media (orientation:portrait){
   body.chart-fs .fs-hint{
-    display:block;position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);
+    display:block;position:fixed;left:50%;bottom:calc(max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)) + 14px);
     transform:translateX(-50%);z-index:520;pointer-events:auto;
     max-width:86vw;text-align:center;
     background:rgba(12,17,26,.92);color:#e8edf5;
@@ -1527,7 +1527,7 @@ body.chart-fs .draw-panel{bottom:14px;right:10px}
 body.chart-fs .sh-tabs{
   display:flex!important;
   position:fixed;left:50%;transform:translateX(-50%);
-  bottom:calc(env(safe-area-inset-bottom,0px) + 8px);
+  bottom:calc(max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)) + 8px);
   z-index:440;padding:4px;border-radius:12px;
   background:var(--panel);border:1px solid var(--line2);
   box-shadow:0 10px 26px rgba(0,0,0,.28);
@@ -1766,7 +1766,7 @@ body.chart-fs.draw-open .sh-tabs{left:calc((100% - var(--dp-w))/2)}
   max-height:76vh;overflow:auto;
   background:var(--panel);border-radius:16px 16px 0 0;
   border-top:1px solid var(--hair2);
-  padding:16px 14px calc(16px + env(safe-area-inset-bottom));
+  padding:16px 14px calc(16px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   animation:kpUp .24s ease-out;
 }
 @keyframes kpUp{from{transform:translateY(26px);opacity:.4}to{transform:none;opacity:1}}
@@ -1831,7 +1831,7 @@ body.light .ns-body{box-shadow:0 -20px 60px -28px rgba(16,24,40,.5)}
 .ns-title{margin:0 0 7px;font-size:16.5px;line-height:1.45;font-weight:700;letter-spacing:.2px}
 .ns-by{font-size:10.5px;color:var(--tx3)}
 .ns-scroll{
-  overflow-y:auto;padding:14px 16px calc(22px + env(safe-area-inset-bottom));
+  overflow-y:auto;padding:14px 16px calc(22px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   -webkit-overflow-scrolling:touch;
 }
 .ns-text{font-size:14px;line-height:1.74;color:var(--tx);white-space:pre-wrap;letter-spacing:.1px}
@@ -2777,7 +2777,7 @@ body.light .set-row code{background:#eef2f9;color:#3a485e}
 .ev-src{font-size:9.5px;color:var(--tx3);margin:16px 4px 0;padding-top:10px;border-top:1px solid var(--hair)}
 /* 详情页退出提示：轻点任意处 = 返回列表（配合 app.js 的轻点判定） */
 .ev-tapback{
-  margin:14px auto calc(6px + env(safe-area-inset-bottom));
+  margin:14px auto calc(6px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   padding:7px 14px;border-radius:20px;width:fit-content;
   font-size:10px;color:var(--tx3);letter-spacing:.2px;
   border:1px dashed var(--line2);background:var(--nest-bg);
@@ -2893,7 +2893,7 @@ body.light .pool-i b.dyn{color:#1b4fa8}
 .lv-fail span{font-size:11px;line-height:1.7;color:var(--tx3)}
 .lv-f{
   flex:0 0 auto;display:flex;align-items:center;gap:10px;
-  padding:8px 14px calc(9px + env(safe-area-inset-bottom));
+  padding:8px 14px calc(9px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   border-top:1px solid var(--hair);background:var(--panel);
   font-size:9.5px;color:var(--tx3);
 }
@@ -2987,7 +2987,7 @@ body.light .mk-lag{background:#eef2f7;color:#7b8798;border-color:#dbe3ee}
 body.light .sec-hint.one{background:none;border:0}
 
 .sec-more{
-  margin:4px 12px calc(20px + env(safe-area-inset-bottom));
+  margin:4px 12px calc(20px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   padding-top:10px;border-top:1px solid var(--hair);
 }
 .sec-more>summary{
@@ -3136,7 +3136,7 @@ html{overscroll-behavior:none}
 body.light .pull-hint{background:rgba(16,24,40,.05);color:var(--tx2)}
 body.light .pull-hint.ready{background:rgba(16,24,40,.08);color:#0b62d6}
 .pull-toast{
-  position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));
+  position:fixed;left:50%;bottom:calc(24px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
   transform:translate(-50%,12px);z-index:120;max-width:88vw;
   padding:9px 16px;border-radius:20px;font-size:12px;line-height:1.4;
   color:var(--tx);background:rgba(30,38,52,.94);
@@ -3186,7 +3186,7 @@ body.light .pull-toast{background:#fff;color:#1a2433;box-shadow:0 6px 24px rgba(
 .al-note b{color:var(--tx2)}
 .al-foot{
   position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;gap:12px;
-  padding:10px 14px calc(env(safe-area-inset-bottom,0px) + 10px);
+  padding:10px 14px calc(max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)) + 10px);
   background:var(--bar2);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
   border-top:1px solid var(--hair);max-width:560px;margin:0 auto;
 }
@@ -3243,7 +3243,7 @@ body.light .pull-toast{background:#fff;color:#1a2433;box-shadow:0 6px 24px rgba(
 .ae-freq.on i{opacity:1}
 .ae-freq.on b{color:var(--a)}
 .ae-note{font-size:10.5px;line-height:1.8;color:var(--tx3);padding:0 2px}
-.ae-foot{padding:10px 14px calc(env(safe-area-inset-bottom,0px) + 12px);background:var(--bar2);border-top:1px solid var(--hair)}
+.ae-foot{padding:10px 14px calc(max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)) + 12px);background:var(--bar2);border-top:1px solid var(--hair)}
 .ae-save{width:100%;padding:12px;border:0;border-radius:24px;background:var(--a);color:#141414;font-size:14px;font-weight:600}
 .al-i-arrow{flex:none;color:var(--tx3);font-size:16px;margin-left:1px}
 
@@ -3267,6 +3267,10 @@ body.light .pull-toast{background:#fff;color:#1a2433;box-shadow:0 6px 24px rgba(
 body.light .chart-host .pane-vol{border-top-color:rgba(90,110,140,.38)}
 .chart-host.no-vol .pane-main{height:100%}
 .chart-host.no-vol .pane-vol{display:none}
+/* v331：分时图开盘/收盘角标（北京时间），让「最右=收盘」可见 */
+.chart-host .axis-edge{position:absolute;bottom:1px;font-size:10px;line-height:1;color:var(--tx3);pointer-events:none;z-index:3;letter-spacing:.2px}
+.chart-host .axis-edge.l{left:calc(var(--paneL,0px) + 6px)}
+.chart-host .axis-edge.r{right:calc(var(--paneR,0px) + 6px)}
 /* 分时/K 线主图的 6 等分横向网格：中线=零轴，上下各 3 格对称。
    v205：所有线（含中线）完全一样淡，不再单独加深中线；也不画任何竖格。 */
 .pane-grid{position:absolute;inset:0;z-index:1;pointer-events:none}
@@ -3421,7 +3425,7 @@ body.light .icfg-ft{background:#fff;border-top-color:rgba(15,23,42,.08)}
 .gapcfg-step input::-webkit-outer-spin-button,
 .gapcfg-step input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .icfg-ft{
-  position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(env(safe-area-inset-bottom,0px) + 12px);
+  position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)) + 12px);
   background:var(--bar2);border-top:1px solid var(--hair);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
 }
 .icfg-ft button{
@@ -3438,7 +3442,7 @@ body.draw-open .draw-panel{
   box-sizing:border-box;
   width:var(--dp-w);max-height:none;
   border:0;border-left:1px solid var(--line2);border-radius:0;
-  padding:calc(env(safe-area-inset-top,0px) + 10px) 8px calc(env(safe-area-inset-bottom,0px) + 10px);
+  padding:calc(env(safe-area-inset-top,0px) + 10px) 8px calc(max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)) + 10px);
   overflow-y:auto;-webkit-overflow-scrolling:touch;
   box-shadow:-14px 0 30px rgba(0,0,0,.34);
 }

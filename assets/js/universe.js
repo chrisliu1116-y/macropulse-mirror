@@ -113,7 +113,12 @@
      *    CNBC @NG.1 realTime:false）—— 宁可显示延迟 10 分钟的真主力价，
      *    也不显示实时的错误合约价；东财挂时 TV NYMEX:NG1! 兜底（同为延迟口径）。
      * 日 K / 分时仍走东财（secid 不变）。 */
-    NG:    { name: 'NYMEX天然气', short: '天然气', src: 'em', secid: '102.NG00Y', dec: 3, grp: 'energy', kind: 'future', unit: '美元/百万英热', tv: 'NYMEX:NG1!' , hl: 'NATGAS'},
+    /* v315 修复「分时尾端垂直跳到当前价」：NG 的分时/报价必须用**同一个合约**。
+     * 新浪 `NG` 是远月（21:41 实测 3.681），而东财主力是 3.266；此前 RT_OVERRIDE
+     * 用 sina `hf_NG` 取分时、东财取昨收/现价，图表把两套合约拼在一起就出现垂直断崖。
+     * 现在改用新浪主力月 NG2612 + sinaRoll 自愈：报价 txSym 与分时 sinaSym 同源；
+     * 换月后由东财连续合约价作锚点，自动校正到最接近的新月。 */
+    NG:    { name: 'NYMEX天然气', short: '天然气', src: 'em', secid: '102.NG00Y', dec: 3, grp: 'energy', kind: 'future', unit: '美元/百万英热', tv: 'NYMEX:NG1!' , hl: 'NATGAS', rt: 'tx', txSym: 'hf_NG2612', sinaSym: 'NG2612', sinaRoll: 'NG'},
 
     /* ---------------- 贵金属 ---------------- */
     // 用户口径：黄金用「黄金兑美元」现货，而非 COMEX 期金
@@ -231,8 +236,8 @@
     'YM':  { name: '道指期货',         short: 'YM', src: 'yahoo', sym: 'YM=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CBOT_MINI:YM1!' },
     'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
     'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
-    'US5Y': { name: '美债5年期收益率', short: '5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' , cnbc: 'US5Y' },
-    'US2Y': { name: '美债2年期收益率', short: '2Y', src: 'cnbc', cnbc: 'US2Y', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    'US5Y': { name: '美债5年期收益率', short: '美债5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' , cnbc: 'US5Y' },
+    'US2Y': { name: '美债2年期收益率', short: '美债2Y', src: 'cnbc', cnbc: 'US2Y', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
     /* v310【中债真指数】CNBC restQuote 实测 CN10Y 返回 China 10 Year Bond；
      * 与 511260/511090 国债 ETF 并存，指数本身不冒充、ETF 作实时参考。 */
     'CN10Y': { name: '中债10年期国债收益率', short: '中债10Y', src: 'cnbc', cnbc: 'CN10Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
@@ -389,7 +394,7 @@
     'AX', 'HS300', 'SZ', 'CYB', 'SZ50', 'KC50',
     'HSI', 'HSTECH', 'KS11', 'N225', 'TWII',
     'SPX', 'NDX', 'SOX', 'DJI', 'VIX',
-    'US5Y', 'US10Y', 'US30Y',
+    'US10Y', 'US30Y',
     'DXY', 'USDCNH', 'USDJPY', 'EURUSD',
     'BRENT', 'WTI', 'NG',
     'GOLD', 'SILVER',

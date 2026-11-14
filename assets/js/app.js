@@ -37,7 +37,7 @@
    *   （Hyperliquid）与链上（DexScreener）两条，且两者独立存储、各占一行互不覆盖；
    *   ③ 动态合成的美股品种简称不再截断到 4 字（SK海力士 曾被截成「SK海力」）；
    *   ④ 新闻去重补「地缘实体 + 动作类别」判据（也门空袭 / 霍尔木兹油轮起火 那几对）。 */
-  const DATA_VER = '144';
+  const DATA_VER = '315';
   const gradeVerOf = () => String((w.LiveNews && w.LiveNews.GRADE_VER) || 0);
 
   /* ---------------- 标级纠错（用户手工改判） ----------------
@@ -415,6 +415,25 @@
     pendingSoftS: '',      // 被硬横幅挡住、等着补挂的 S 级快讯 id
     session: {}
   };
+
+  /* v316【自选口径】「自选」只显示用户手动添加的品种，不再混入预设默认列表。
+   * S.watch 从 v198 起就含 MARKET_DEFAULT 预设，无法区分「用户加的」——
+   * 所以单开 mm_own 记录用户主动添加的 key。老用户首次运行本版本时，
+   * 用 S.watch − MARKET_DEFAULT 一次性推导（预设之外的就是历史上手动加的）。
+   * 「全部」= 预设 + own；「自选」= own；删除预设不影响 own。 */
+  S.own = store.get('mm_own', null);
+  if (!Array.isArray(S.own)) {
+    const md = U.MARKET_DEFAULT || [];
+    S.own = S.watch.filter(k => md.indexOf(k) < 0);
+    store.set('mm_own', S.own);
+  }
+  function ownAdd(k) {
+    if (S.own.indexOf(k) < 0) { S.own.push(k); store.set('mm_own', S.own); }
+  }
+  function ownDel(k) {
+    const i = S.own.indexOf(k);
+    if (i >= 0) { S.own.splice(i, 1); store.set('mm_own', S.own); }
+  }
 
   /* ---------------- 主题：深色 / 浅色 ---------------- */
   function applyTheme(t, silent) {
@@ -2871,6 +2890,7 @@
       // 监控池里的品种不一定在自选列表里；不加进去就无处可跳
       S.watch.push(key);
       store.set('mm_watch2', S.watch);
+      ownAdd(key);   // v316：用户点跳转触发的自动加入也算「自己添加」
       added = true;
     }
     S.marketFocus = key;
@@ -2955,19 +2975,24 @@
   }
 
   function mktCatKeys() {
-    /* v199 用户口径：「自选」= 只显示我自己添加的个股，
-     * 排除设置好的默认指数/商品（那些在「全部」和各市场标签里看）。 */
+    /* v316 用户口径：「自选」= 只显示我自己手动添加的品种（S.own，不限类型），
+     * 预设默认列表不进自选。v199~v315 只放行 stock/etf，导致美债2Y 这类
+     * 用户手动加入的美债/期货/期权「已添加」却在自选和全部里都看不到。 */
     if (mktCat === 'watch') {
-      return S.watch.filter(k => { const a = U.get(k); return a && (a.kind === 'stock' || a.kind === 'etf'); });
+      return S.own.filter(k => !!U.get(k));
     }
-    const base = baseKeys();
+    /* v315 用户口径：「全部」只显示预设品种 + 自己添加的品种（所有类型）。
+     * 不再把 universe 里后来补齐的股指期货/国债期货/海外期指等全池基础标的
+     * 自动混进默认列表；需要时用户自己搜索加入自选。 */
     if (mktCat === 'all') {
-      const own = S.watch.filter(k => { const a = U.get(k); return a && (a.kind === 'stock' || a.kind === 'etf'); });
+      const base = U.MARKET_DEFAULT || [];
+      const own = S.own.filter(k => !!U.get(k));
       return Array.from(new Set(base.concat(own)));
     }
+    const base = baseKeys();
     const inMkt = base.filter(k => mktOf(k) === mktCat);
-    const own = S.watch.filter(k => { const a = U.get(k); return a && (a.kind === 'stock' || a.kind === 'etf') && mktOf(k) === mktCat; });
-    return inMkt.concat(own);
+    const own = S.own.filter(k => { const a = U.get(k); return a && mktOf(k) === mktCat; });
+    return Array.from(new Set(inMkt.concat(own)));
   }
 
   function renderMktCats() {
@@ -3210,7 +3235,7 @@
 
     if (!keys.length) {
       const msg = mktCat === 'watch'
-        ? '<b>自选里还没有个股</b><span>点顶部放大镜「添加品种」搜索并添加你想盯的股票（默认指数/商品不在这里）</span>'
+        ? '<b>自选里还没有品种</b><span>点顶部放大镜「添加品种」搜索并添加你想盯的股票、美债、期货等</span>'
         : '<b>行情列表是空的</b><span>点顶部放大镜「添加品种」把关注的品种加回来</span>';
       body.innerHTML = `<div class="empty">${msg}</div>`;
       return;
@@ -3498,24 +3523,20 @@
     }
   }
 
-  /* 详情页头部那一行「盘后 342.65 · +0.08%」 */
+  /* v318 用户口径：头部不再单独显示盘前/盘后价格块 —— 它取 CNBC 延展报价、
+   * 而图例「盘前 ±x%」取分钟线尾点，两套数据不同步就出现「两个盘前数值打架」。
+   * 现在图例是唯一显示位（图尾活线每 8 秒取同一条 CNBC 报价续尾，天然一致）。
+   * 这里只保留 v255 的头部会话标签同步（已收盘 → 盘前/盘后）。 */
   function renderExtHead(key) {
     const host = $('#shHeadExt');
-    if (!host) return;
+    if (host) { host.hidden = true; host.innerHTML = ''; }
     const ex = S.ext[key];
-    if (!ex || !ex.phase) { host.hidden = true; host.innerHTML = ''; return; }
-    /* v255：延展报价晚到时，头部会话标签同步从「已收盘」改为「盘前/盘后」，
-     * 避免打开瞬间是「已收盘」、数据到了才闪变（VIX 实测）。 */
+    if (!ex || !ex.phase) return;
     const sessEl = document.querySelector('#sheet .sh-sess');
     if (sessEl && sessEl.textContent === '已收盘') {
       sessEl.textContent = ex.phase === 'pre' ? '盘前' : '盘后';
       sessEl.classList.add('open');
     }
-    const cls = (ex.pct != null && ex.pct < 0) ? 'down' : 'up';
-    host.hidden = false;
-    host.innerHTML = `<i>${ex.phase === 'pre' ? '盘前' : '盘后'}</i>`
-      + `<b>${U.fmt(key, ex.price)}</b>`
-      + (ex.pct != null ? `<em class="${cls}">${U.pct(ex.pct)}</em>` : '');
   }
 
   /* 行内就地更新，不整页重绘（价格每 60 秒刷一次，重绘会把滚动位置带跑） */
@@ -3752,6 +3773,8 @@
    * 故与原生共用同一占位符写法即可，不构成参数分叉。 */
   const EM_TOKEN = 'D43BF722C8E33BDC906FB84D85E326E8&count=10';
   function emSearchSug(q, cb) {
+    /* v338：东财静默期（EM_QUIET）下搜索也不打东财，直接交给腾讯/本地名录 */
+    if (w.API && w.API.emQuiet) { cb([]); return; }
     const url = 'https://searchapi.eastmoney.com/api/suggest/get?input='
       + encodeURIComponent(q) + '&type=14&token=' + EM_TOKEN;
     const parse = (txt) => {
@@ -4006,7 +4029,7 @@
       if (!b) return;
       const k = b.dataset.k;
       const i = S.watch.indexOf(k);
-      if (i >= 0) S.watch.splice(i, 1); else S.watch.push(k);
+      if (i >= 0) { S.watch.splice(i, 1); ownDel(k); } else { S.watch.push(k); ownAdd(k); }
       store.set('mm_watch2', S.watch);
       b.classList.toggle('on', S.watch.indexOf(k) >= 0);
       const it = b.querySelector('i');
@@ -5170,11 +5193,21 @@
    * 默认值：用户没手动选过时，按**当前时段**自动 —— 正处在盘前/盘后就把延展段接上，
    * 其余时候给普通分时（和富途一致）。手动点过之后就记住用户的选择。 */
   function effMinExt() {
-    if (S.minExt === true || S.minExt === false) return S.minExt;
     const a = S.sheetKey ? U.get(S.sheetKey) : null;
     if (!a) return false;
     const st = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
-    return !!(st && (st.phase === 'pre' || st.phase === 'post'));
+    const phase = (st && st.phase) || '';
+    /* v319 用户口径：盘中（常规时段）一律只显示盘中分时，即使用户手动
+     * 开过「盘前分时」偏好也不接延展段 —— 开关按钮盘中本来就不出现
+     * （v296），绘制结果必须和按钮口径一致。此前 S.minExt===true 会
+     * 无条件生效，盘中打开 SK 海力士仍画出整段盘前黄线（11-13 22:33 截图）。
+     * 盘前/盘后时段：手动偏好优先；没手动选过就自动接上（和富途一致）。 */
+    if (phase === 'regular') return false;
+    if (phase === 'pre' || phase === 'post') {
+      if (S.minExt === true || S.minExt === false) return S.minExt;
+      return true;
+    }
+    return false;
   }
 
   function syncMinBar() {
@@ -5291,7 +5324,15 @@
     chart.onMainInd = (m, canUse) => syncIndBtn(m, canUse);
     /* render 是异步的：拿到数据后才知道有没有延展段，再同步一次开关显隐 */
     const _p = chart.render(key, mode);
-    if (_p && _p.then) _p.then(() => { if (S.sheetKey === key) { try { syncMinBar(); syncChartBar(); } catch (e) {} } }).catch(() => {});
+    /* v326：渲染异常必须显示出来，不能 .catch(()=>{}) 静默吞掉 ——
+     * v320 那次「isMin 引用顺序错误」就是被这个 catch 藏住的，
+     * 页面永远停「加载中」，查了 N 轮才用 CDP 抓到。 */
+    if (_p && _p.then) _p.then(() => { if (S.sheetKey === key) { try { syncMinBar(); syncChartBar(); } catch (e) {} } }).catch((e) => {
+      try {
+        const lg = $('#shLegend');
+        if (lg) lg.innerHTML = '<span class="lg-err">图表异常：' + esc(String((e && e.message) || e)) + '</span>';
+      } catch (_) {}
+    });
   }
 
   /* ---- v171：主图指标选择器（右上角） ----
@@ -7659,6 +7700,7 @@
       const del = e.target.closest('.mk-x');
       if (del && del.dataset.del) {
         S.watch = S.watch.filter(k => k !== del.dataset.del);
+        ownDel(del.dataset.del);   // v316：删自己加的品种也要从 mm_own 移除
         store.set('mm_watch2', S.watch);
         renderMarket();
         return;
@@ -7917,7 +7959,7 @@
         return;
       }
       if (e.target.id === 'resetAll') {
-        ['mm_sound', 'mm_modal', 'mm_toast', 'mm_vib', 'mm_thr', 'mm_watch2', 'mm_msort',
+        ['mm_sound', 'mm_modal', 'mm_toast', 'mm_vib', 'mm_thr', 'mm_watch2', 'mm_own', 'mm_msort',
           'mm_seenS', 'mm_grade', 'mm_sessfirst', 'mm_mxmode', 'mm_theme'].forEach(k => localStorage.removeItem(k));
         location.reload();
         return;
@@ -8223,8 +8265,11 @@
         const m = /macro-pulse-(v\d+)/.exec(t || '');
         if (!m) return;
         const remote = m[1];
-        // 页面是旧缓存、sw.js 已经是新版本：清缓存重载一次（sessionStorage 防死循环）
-        if (local && local !== remote) {
+        // 页面是旧缓存、sw.js 已经是新版本：清缓存重载一次（sessionStorage 防死循环）。
+        // v315：本地是「…」这类占位符时不触发重载，只直接写入远端版本；
+        // 占位符本身不代表旧缓存，把它当版本号会造成无意义刷新。
+        const isVer = /^v\d+$/.test(local);
+        if (isVer && local !== remote) {
           let done = false;
           try { done = sessionStorage.getItem('mm_ver_fix') === remote; } catch (e) {}
           if (!done) {
