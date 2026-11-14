@@ -3508,6 +3508,20 @@
 
   async function intradayRaw(key) {
     const a = U.get(key);
+    /* v345：新浪外盘分钟线返回的是**原始报价单位**（铜是美分/磅 6xx），
+     * a.pxScale 原本只在 sinaFut() 里应用，但 RT_OVERRIDE / sinafut 这两条
+     * 分时直达分支直接用了 sinaGlobalMin / sinaFutMin，漏了缩放 ——
+     * 图上 605~627、头部 6.0905，图例价、全天%、活线续尾全部串味，
+     * 末端还会被单位混用的补点画成一根 90° 竖线。这里统一归一化。 */
+    const scaleMin = (arr, aa) => {
+      const sc = (aa && aa.pxScale) || 1;
+      if (sc === 1 || !arr || !arr.length) return arr || [];
+      return arr.map(p => ({
+        ...p,
+        open: p.open * sc, high: p.high * sc, low: p.low * sc, close: p.close * sc,
+        ...(p.avg != null ? { avg: p.avg * sc } : {})
+      }));
+    };
     /* v309【分时直达】不等东财 trends2，按品类第一主源直接出图 */
     try {
       const dk = directKind(a, key);
@@ -3519,14 +3533,14 @@
         }
       }
       if (a && dk === 'sinag' && RT_OVERRIDE[key]) {
-        const gm = await sinaGlobalMin(RT_OVERRIDE[key].sym.replace(/^hf_/, ''));
+        const gm = scaleMin(await sinaGlobalMin(RT_OVERRIDE[key].sym.replace(/^hf_/, '')), a);
         if (gm && gm.length > 10) {
           return { points: gm, preClose: (cachedQuote(key) || {}).prev || gm[0].close,
             synthetic: false, src: 'sina' };
         }
       }
       if (a && dk === 'sinafut') {
-        const mp = await sinaFutMin(key, a);
+        const mp = scaleMin(await sinaFutMin(key, a), a);
         if (mp && mp.length > 10) {
           return { points: mp, preClose: (cachedQuote(key) || {}).prev || mp[0].close,
             synthetic: false, src: 'sina' };
@@ -3885,6 +3899,16 @@
        * 线头晚几分钟由 _liveTick（每 8 秒）补上，不该拿首屏时间换。 */
       const q = cachedQuote(key);
       if (!q || !(q.price > 0)) return res;
+      /* v346：补点前必须校验「实时报价 vs 分钟线尾点」的偏差。
+       * _liveTick 早有 jumpLim，但这里（首屏补点）一直没校验：报价与分钟线
+       * 来自不同源/不同合约/不同单位口径时，会把线尾硬拉成一根 90° 竖线
+       * （用户 11-14 铜/美元「最后一盘直线拉升」）。超过阈值宁可不补。 */
+      if (last && isFinite(last.close) && last.close > 0) {
+        const _g = U.grp(key);
+        const _lim = (_g === 'fx' || _g === 'rate') ? 0.003
+          : (_g === 'crypto') ? 0.05 : 0.02;
+        if (Math.abs(q.price - last.close) / last.close > _lim) return res;
+      }
 
       let gap = nowMin - last.time;
       /* 韩股盘后 Naver 点延迟大，gap 上限放宽到 2 小时；其它市场维持 5 分钟 */
@@ -3906,6 +3930,32 @@
 
   async function intraday(key) {
     const r = finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
+    /* v346【源末尾孤立坏点清洗】外盘分钟线偶发在最后一根塞一个跨合约 /
+     * 跨结算的孤立价（实测同一接口会返回 786 点与 1306 点两种长度，长的那份
+     * 末尾约有 1.5% 单点跳变），图上就是一根 90° 竖线。只处理两种极保守
+     * 情形，真实单边行情（跳空后维持新价）不会被误伤：
+     *   ① 末点跳变 >2% 且之前 5 根最大波动 <0.5% → 丢弃末点；
+     *   ② 单点两侧都 >2% 且方向相反（孤立尖峰）→ 用前后均值平滑。 */
+    try {
+      if (r && !r.failed && r.points && r.points.length > 8) {
+        const p = r.points;
+        const chg = (i) => p[i - 1].close > 0
+          ? Math.abs(p[i].close - p[i - 1].close) / p[i - 1].close : 0;
+        let pre = 0;
+        for (let i = p.length - 2; i > p.length - 7 && i > 0; i--) pre = Math.max(pre, chg(i));
+        if (chg(p.length - 1) > 0.02 && pre < 0.005) p.pop();
+        for (let i = 1; i < p.length - 1; i++) {
+          const a = p[i].close - p[i - 1].close, b = p[i + 1].close - p[i].close;
+          if (a * b < 0 && p[i - 1].close > 0 && p[i].close > 0 &&
+              Math.abs(a) / p[i - 1].close > 0.02 &&
+              Math.abs(b) / p[i].close > 0.02) {
+            p[i].close = (p[i - 1].close + p[i + 1].close) / 2;
+            if (!(p[i].high >= p[i].close)) p[i].high = p[i].close;
+            if (!(p[i].low <= p[i].close)) p[i].low = p[i].close;
+          }
+        }
+      }
+    } catch (e) { /* 清洗失败不影响出图 */ }
     /* v310【同源校准硬规则】分时数组加载完且非空时，用尾点价对齐顶部快照，
      * 消除「顶部价来自 A 源、分时尾点来自 B 源」拉出的 90° 竖线（美债历史问题）。 */
     try {

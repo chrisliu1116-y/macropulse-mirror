@@ -335,6 +335,23 @@
      * 右侧留白交给库画，不再有假数据。两种部署（主站 / GitHub Pages）行为一致。 */
     _minBars(pts, key) {
       let total = 0, gran = 1;
+      /* v345：24×5 / 7×24 品种没有「固定收盘位」，ROLL 写死的 1380/1440 格
+       * 是按理想 23 小时算的，而新浪外盘实际只给 786~1375 根（源缺口、
+       * 结算暂停、合约切换），锁轴就在右侧留出大段空白 —— 用户实测
+       * 「原油/天然气/铜分时都没跑到最右」。这类品种直接按实际点数铺满：
+       * 线尾＝最后一根真实数据，不冒充到收盘。VIX 有 minSpan，走原逻辑。 */
+      try {
+        const ar = (U && U.get) ? U.get(key) : null;
+        let sr = ar && ar.sess;
+        if (!sr && U && U.grp) { const gr = U.grp(key); sr = gr && gr.session; }
+        const cr = w.Session && w.Session.SESSIONS && w.Session.SESSIONS[sr];
+        const rolling = (sr === 'cmdty' || sr === 'fx' || sr === 'rate' ||
+                         sr === 'crypto' || sr === 'vix') ||
+                        !!(cr && (cr.cme || cr.always || cr.vix24));
+        if (rolling && !(ar && ar.minSpan) && pts && pts.length > 2) {
+          return { want: pts.length, n: pts.length };
+        }
+      } catch (e) { /* 落回原逻辑 */ }
       try {
         const a = (U && U.get) ? U.get(key) : null;
         /* VIX 的 GTH 03:15–16:15 ET 共 780 分钟，比美股常规 390 长一倍 */
