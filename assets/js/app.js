@@ -6944,6 +6944,37 @@
    *   newsKeys —— 至少命中一个
    *   newsMust —— 若配置，还必须再命中其一（确认是本事件的主体）
    * 三者都只匹配标题，不用正文，避免正文里顺带提到就被抓。 */
+  /* v349【卡片本身实时化】
+   * 之前卡片正面只有三段静态信息：人工叙事(summary)、「叙事维护于 11-05」、
+   * 兜底快讯数 8，外加会实时跳的行情。用户看不出「卡片本身」是否还在跟踪。
+   * 这里补两样真实、不编造的东西：
+   *   · 最新一条「实时」相关快讯（seed 人工核实条目不算）及其相对时间；
+   *   · 最近一次检查的心跳时间。
+   * 相对时间由轻量 tick 每分钟改写文字，不整页重绘，滚动位置不受影响。 */
+  function relTime(ts, now) {
+    const t = Number(ts || 0);
+    if (!isFinite(t) || t <= 0) return '--';
+    const d = Math.max(0, (now || Date.now()) - t);
+    if (d < 60e3) return '刚刚';
+    if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前';
+    if (d < 24 * 3600e3) return Math.floor(d / 3600e3) + ' 小时前';
+    const x = new Date(t), p = (n) => String(n).padStart(2, '0');
+    return p(x.getMonth() + 1) + '-' + p(x.getDate()) + ' ' + p(x.getHours()) + ':' + p(x.getMinutes());
+  }
+  let _evLastCheck = 0;
+  function evTouch() { _evLastCheck = Date.now(); }
+  function evStageAt(id) {
+    const v = evStageMap()[id];
+    return (v && typeof v === 'object') ? (v.at || 0) : 0;  // 旧格式是纯字符串，无时间
+  }
+  /** 只改「N 分钟前」这类文字，不重建卡片 */
+  function refreshEvRelTimes() {
+    $$('[data-rel-ts]').forEach(el => {
+      const ts = +el.getAttribute('data-rel-ts') || 0;
+      if (ts > 0) el.textContent = relTime(ts);
+    });
+  }
+
   function eventNews(ev) {
     const keys = (ev.newsKeys || []).map(k => String(k).toLowerCase());
     if (!keys.length) return [];
@@ -6991,9 +7022,10 @@
     const rules = ev.autoProgress || [];
     if (!rules.length) return ev;
     const win = (ev.autoWindowH || 72) * 3600 * 1000;
-    const titles = (news || []).filter(n => (n.ts || 0) >= Date.now() - win)
-      .map(n => String(n.title || ''));
-    let idx = -1;
+    const recent = (news || []).filter(n => (n.ts || 0) >= Date.now() - win);
+    /* v350：记下「触发该阶段的快讯」的真实时间，而不是 Date.now()。
+     * 否则页面加载时才首次算出阶段，会把 26 分钟前的进展标成「刚刚」。 */
+    let idx = -1, hitTs = 0;
     for (let i = 0; i < rules.length; i++) {
       const r = rules[i];
       let re, neg = null;
@@ -7001,21 +7033,30 @@
         re = new RegExp(r.re);
         if (r.neg) neg = new RegExp(r.neg);
       } catch (e) { continue; }
-      if (titles.some(t => re.test(t) && !(neg && neg.test(t)))) { idx = i; break; }
+      const m = recent.find(n => {
+        const t = String(n.title || '');
+        return re.test(t) && !(neg && neg.test(t));
+      });
+      if (m) { idx = i; hitTs = +m.ts || Date.now(); break; }
     }
     /* v271【单调推进】快讯池每 25 秒刷新、前 8 条会变，若每次都按当下
      * 的匹配结果取阶段，卡片页与详情页会显示两个不同状态（实测复现）。
      * 阶段一旦推进到更高优先级就锁住不回退，并持久化到 localStorage，
      * 刷新页面也保持同一阶段；只有出现更高阶段的新快讯才继续推进。 */
     const memo = evStageMap();
-    if (memo[ev.id]) {
-      const saved = rules.findIndex(r => r.status === memo[ev.id]);
+    /* v349：memo 从纯字符串升级为 {s: 阶段, at: 变更时间}，兼容旧值。
+     * 单调推进仍然保留（防卡片/详情页抖动），但卡片会显示「阶段更新于 X」，
+     * 用户能看出这个状态是刚刚推进的，而不是写死的旧文案。 */
+    const curMemo = memo[ev.id];
+    const savedStatus = (curMemo && typeof curMemo === 'object') ? curMemo.s : curMemo;
+    if (savedStatus) {
+      const saved = rules.findIndex(r => r.status === savedStatus);
       if (saved >= 0 && (idx < 0 || saved < idx)) idx = saved;
     }
     if (idx < 0) return ev;
     const hit = rules[idx];
-    if (memo[ev.id] !== hit.status) {
-      memo[ev.id] = hit.status;
+    if (savedStatus !== hit.status) {
+      memo[ev.id] = { s: hit.status, at: hitTs || Date.now() };
       try { store.set(EV_STAGE_KEY, memo); } catch (e) { /* 隐私模式下只保内存 */ }
     }
     return Object.assign({}, ev, {
@@ -7243,7 +7284,7 @@
         <div class="ev-icon">${esc(ev.icon || '◉')}</div>
         <div class="ev-hdt">
           <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
-          <div class="ev-cat">${esc(view.cat || '')} · 叙事维护于 ${esc(view.updated || '--')}${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
+          <div class="ev-cat">${esc(view.cat || '')} · 人工叙事 ${esc(String(view.updated || '--').slice(5, 16) || '--')}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
       </div>
       <div class="ev-sum">${esc(plain(ev.summary))}</div>
@@ -7255,7 +7296,7 @@
       ${battleground ? `<div class="ev-sec"><div class="ev-sec-h">关键变量 / 战场</div><div class="ev-chips">${battleground}</div></div>` : ''}
       ${themes ? `<div class="ev-sec"><div class="ev-sec-h">主题</div><div class="ev-chips">${themes}</div></div>` : ''}
       ${assets ? `<div class="ev-sec"><div class="ev-sec-h">相关标的</div><div class="ev-assets">${assets}</div></div>` : ''}
-      <div class="ev-sec"><div class="ev-sec-h">相关报道</div>${newsHTML}</div>
+      <div class="ev-sec"><div class="ev-sec-h">相关报道<span class="ev-hint-inline">实时 ${news.filter(n => !n.seed).length} 条 · 人工核实 ${news.filter(n => n.seed).length} 条</span></div>${newsHTML}</div>
       ${(liveAt || view.src) ? `<div class="ev-src">${liveAt ? '<b>最近报价</b> ' + liveAt : ''}${liveAt && view.src ? ' · ' : ''}${view.src ? '参考来源：' + esc(view.src) : ''}</div>` : ''}
       <div class="ev-tapback">轻点页面任意处返回事件列表</div>
     </div>`;
@@ -7264,7 +7305,9 @@
   function eventCardHTML(ev) {
     const news = eventNews(ev);
     const view = eventAutoView(ev, news);
-    /* 卡片上挑 2 个可实时报价的标的，直接显示当前价格 */
+    /* 人工核实的 seed 条目是兜底叙事，不算「实时」；只有抓到的快讯才算。 */
+    const liveNews = news.filter(n => !n.seed && (n.ts || 0) > 0);
+    const latest = liveNews[0];
     const picks = (ev.assets || []).filter(k => U.get(k) && evLive(k)).slice(0, 3);
     const strip = picks.length
       ? `<div class="ev-card-q"><span class="ev-qh">实时行情<i class="ev-livetag">实时</i></span>${picks.map(k => {
@@ -7274,15 +7317,44 @@
             + `<b class="${cls}">${U.fmt(k, q.price)}${evUnit(k)}</b>`
             + `<i class="${cls}">${U.changeLabel(k, q)}</i></span>`;
         }).join('')}</div>`
+      /* 原来无报价时整块消失，用户会以为卡片根本没接行情；改成诚实占位。 */
+      : `<div class="ev-card-q is-idle"><span class="ev-qh">实时行情</span>`
+        + `<i class="ev-q-idle">暂无实时报价 · 自动重试</i></div>`;
+    /* v349：卡片正面新增「最新动态」——有真实快讯就显示标题+相对时间，
+     * 没有就明确写「实时追踪中 / 暂无新的相关快讯」，绝不拿 seed 冒充更新。 */
+    const checkTs = _evLastCheck || Date.now();
+    const latestHTML = latest
+      ? `<div class="ev-latest is-live"><i class="ev-pulse"></i>`
+        + `<span class="ev-latest-h">最新动态</span>`
+        + `<span class="ev-latest-t" data-rel-ts="${latest.ts}">${relTime(latest.ts)}</span>`
+        + `<p>${esc(plain(latest.title))}</p></div>`
+      : `<div class="ev-latest is-idle"><i class="ev-pulse"></i>`
+        + `<span class="ev-latest-h">实时追踪中</span>`
+        + `<span class="ev-latest-t" data-rel-ts="${checkTs}">${relTime(checkTs)}</span>`
+        + `<p>暂无新的相关快讯 · 监控持续运行</p></div>`;
+    /* 状态是 autoProgress 按快讯推进的，标出推进时间，避免被当成写死文案 */
+    const stageAt = evStageAt(ev.id);
+    const stageTag = stageAt
+      ? `<i class="ev-stage-at">阶段更新于 <span data-rel-ts="${stageAt}">${relTime(stageAt)}</span></i>`
       : '';
+    /* 脚注明确区分：人工叙事（静态）/ 实时快讯（动态）/ 最近检查（心跳）。
+     * 旧文案「叙事维护于 2026-11-05 · 相关快讯 8」会把兜底条目也当成实时更新。 */
+    const narrative = String(view.updated || '').slice(5, 16) || '--';
+    const newsTag = (liveNews.length === news.length)
+      ? `实时快讯 ${liveNews.length} 条`
+      : `实时快讯 ${liveNews.length} 条 · 人工核实 ${news.length - liveNews.length} 条`;
+    const ft = `${esc(view.cat || '')} · 人工叙事 ${esc(narrative)}`
+      + ` · ${newsTag}`
+      + ` · 最近检查 <span data-rel-ts="${checkTs}">${relTime(checkTs)}</span>`;
     return `<button class="ev-card" data-evid="${esc(ev.id)}">
       <div class="ev-icon">${esc(ev.icon || '◉')}</div>
       <div class="ev-card-bd">
-        <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
+        <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span>${stageTag}</div>
         <div class="ev-card-sum">${esc(plain(ev.summary))}</div>
         ${eventHeadlineHTML(view, 'ev-card-hl')}
         ${strip}
-        <div class="ev-card-ft">${esc(ev.cat || '')} · 叙事维护于 ${esc(ev.updated || '--')}${news.length ? ` · 相关快讯 ${news.length}` : ''}</div>
+        ${latestHTML}
+        <div class="ev-card-ft">${ft}</div>
       </div>
       <i class="ev-arrow">›</i>
     </button>`;
@@ -7418,6 +7490,9 @@
   }
 
   function renderEvent() {
+    /* v349：每次重绘都是一次真实检查（新闻轮询 / 30s 行情 tick / 手动进入）。
+     * 记下时间供卡片「最近检查」心跳与相对时间显示，不编造更新。 */
+    evTouch();
     const body = $('#eventBody');
     const back = $('#eventBack');
     /* 【已回滚】v58 曾把这里换成 HotEvents 的「主题聚类」，用户明确否掉：
@@ -7474,7 +7549,8 @@
   function ensureEventTimer() {
     if (evTimer) return;
     evTimer = setInterval(async () => {
-      if (S.tab !== 'event') return;
+      /* v349：APP 退到后台时不再打行情请求（本机 IP 冷却期，减少无谓触碰） */
+      if (S.tab !== 'event' || document.hidden) return;
       const keys = eventQuoteKeys();
       if (keys.length) {
         try { await QuoteHub.refresh(keys); } catch (e) { /* ignore */ }
@@ -8464,7 +8540,11 @@
     };
     // 事件页的实时报价与渲染句柄，便于核对「卡片上的实时值到底取自哪
     window.__quoteHub = QuoteHub;
-    window.__event = { eventQuoteKeys, eventMetricBar, eventCardHTML, eventDetailHTML, renderEvent };
+    window.__event = { eventQuoteKeys, eventMetricBar, eventCardHTML, eventDetailHTML,
+      renderEvent, eventNews, relTime, refreshEvRelTimes, lastCheck: () => _evLastCheck };
+    /* v349：相对时间自己走（「刚刚 → 1 分钟前 → 2 分钟前」），
+     * 只改文字不重建 DOM，卡片在两次重绘之间也能看出是活的。 */
+    setInterval(refreshEvRelTimes, 30000);
 
     setInterval(() => { QuoteHub.refresh(allNewsKeys().slice(0, 12)); }, 60000);
     /* v242：v241 的 15 秒 force 全量轮询会和缩略图的 intraday 请求抢东财连接，
