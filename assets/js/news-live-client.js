@@ -966,13 +966,64 @@
 
   /* ---------------- 文本工具 ---------------- */
 
-  function clean(s) {
-    return String(s || '')
+  /* v348【HTML 实体乱码修复】事故：格隆汇一条快讯把下划线标签实体化成
+   *   &lt;u&gt;目前英伟达约掌握83%的GPU市场&lt;/u&gt;
+   * 旧 stripHtml 第一行「文本里没有 '<' 就原样返回」→ 实体一个都没解；
+   * 显示端再走 esc() 把 & 变成 &amp;，innerHTML 渲染后用户看到的正是字面
+   * 字符串 "&lt;u&gt;"。这里统一成一套工具，供入库清洗与显示端共用。 */
+  function decodeEntities(s) {
+    let x = String(s == null ? '' : s);
+    const chr = (m, n) => {
+      const v = Number(n);
+      if (!isFinite(v) || v < 0 || v > 0x10ffff) return m;
+      try { return String.fromCodePoint(v); } catch (e) { return m; }
+    };
+    /* 循环解码：&amp;lt;u&amp;gt; → &lt;u&gt; → <u>，也覆盖 &#60; / &#x3C; */
+    for (let i = 0; i < 3; i++) {
+      const y = x
+        .replace(/&nbsp;|&#0*160;/gi, ' ')
+        .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"').replace(/&apos;|&#0*39;/gi, "'")
+        .replace(/&#x([0-9a-f]+);/gi, (m, h) => chr(m, parseInt(h, 16)))
+        .replace(/&#(\d+);/g, chr)
+        .replace(/&amp;/gi, '&');
+      if (y === x) break;
+      x = y;
+    }
+    return x;
+  }
+
+  /* 只剥「形似 HTML 标签」的片段：正文里的比较符号 "a < b > c" 不会被误删 */
+  function stripTags(s) {
+    return String(s == null ? '' : s)
+      .replace(/<!--[\s\S]*?-->/g, ' ')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, '')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<[!?][^>]*>/g, ' ')
+      .replace(/<\s*(br|\/\s*(p|div|li|h[1-6]|tr|section|article|blockquote))\b[^>]*>/gi, '\n')
+      /* 行内标签（<u>/<b>/<span>）剥掉时不要无脑补空格：中文之间会变成
+       * 「认为。 目前…市场 。」这种刺眼空档。只有两侧都是拉丁字母/数字时
+       * 才补一个空格，避免英文单词粘连。 */
+      .replace(/<\/?[a-z][a-z0-9]*(?:\s[^<>]*)?\/?>/gi, (m, off, str) => {
+        const word = (c) => /[A-Za-z0-9]/.test(c || '');
+        return (word(str[off - 1]) && word(str[off + m.length])) ? ' ' : '';
+      });
+  }
+
+  /* 显示端用：还原实体 → 剥标签 → 再兜一次多重编码，输出可直接 esc() 的纯文本。
+   * 同时用于修复 localStorage / 内存里已经存脏的历史数据。 */
+  function plainText(s) {
+    let x = String(s == null ? '' : s);
+    if (x.indexOf('&') < 0 && x.indexOf('<') < 0) return x;
+    x = stripTags(decodeEntities(x));
+    x = stripTags(decodeEntities(x));
+    return x.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+  }
+
+  function clean(s) {
+    return plainText(s)
       .replace(/\u3000/g, ' ')
-      .replace(/&nbsp;/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -1910,17 +1961,15 @@
 
   /** 把正文里的 HTML 彻底剥干净；剥完还是代码味的，判空 */
   function stripHtml(s) {
-    let x = String(s || '');
-    if (x.indexOf('<') < 0) return x;
+    /* v348：必须**先解码实体再剥标签**，且不能因为「没有 '<'」就提前返回。
+     * 源站常把整段正文里的标签实体化（&lt;u&gt;…&lt;/u&gt;），旧实现直接
+     * 原样返回，实体就一路带到页面上变成乱码字符。 */
+    let x = decodeEntities(s);
+    if (!x.trim()) return '';
     if (looksLikeFullPage(x)) return '';
-    x = x.replace(/<!--[\s\S]*?-->/g, ' ')
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<(br|\/p|\/div|\/li|\/h\d|\/tr)[^>]*>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-      .replace(/[ \t]+/g, ' ')
+    x = stripTags(x);
+    x = stripTags(decodeEntities(x));   /* 多重编码残留再兜一层 */
+    x = x.replace(/[ \t]+/g, ' ')
       .replace(/\s*\n\s*/g, '\n')
       .trim();
     // 剥完还有大段 CSS / JS 语法 → 说明原本是页面骨架，不是正文
@@ -5428,8 +5477,7 @@
           c = String((d && d.data && d.data.content) || '');
         } catch (e) { return ''; }
         c = c.replace(/^\s*<pre[^>]*>/i, '').replace(/<\/pre>\s*$/i, '');
-        return c.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+        return decodeEntities(c);   /* v348：统一解码，含多重编码/数字实体 */
       },
     },
   ];
@@ -7070,6 +7118,9 @@
       .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
       .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d));
+    /* v348：若源站给的是实体化的标签（&lt;p&gt; / &lt;u&gt;），上面的剥标签
+     * 发生在解码之前，会漏掉；这里解码后再剥一次。 */
+    block = stripTags(decodeEntities(block));
     return tidyMarkdown(block);
   }
 
@@ -7127,6 +7178,8 @@
     _explain: explain,           // P2-A：决策追溯 { level, cat, ruleId, stage }
     _catAudit: _gradeCatAudit,   // P0-2：C 级分类登记表一致性自检
     _stripHtml: stripHtml,
+    _plainText: plainText,      // v348 显示端清洗（治已缓存的实体乱码）
+    _decodeEntities: decodeEntities,
     _fixBrief: fixBrief,
     GRADE_VER: GRADE_VER,
     /* 分级内窥：报「这条为什么是 A 级」时用来定位命中的是哪条规则 */

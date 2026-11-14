@@ -14,6 +14,27 @@
   const $ = (s, r) => (r || d).querySelector(s);
   const $$ = (s, r) => Array.from((r || d).querySelectorAll(s));
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  /* v348【正文实体乱码】源站会把 <u>…</u> 之类标签实体化成 &lt;u&gt;，
+   * 直接 esc() 会把 & 再转成 &amp;，页面上就印出字面的 "&lt;u&gt;"。
+   * 显示前先还原实体 + 剥标签：既能治新数据，也能治 localStorage / 内存里
+   * 已经存脏的历史快讯（用户不重装、不清理缓存也能恢复）。
+   * 优先复用 LiveNews 的完整实现；模块还没就绪时用同口径简版兜底。 */
+  const plain = (s) => {
+    let x = String(s == null ? '' : s);
+    if (w.LiveNews && typeof w.LiveNews._plainText === 'function') return w.LiveNews._plainText(x);
+    if (x.indexOf('&') < 0 && x.indexOf('<') < 0) return x;
+    for (let i = 0; i < 3; i++) {
+      const y = x.replace(/&nbsp;/gi, ' ').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"').replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n))
+        .replace(/&amp;/gi, '&');
+      if (y === x) break;
+      x = y;
+    }
+    return x.replace(/<\/?[a-z][a-z0-9]*(?:\s[^<>]*)?\/?>/gi, (m, off, str) => {
+      const word = (c) => /[A-Za-z0-9]/.test(c || '');
+      return (word(str[off - 1]) && word(str[off + m.length])) ? ' ' : '';
+    }).replace(/[ \t]+/g, ' ').trim();
+  };
   const store = {
     get(k, dflt) { try { const v = localStorage.getItem(k); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
@@ -170,7 +191,7 @@
     el.className = 'fixmask';
     el.innerHTML = `<div class="fixpanel">
       <div class="fix-h"><b>改判分级</b><span>当前 ${esc(cur)} 级 · ${esc(n.cat || '')} · ${esc(n.src || '')}</span></div>
-      <p class="fix-t">${esc(n.title || '')}</p>
+      <p class="fix-t">${esc(plain(n.title))}</p>
       <div class="fix-opts">${['S', 'A', 'B', 'C'].map(g =>
         `<button data-fix="${g}" class="${g === cur ? 'on' : ''}">${g}</button>`).join('')}</div>
       <div class="fix-lab">为什么改（选填，一句话，比如「行业集体回购算资金面信号」）</div>
@@ -1397,8 +1418,8 @@
           <span class="c-tps">${tps.slice(0, 3).map(t => esc(w.TOPICS.label(t))).join(' · ')}</span>
           <span class="c-time">${hhmm(n.ts)} · ${agoText(n.ts)}</span>
         </div>
-        <h3 class="c-title">${esc(n.title)}</h3>
-        <p class="c-brief"${n.brief ? '' : ' hidden'}>${esc(n.brief || '')}</p>
+        <h3 class="c-title">${esc(plain(n.title))}</h3>
+        <p class="c-brief"${n.brief ? '' : ' hidden'}>${esc(plain(n.brief))}</p>
         ${enBlock(n)}
         ${n.noAsset
           ? `<div class="c-imp macro">
@@ -2029,10 +2050,10 @@
     let reason;
     if (cause && (cause.id || cause.url || cause.title)) {
       const btn = cause.id
-        ? `<button class="rl-n" data-news="${esc(cause.id)}">${esc(cause.title || '')}</button>`
+        ? `<button class="rl-n" data-news="${esc(cause.id)}">${esc(plain(cause.title))}</button>`
         : (cause.url
-          ? `<button class="rl-n" data-open="${esc(cause.url)}">${esc(cause.title || '')}</button>`
-          : `<b class="rl-nt">${esc(cause.title || '')}</b>`);
+          ? `<button class="rl-n" data-open="${esc(cause.url)}">${esc(plain(cause.title))}</button>`
+          : `<b class="rl-nt">${esc(plain(cause.title))}</b>`);
       reason = `<div class="rl-r"><em class="ok">归因</em>${btn}
         <span class="rl-src">${esc(cause.src || '快讯')}${cause.ts ? ' · ' + agoText(cause.ts) : ''}</span></div>`;
     } else if (r.echoOnly) {
@@ -2175,9 +2196,9 @@
               : '快讯库 25 分钟内无可归因消息 —— 资金或已提前定价')
             : (r.cause
               ? `归因：${r.cause.id
-                ? `<button class="ra-cn" data-news="${esc(r.cause.id)}">${esc(r.cause.title || '')}</button>`
+                ? `<button class="ra-cn" data-news="${esc(r.cause.id)}">${esc(plain(r.cause.title))}</button>`
                 : (r.cause.url
-                  ? `<button class="ra-cn" data-open="${esc(r.cause.url)}">${esc(r.cause.title || '')}</button>`
+                  ? `<button class="ra-cn" data-open="${esc(r.cause.url)}">${esc(plain(r.cause.title))}</button>`
                   : `<span class="rl-nt">${esc(r.cause.title || '事件快讯')}</span>`)}`
               : '已有对应事件快讯，属「消息驱动」波动')}
           <button class="ra-go" data-k="${esc(r.key)}">看图 →</button>
@@ -2209,7 +2230,7 @@
           <span class="ra-ns">${esc(n.src || '快讯')}</span>
           <button class="ra-nl" ${n.id
             ? `data-news="${esc(n.id)}"`
-            : `data-open="${esc(n.url || '')}"`}>${esc(n.title || '')}</button>
+            : `data-open="${esc(n.url || '')}"`}>${esc(plain(n.title))}</button>
         </div>
         <div class="ra-t">
           行情阈值未触发，由媒体「${esc(n.src || '快讯')}」报道 + K 线回溯验证补入
@@ -2345,7 +2366,7 @@
         <span class="lg-s">${l.win ? l.win + '分' : (SCALE_TEXT[l.scale] || '')}${
           (l.run && l.run.durMin >= 2) ? ' · 累计' + ((l.run.cum >= 0 ? '+' : '') + l.run.cum.toFixed(2)) + '%' : ''
         } · ${KIND_TEXT[l.kind] || ''}</span>
-        ${l.kind === 'news' && l.news ? `<i class="lg-news">${esc(l.news.title)}</i>` : ''}
+        ${l.kind === 'news' && l.news ? `<i class="lg-news">${esc(plain(l.news.title))}</i>` : ''}
       </div>`).join('') : '<div class="empty sm">本次监听周期内暂无击穿阈值的异动</div>';
 
     // 异动状态同步到全局（红灯 / 弹窗 / tab 角标）
@@ -2617,8 +2638,8 @@
     m.innerHTML = `<div class="sm-frame">
       <div class="sm-badge">S</div>
       <div class="sm-cat">${esc(n.cat)} · ${esc(n.src)} · ${hhmm(n.ts)}</div>
-      <h2 class="sm-title">${esc(n.title)}</h2>
-      <p class="sm-brief">${esc(n.brief)}</p>
+      <h2 class="sm-title">${esc(plain(n.title))}</h2>
+      <p class="sm-brief">${esc(plain(n.brief))}</p>
       ${dir ? `<div class="sm-lab">直接标的</div><div class="sm-chips">${dir}</div>` : ''}
       ${usS ? `<div class="sm-lab">美股映射</div><div class="sm-chips sm-chips-us">${usS}</div>` : ''}
       ${hkS ? `<div class="sm-lab">港股映射</div><div class="sm-chips sm-chips-hk">${hkS}</div>` : ''}
@@ -4439,7 +4460,7 @@
     return rel.map(n => `<div class="rel-n" data-id="${esc(n.id)}">
       <span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>
       ${liveBadge(n)}
-      <div class="rel-t">${esc(n.title)}<em>${hhmm(n.ts)} · ${esc(n.cat)}</em></div>
+      <div class="rel-t">${esc(plain(n.title))}<em>${hhmm(n.ts)} · ${esc(n.cat)}</em></div>
     </div>`).join('');
   }
 
@@ -4512,7 +4533,7 @@
             <button class="kp-i" data-go="${esc(n.id)}">
               <span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>
               <div>
-                <p>${esc(n.title)}</p>
+                <p>${esc(plain(n.title))}</p>
                 <em>${hhmm(n.ts)} · ${agoText(n.ts)} · ${esc(n.cat)}</em>
               </div>
             </button>`).join('')
@@ -4611,7 +4632,7 @@
             <em>${hhmm(n.ts)} · ${agoText(n.ts)}</em>
             <button class="ns-x" aria-label="关闭">✕</button>
           </div>
-          <h2 class="ns-title">${esc(n.title)}</h2>
+          <h2 class="ns-title">${esc(plain(n.title))}</h2>
             <div class="ns-by">${srcHTML(n, 'ns-src-link')}${tps.length ? ' · ' + tps.map(t => esc(w.TOPICS.label(t))).join(' / ') : ''}</div>
         </div>
         <div class="ns-scroll">${bodyHTML}</div>
@@ -4645,7 +4666,7 @@
         : '');
     const bodyHTML = demoNotice
       + (body
-        ? `<div class="ns-text">${esc(body)}</div>${srcLink}`
+        ? `<div class="ns-text">${esc(plain(body))}</div>${srcLink}`
         : `<div class="ns-text ns-text-empty">该来源只推了标题，没有正文段。可以看下面的影响链和真实走势判断影响。</div>${srcLink}`)
       /* 【中英对照】推文 / 博主原话整段贴出英文原文 —— 用户口径：
        * 「如果翻译出错了，我还可以看英文」。译文在上、原文在下，一眼可核。
@@ -4654,7 +4675,7 @@
           && /川普言论|口罩哥KZG/.test(String(n.src || ''))
         ? `<div class="ns-sec ns-en">
             <div class="ns-sec-h">英文原文 <u>未经改动的原话，便于核对译文</u></div>
-            <div class="ns-en-text">${esc(n.titleEn)}</div>
+            <div class="ns-en-text">${esc(plain(n.titleEn))}</div>
           </div>`
         : '')
       /* 全文区：只在「这条快讯本身太短（<120 字，基本只有标题）」时才去源站补。
@@ -4723,7 +4744,7 @@
         <button class="ns-rel-i" data-news="${esc(x.id)}">
           <span class="lv ${LVCLS[x.level] || 'lv-b'}">${x.level}</span>
           ${liveBadge(x)}
-          <div><p>${esc(x.title)}</p><em>${hhmm(x.ts)} · ${esc(x.cat)}</em></div>
+          <div><p>${esc(plain(x.title))}</p><em>${hhmm(x.ts)} · ${esc(x.cat)}</em></div>
         </button>`).join('')}</div>
     </div>` : '';
 
@@ -4773,7 +4794,7 @@
           if (bt) bt.hidden = true;
         }
         if (head) head.textContent = '源站原文 · ' + cleanText.length + ' 字';
-        box.innerHTML = `<div class="lv-text">${esc(cleanText).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</div>`;
+        box.innerHTML = `<div class="lv-text">${esc(plain(cleanText)).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</div>`;
       })
       .catch(() => { el.hidden = true; });
   }
@@ -4842,7 +4863,7 @@
         <div class="lv-h">
           <button class="lv-x" aria-label="关闭">✕</button>
           <div class="lv-t">
-            <b>${esc(LINK.title).slice(0, 90)}</b>
+            <b>${esc(plain(LINK.title)).slice(0, 90)}</b>
             <span>${esc(LINK.src || '原文')} · ${esc(hostOf(u))}</span>
           </div>
           <div class="lv-seg">
@@ -4923,7 +4944,7 @@
     LINK.bodyClean = cleanBody;
     // ① 这条快讯自己抓到的正文（多数源给的就是完整一条，最稳、零依赖）
     if (cleanBody && cleanBody.length >= 40) {
-      stage.innerHTML = `<div class="lv-text">${esc(cleanBody).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</div>
+      stage.innerHTML = `<div class="lv-text">${esc(plain(cleanBody)).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</div>
         <div class="lv-note">以上是本站抓到的快讯正文。要核对原网页（含配图与后续更新），点右上角「原页面」或底部「在浏览器打开」。</div>`;
       stage.scrollTop = 0;
       return;
@@ -4941,7 +4962,7 @@
         const cleanText = (w.LiveNews && typeof w.LiveNews._stripHtml === 'function')
           ? w.LiveNews._stripHtml(text) : text;
         st.innerHTML = cleanText
-          ? `<div class="lv-text">${esc(cleanText).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</div>`
+          ? `<div class="lv-text">${esc(plain(cleanText)).replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>')}</div>`
           : `<div class="lv-fail">
               <b>这条只推了标题，原网页也不允许被嵌入</b>
               <span>国内财经站普遍用 X-Frame-Options 拒绝嵌入，浏览器端也拿不到它的正文。可以点上方「原页面」试试，或点右下角「在浏览器打开」。</span>
@@ -7205,11 +7226,11 @@
     const fresh = news.filter(n => Date.now() - (n.ts || 0) < winMs).slice(0, 6);
     const autoTl = fresh.map(n =>
       `<div class="ev-tl-i is-auto"><em>${n.seed ? esc(n.dateLabel || '') : hhmm(n.ts)}</em>`
-      + `<i class="ev-tl-k auto">${n.seed ? '核实' : '自动'}</i><p>${esc(n.title)}</p></div>`).join('');
+      + `<i class="ev-tl-k auto">${n.seed ? '核实' : '自动'}</i><p>${esc(plain(n.title))}</p></div>`).join('');
     const themes = (ev.themes || []).map(x => `<span class="ev-chip t">${esc(x)}</span>`).join('');
     const assets = (ev.assets || []).filter(k => U.get(k)).map(eventAssetBtn).join('');
     const newsHTML = news.length
-      ? news.map(n => `<div class="ev-news" data-evn="${esc(n.id)}"><span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>${n.seed ? '' : liveBadge(n)}<div><b>${esc(n.title)}</b><em>${evNewsWhen(n)} · ${esc(n.cat)}${n.src ? ' · ' + esc(n.src) : ''}</em></div></div>`).join('')
+      ? news.map(n => `<div class="ev-news" data-evn="${esc(n.id)}"><span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>${n.seed ? '' : liveBadge(n)}<div><b>${esc(plain(n.title))}</b><em>${evNewsWhen(n)} · ${esc(n.cat)}${n.src ? ' · ' + esc(n.src) : ''}</em></div></div>`).join('')
       : '<div class="empty sm">暂无匹配快讯（快讯源连通后自动归集）</div>';
 
     /* headline —— 与卡片页共用同一个渲染函数，两处绝不会显示成两个值 */
@@ -7225,7 +7246,7 @@
           <div class="ev-cat">${esc(view.cat || '')} · 叙事维护于 ${esc(view.updated || '--')}${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
       </div>
-      <div class="ev-sum">${esc(ev.summary || '')}</div>
+      <div class="ev-sum">${esc(plain(ev.summary))}</div>
       ${headline}
       ${metrics ? `<div class="ev-sec"><div class="ev-sec-h">关键指标</div>${metrics}</div>` : ''}
       ${eventSeats(ev)}
@@ -7258,7 +7279,7 @@
       <div class="ev-icon">${esc(ev.icon || '◉')}</div>
       <div class="ev-card-bd">
         <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
-        <div class="ev-card-sum">${esc(ev.summary || '')}</div>
+        <div class="ev-card-sum">${esc(plain(ev.summary))}</div>
         ${eventHeadlineHTML(view, 'ev-card-hl')}
         ${strip}
         <div class="ev-card-ft">${esc(ev.cat || '')} · 叙事维护于 ${esc(ev.updated || '--')}${news.length ? ` · 相关快讯 ${news.length}` : ''}</div>
