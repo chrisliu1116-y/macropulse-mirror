@@ -230,11 +230,25 @@
     return '数据 ' + day + ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '');
   }
 
+  /* v347：底部显示数据源，一眼看出当前跑的是东财还是腾讯。
+   * 优先 meta.source（跑批写入）；缺失时按历史长度反推：东财 1990 起 8000+ 日、
+   * 腾讯 2013 起 3000+ 日，差异极大，反推可靠。 */
+  function srcLabel(m, d) {
+    var s = String((m && m.source) || '').toLowerCase();
+    if (s.indexOf('tencent') >= 0) return '腾讯';
+    if (s.indexOf('eastmoney') >= 0) return '东财';
+    var n = (d && d.dates) ? d.dates.length : 0;
+    if (n >= 6000) return '东财';
+    if (n > 0) return '腾讯';
+    return '未知';
+  }
+
   function footText(d) {
     var m = d.meta || {}, g = String(m.generated || '');
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
     var day = m.trade_date || d.dates[d.dates.length - 1] || '';
-    return 'A股 ' + m.universe + '/' + m.valid + ' · ' + m.days + '日 · ' + day
+    return 'A股 ' + m.universe + '/' + m.valid + ' · ' + m.days + '日 · 源 '
+      + srcLabel(m, d) + ' · ' + day
       + (short ? ' · ' + short + (m.generated_tz ? ' 北京' : '') : '')
       + (m.stale ? ' · 未更新' : '');
   }
@@ -352,8 +366,9 @@
         updateCards(d.dates.length - 1);
         $('dot').classList.remove('old');
         paintLegend();
-        $('ft').textContent = '全部A股 ' + d.meta.universe + ' 只 · 有效 ' +
-          d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · ' + updText(d);
+        /* v347：这里原来还有一处独立的长格式赋值，会覆盖 footText(d) 的结果，
+         * 导致「源 东财/腾讯」根本显示不出来（页面走的是这条渲染路径）。 */
+        $('ft').textContent = footText(d);
         draw();
       })
       .catch(function (e) {
