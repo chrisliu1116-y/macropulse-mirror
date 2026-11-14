@@ -3268,7 +3268,7 @@ body.light .chart-host .pane-vol{border-top-color:rgba(90,110,140,.38)}
 .chart-host.no-vol .pane-main{height:100%}
 .chart-host.no-vol .pane-vol{display:none}
 /* v331：分时图开盘/收盘角标（北京时间），让「最右=收盘」可见 */
-.chart-host .axis-edge{position:absolute;bottom:1px;font-size:10px;line-height:1;color:var(--tx3);pointer-events:none;z-index:3;letter-spacing:.2px}
+.chart-host .axis-edge{position:absolute;bottom:15px;font-size:9px;line-height:1;color:var(--tx3);pointer-events:none;z-index:4;letter-spacing:.2px;background:rgba(10,16,28,.78);padding:2px 5px;border-radius:3px;white-space:nowrap}
 .chart-host .axis-edge.l{left:calc(var(--paneL,0px) + 6px)}
 .chart-host .axis-edge.r{right:calc(var(--paneR,0px) + 6px)}
 /* 分时/K 线主图的 6 等分横向网格：中线=零轴，上下各 3 格对称。

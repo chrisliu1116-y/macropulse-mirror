@@ -346,6 +346,23 @@
         }
       } catch (e) { total = 0; }
       if (!total || !pts || pts.length < 2) return null;
+      /* v341：total 是「交易分钟数」。A股/港股腾讯 1 分钟线不含午休点，
+       * 用交易分钟数正确；但 Yahoo 5m 序列是连续墙上时间（午休也有 bar），
+       * 此时应按 segs 首→尾的墙上跨度算，否则 N225/KOSPI 会被钉短、线走不满。 */
+      try {
+        let sk2 = a && a.sess;
+        if (!sk2 && U && U.grp) { const g2 = U.grp(key); sk2 = g2 && g2.session; }
+        const c2 = w.Session && w.Session.SESSIONS && w.Session.SESSIONS[sk2];
+        const segs2 = c2 && c2.segs;
+        if (segs2 && segs2.length && !c2.weekly && !c2.cme && !c2.vix24 && !c2.always) {
+          const wall = segs2[segs2.length - 1][1] - segs2[0][0];
+          let hasLunchGap = false;
+          for (let i = 1; i < pts.length; i++) {
+            if ((pts[i].time - pts[i - 1].time) / 60 > 30) { hasLunchGap = true; break; }
+          }
+          if (wall > total && !hasLunchGap && !(a && a.minSpan)) total = wall;
+        }
+      } catch (e) { /* 保持原 total */ }
       /* 粒度取「最常见的相邻间隔」：A股/港股午休那个 90 分钟大跳空会被排除 */
       const c = {};
       for (let i = 1; i < pts.length; i++) {
@@ -520,6 +537,9 @@
 
     /* v331：分时图左下/右下角标 —— 开盘 HH:MM / 收盘 HH:MM（北京时间）。
      * 只在固定开收盘时段的品种上画（加密 7×24 无收盘，不画）。 */
+    /* v341：开收盘角标按「交易所当地 segs 首→末」换算成北京时间。
+     * 旧实现用 start + fullMinutes（交易分钟数）会丢掉午休：A股 09:30+240min=13:30、
+     * 港股 09:30+330min=15:00，都是错的。24×5 / 7×24 品种不画角标。 */
     _paintSessionEdges(key, view) {
       const pane = this.paneMain;
       if (!pane || !view || !view.length) return;
@@ -530,15 +550,32 @@
       if (!a || a.grp === 'crypto') return;
       const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
       const cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[type] : null;
-      if (!cfg || cfg.always || !cfg.segs || !cfg.segs.length) return;   // 连续交易不画
-      const full = (w.Session.fullMinutes ? w.Session.fullMinutes(type) : 0);
-      if (!full) return;
-      const hm = (t) => {
-        const d = new Date(t * 1000);
+      if (!cfg || cfg.always || cfg.weekly || cfg.cme || cfg.vix24 ||
+          !cfg.segs || !cfg.segs.length) return;
+      const segs = cfg.segs;
+      const wall = segs[segs.length - 1][1] - segs[0][0];
+      if (!wall || wall >= 1380) return;
+      /* 以首个点的真实时刻求交易所时区偏移（自动含美股夏令时） */
+      const realMs = (view[0].time - 8 * 3600) * 1000;
+      let off = 0;
+      try {
+        const f = new Intl.DateTimeFormat('en-GB', {
+          timeZone: cfg.tz || 'Asia/Shanghai', hourCycle: 'h23',
+          hour: '2-digit', minute: '2-digit'
+        });
+        const o = {};
+        f.formatToParts(new Date(realMs)).forEach(p => { o[p.type] = p.value; });
+        const d = new Date(realMs);
+        off = (+o.hour * 60 + +o.minute) - (d.getUTCHours() * 60 + d.getUTCMinutes());
+        if (off > 720) off -= 1440;
+        if (off < -720) off += 1440;
+      } catch (e) { off = 0; }
+      const toBJ = (m) => ((m - off + 480) % 1440 + 1440) % 1440;
+      const hm = (m) => {
         const p2 = (n) => String(n).padStart(2, '0');
-        return p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes());
+        return p2(Math.floor(m / 60)) + ':' + p2(Math.round(m % 60));
       };
-      const start = view[0].time;
+      const openBJ = toBJ(segs[0][0]), closeBJ = toBJ(segs[segs.length - 1][1]);
       const mk = (txt, cls) => {
         const el = document.createElement('span');
         el.className = 'axis-edge ' + cls;
@@ -546,8 +583,8 @@
         pane.appendChild(el);
         return el;
       };
-      this._edgeL = mk('开盘 ' + hm(start), 'l');
-      this._edgeR = mk('收盘 ' + hm(start + full * 60), 'r');
+      this._edgeL = mk('开盘 ' + hm(openBJ), 'l');
+      this._edgeR = mk('收盘 ' + hm(closeBJ), 'r');
     }
 
     /* v213/v215：分时模式下在面板宽度定稿后重新铺满可视范围。
