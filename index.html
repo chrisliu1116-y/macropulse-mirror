@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=341">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=341">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=341">
-<link rel="stylesheet" href="assets/css/app.css?v=341">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=343">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=343">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=343">
+<link rel="stylesheet" href="assets/css/app.css?v=343">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -174,35 +174,35 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=341">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=341">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=341">
-  <link rel="preload" as="script" href="assets/js/app.js?v=341">
-  <link rel="preload" as="script" href="assets/js/api.js?v=341">
-<script src="vendor/lightweight-charts.standalone.production.js?v=341"></script>
-<script src="assets/js/cn-stocks.js?v=341"></script>
-<script src="assets/js/universe.js?v=341"></script>
-<script src="assets/js/session.js?v=341"></script>
-<script src="assets/js/topics.js?v=341"></script>
-<script src="assets/js/news-crypto.js?v=341"></script>
-<script src="assets/js/news-zh.js?v=341"></script>
-<script src="assets/js/pool.js?v=341"></script>
-<script src="assets/js/news-live-client.js?v=341"></script>
-<script src="assets/js/api.js?v=341"></script>
-<script src="assets/js/alert.js?v=341"></script>
-<script src="assets/js/indicator.js?v=341"></script>
-<script src="assets/js/drawing.js?v=341"></script>
-<script src="assets/js/charts.js?v=341"></script>
-<script src="assets/js/news-spike.js?v=341"></script>
-<script src="assets/js/anomaly.js?v=341"></script>
-<script src="assets/js/volprofile.js?v=341"></script>
-<script src="assets/js/verify.js?v=341"></script>
-<script src="assets/js/predict.js?v=341"></script>
-<script src="assets/js/hot-events.js?v=341"></script>
-<script src="assets/js/events.js?v=341"></script>
-<script src="assets/js/account.js?v=341"></script>
-<script src="assets/js/app.js?v=341"></script>
-<script src="assets/js/coverage-probe.js?v=341"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=343">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=343">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=343">
+  <link rel="preload" as="script" href="assets/js/app.js?v=343">
+  <link rel="preload" as="script" href="assets/js/api.js?v=343">
+<script src="vendor/lightweight-charts.standalone.production.js?v=343"></script>
+<script src="assets/js/cn-stocks.js?v=343"></script>
+<script src="assets/js/universe.js?v=343"></script>
+<script src="assets/js/session.js?v=343"></script>
+<script src="assets/js/topics.js?v=343"></script>
+<script src="assets/js/news-crypto.js?v=343"></script>
+<script src="assets/js/news-zh.js?v=343"></script>
+<script src="assets/js/pool.js?v=343"></script>
+<script src="assets/js/news-live-client.js?v=343"></script>
+<script src="assets/js/api.js?v=343"></script>
+<script src="assets/js/alert.js?v=343"></script>
+<script src="assets/js/indicator.js?v=343"></script>
+<script src="assets/js/drawing.js?v=343"></script>
+<script src="assets/js/charts.js?v=343"></script>
+<script src="assets/js/news-spike.js?v=343"></script>
+<script src="assets/js/anomaly.js?v=343"></script>
+<script src="assets/js/volprofile.js?v=343"></script>
+<script src="assets/js/verify.js?v=343"></script>
+<script src="assets/js/predict.js?v=343"></script>
+<script src="assets/js/hot-events.js?v=343"></script>
+<script src="assets/js/events.js?v=343"></script>
+<script src="assets/js/account.js?v=343"></script>
+<script src="assets/js/app.js?v=343"></script>
+<script src="assets/js/coverage-probe.js?v=343"></script>
 <!-- v287：账号 SDK 改为 async 且排在 app.js 之后。它此前是同步脚本，
      会让整个 HTML 解析停下等 CDN（实测 0.35~1.24s），而 boot() 挂在
      DOMContentLoaded 上，等于每段首屏都被外部 SDK 拖住。async 后

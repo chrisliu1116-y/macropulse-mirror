@@ -346,21 +346,21 @@
         }
       } catch (e) { total = 0; }
       if (!total || !pts || pts.length < 2) return null;
-      /* v341：total 是「交易分钟数」。A股/港股腾讯 1 分钟线不含午休点，
-       * 用交易分钟数正确；但 Yahoo 5m 序列是连续墙上时间（午休也有 bar），
-       * 此时应按 segs 首→尾的墙上跨度算，否则 N225/KOSPI 会被钉短、线走不满。 */
+      /* v342：源末尾早于官方收盘的品种（Yahoo KOSPI 只到 15:00 KST，
+       * 官方 15:30 KST），锁轴格数按「源实际覆盖跨度」算，让曲线铺满；
+       * 角标仍按官方 segs 显示 14:30，两者互不干扰。
+       * 注：v341 曾在此处按「segs 墙上跨度」覆写 total，但它引用的是上一个
+       * try 块内声明的 const a（作用域外），异常被 catch 吞掉，从未生效；
+       * 若强行修好反而会把 N225 从 66 格拉到 78 格、制造留白，故整段移除，
+       * 这里重新取 a2，只保留 srcEnd 一条规则。 */
       try {
-        let sk2 = a && a.sess;
+        const a2 = (U && U.get) ? U.get(key) : null;
+        let sk2 = a2 && a2.sess;
         if (!sk2 && U && U.grp) { const g2 = U.grp(key); sk2 = g2 && g2.session; }
         const c2 = w.Session && w.Session.SESSIONS && w.Session.SESSIONS[sk2];
-        const segs2 = c2 && c2.segs;
-        if (segs2 && segs2.length && !c2.weekly && !c2.cme && !c2.vix24 && !c2.always) {
-          const wall = segs2[segs2.length - 1][1] - segs2[0][0];
-          let hasLunchGap = false;
-          for (let i = 1; i < pts.length; i++) {
-            if ((pts[i].time - pts[i - 1].time) / 60 > 30) { hasLunchGap = true; break; }
-          }
-          if (wall > total && !hasLunchGap && !(a && a.minSpan)) total = wall;
+        if (c2 && c2.srcEnd && c2.segs && c2.segs.length && !(a2 && a2.minSpan)) {
+          const srcWall = c2.srcEnd - c2.segs[0][0];
+          if (srcWall > 0) total = srcWall;
         }
       } catch (e) { /* 保持原 total */ }
       /* 粒度取「最常见的相邻间隔」：A股/港股午休那个 90 分钟大跳空会被排除 */
@@ -575,7 +575,24 @@
         const p2 = (n) => String(n).padStart(2, '0');
         return p2(Math.floor(m / 60)) + ':' + p2(Math.round(m % 60));
       };
-      const openBJ = toBJ(segs[0][0]), closeBJ = toBJ(segs[segs.length - 1][1]);
+      const cfgOpenBJ = toBJ(segs[0][0]), closeBJ = toBJ(segs[segs.length - 1][1]);
+      /* v342：开盘时间直接取数据源首点 —— 源的时间戳本身就是交易所真实
+       * 开盘时刻，比按配置反推更可靠，也自动吸收夏令时与个别品种特例。
+       * 仅当源首点与配置开盘相差 ≤60 分钟才采用，避免把美股盘前/延展段
+       * 起点（16:00 北京）误当开盘（22:30）。收盘不能用源末点：盘中它是
+       * 当前时刻、休市时腾讯会补重复收盘价或写入收盘后更新时间（恒指
+       * 18:31），故收盘仍以官方 segs 为准，源只做校验。 */
+      let openBJ = cfgOpenBJ;
+      try {
+        const src = view[0] && view[0].time;
+        if (src) {
+          const d0 = new Date(src * 1000);
+          const srcBJ = d0.getUTCHours() * 60 + d0.getUTCMinutes();
+          let diff = Math.abs(srcBJ - cfgOpenBJ);
+          if (diff > 720) diff = 1440 - diff;
+          if (diff <= 60) openBJ = srcBJ;
+        }
+      } catch (e) { /* 保持配置 */ }
       const mk = (txt, cls) => {
         const el = document.createElement('span');
         el.className = 'axis-edge ' + cls;
