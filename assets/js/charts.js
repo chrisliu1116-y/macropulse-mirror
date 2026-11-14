@@ -540,68 +540,20 @@
     /* v341：开收盘角标按「交易所当地 segs 首→末」换算成北京时间。
      * 旧实现用 start + fullMinutes（交易分钟数）会丢掉午休：A股 09:30+240min=13:30、
      * 港股 09:30+330min=15:00，都是错的。24×5 / 7×24 品种不画角标。 */
+    /* v344【移除开收盘角标】用户实测角标仍压住绿色价格刻度 / 振幅百分比
+     * 数字（上移 15px + 胶囊底也挡）。开收盘信息交给横轴刻度，时间由
+     * 十字游标标签显示；这里只清理历史 DOM，不再创建任何元素。 */
     _paintSessionEdges(key, view) {
-      const pane = this.paneMain;
-      if (!pane || !view || !view.length) return;
       if (this._edgeL && this._edgeL.parentNode) this._edgeL.parentNode.removeChild(this._edgeL);
       if (this._edgeR && this._edgeR.parentNode) this._edgeR.parentNode.removeChild(this._edgeR);
       this._edgeL = this._edgeR = null;
-      const a = U.get(key);
-      if (!a || a.grp === 'crypto') return;
-      const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
-      const cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[type] : null;
-      if (!cfg || cfg.always || cfg.weekly || cfg.cme || cfg.vix24 ||
-          !cfg.segs || !cfg.segs.length) return;
-      const segs = cfg.segs;
-      const wall = segs[segs.length - 1][1] - segs[0][0];
-      if (!wall || wall >= 1380) return;
-      /* 以首个点的真实时刻求交易所时区偏移（自动含美股夏令时） */
-      const realMs = (view[0].time - 8 * 3600) * 1000;
-      let off = 0;
       try {
-        const f = new Intl.DateTimeFormat('en-GB', {
-          timeZone: cfg.tz || 'Asia/Shanghai', hourCycle: 'h23',
-          hour: '2-digit', minute: '2-digit'
-        });
-        const o = {};
-        f.formatToParts(new Date(realMs)).forEach(p => { o[p.type] = p.value; });
-        const d = new Date(realMs);
-        off = (+o.hour * 60 + +o.minute) - (d.getUTCHours() * 60 + d.getUTCMinutes());
-        if (off > 720) off -= 1440;
-        if (off < -720) off += 1440;
-      } catch (e) { off = 0; }
-      const toBJ = (m) => ((m - off + 480) % 1440 + 1440) % 1440;
-      const hm = (m) => {
-        const p2 = (n) => String(n).padStart(2, '0');
-        return p2(Math.floor(m / 60)) + ':' + p2(Math.round(m % 60));
-      };
-      const cfgOpenBJ = toBJ(segs[0][0]), closeBJ = toBJ(segs[segs.length - 1][1]);
-      /* v342：开盘时间直接取数据源首点 —— 源的时间戳本身就是交易所真实
-       * 开盘时刻，比按配置反推更可靠，也自动吸收夏令时与个别品种特例。
-       * 仅当源首点与配置开盘相差 ≤60 分钟才采用，避免把美股盘前/延展段
-       * 起点（16:00 北京）误当开盘（22:30）。收盘不能用源末点：盘中它是
-       * 当前时刻、休市时腾讯会补重复收盘价或写入收盘后更新时间（恒指
-       * 18:31），故收盘仍以官方 segs 为准，源只做校验。 */
-      let openBJ = cfgOpenBJ;
-      try {
-        const src = view[0] && view[0].time;
-        if (src) {
-          const d0 = new Date(src * 1000);
-          const srcBJ = d0.getUTCHours() * 60 + d0.getUTCMinutes();
-          let diff = Math.abs(srcBJ - cfgOpenBJ);
-          if (diff > 720) diff = 1440 - diff;
-          if (diff <= 60) openBJ = srcBJ;
+        const host = this.paneMain || this.host;
+        if (host && host.querySelectorAll) {
+          host.querySelectorAll('.axis-edge').forEach(function (el) { el.remove(); });
         }
-      } catch (e) { /* 保持配置 */ }
-      const mk = (txt, cls) => {
-        const el = document.createElement('span');
-        el.className = 'axis-edge ' + cls;
-        el.textContent = txt;
-        pane.appendChild(el);
-        return el;
-      };
-      this._edgeL = mk('开盘 ' + hm(openBJ), 'l');
-      this._edgeR = mk('收盘 ' + hm(closeBJ), 'r');
+      } catch (e) { }
+      return;
     }
 
     /* v213/v215：分时模式下在面板宽度定稿后重新铺满可视范围。
