@@ -280,13 +280,13 @@
     postStatus();
     return true;
   }
-  function startRemoteRefresh() {
+  function startRemoteRefresh(skipFirst) {
     if (typeof fetch !== 'function') return;   /* jsdom/offline 静默跳过 */
     function tick() {
       remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {});
       loadRemoteS().then(function (k) { applyNewSse(k); }).catch(function () {});
     }
-    tick();
+    if (!skipFirst) tick();
     var timer = setInterval(function () {
       var bj = new Date(Date.now() + 8 * 3600 * 1000);
       var wd = bj.getUTCDay(), hh = bj.getUTCHours();
@@ -326,16 +326,14 @@
     var g = String(m.generated || '');
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
     var parts = [];
-    /* v268：补回老版完整口径「全部A股 X 只 · 有效 X 只 · X 个交易日」，
-     * 数据日期不重复写（工具条状态已有），只保留更新时间，仍强制一行。 */
-    if (S.B) parts.push('全部A股 ' + m.universe + ' 只 · 有效 ' + m.valid + ' 只 · ' + m.days + ' 个交易日');
-    parts.push(short ? '更新 ' + short + (m.generated_tz ? ' 北京' : '') : '更新时间未知');
+    if (S.B) parts.push('A股 ' + m.universe + '/' + m.valid + ' · ' + m.days + '日');
+    parts.push(short ? short + (m.generated_tz ? ' 北京' : '') : '时间未知');
     if (S.K) {
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
-      if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
+      parts.push('上证 ' + kLast + (bLast && kLast < bLast ? ' 待补' : ''));
     }
-    if (S.B && S.B.meta && S.B.meta.stale) parts.push('跑批未更新');
+    if (S.B && S.B.meta && S.B.meta.stale) parts.push('未更新');
     else if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');
   }
@@ -1222,59 +1220,57 @@
       applyTheme(next);
     });
 
-    loadJSON('data/breadth.json')
-      .then(function (b) {
-        S.B = b;
-        S.bIndex = new Map();
-        for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
-        buildAxis();
-        $('upd').textContent = '全A股 · ' + updText(b);
-        setRange(30);
-        updateCards(S.axis.length - 1);
-        if (isFresh(b)) $('dot').classList.remove('old'); else $('dot').classList.add('old');
-        if (S.K) cmp.disabled = false;
-        paintLegend();
-        $('ft').textContent = footText();
-        renderAll();
-        if (S.K && /compare=1/.test(location.search)) setCompare(true);
-        try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
-        postStatus();
-        startRemoteRefresh();
-      })
-      .catch(function () {
-        $('gen').textContent = '数据加载失败';
-        $('upd').textContent = '全A股 · 数据未更新，请检查跑批';
-        $('dot').classList.add('old');
+    /* v340：进页即取最新。本地快照不再先渲染旧数据（用户实测关掉 APP 重进
+     * 仍先看到 12 号，过一会才跳）。远端 3.5s 内拿不到才落本地，并按最后
+     * 交易日取较新的一份；上证 K 线与宽度同批到齐后再一次性渲染。 */
+    function timeoutVal(promise, ms, fallback) {
+      return new Promise(function (resolve) {
+        var done = false;
+        var t = setTimeout(function () { if (!done) { done = true; resolve(fallback); } }, ms);
+        promise.then(function (v) { if (!done) { done = true; clearTimeout(t); resolve(v); } },
+                     function () { if (!done) { done = true; clearTimeout(t); resolve(fallback); } });
       });
+    }
+    var localPair = Promise.all([
+      loadJSON('data/breadth.json').catch(function () { return null; }),
+      loadJSON('data/sse.json').catch(function () { return null; })
+    ]);
+    var remotePair = Promise.all([
+      timeoutVal(remoteBreadth(), 3500, null),
+      timeoutVal(loadRemoteS(), 3500, null)
+    ]);
+    Promise.all([localPair, remotePair]).then(function (a) {
+      var lb = a[0][0], lk = a[0][1], rb = a[1][0], rk = a[1][1];
+      var b = rb && lb
+        ? (rb.dates[rb.dates.length - 1] >= lb.dates[lb.dates.length - 1] ? rb : lb)
+        : (rb || lb);
+      var k = rk || lk;
+      if (k && !sseOK(k)) k = null;
+      if (!b) throw new Error('no breadth');
+      S.B = b; S.K = k;
+      S.bIndex = new Map();
+      for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
+      buildAxis();
+      $('upd').textContent = '全A股 · ' + updText(b);
+      setRange(30);
+      updateCards(S.axis.length - 1);
+      if (isFresh(b)) $('dot').classList.remove('old'); else $('dot').classList.add('old');
+      cmp.disabled = !k;
+      cmp.title = k ? '' : '上证数据缺失或校验失败，无法对比';
+      if (!k && $('gen')) $('gen').textContent = '上证数据缺失';
+      paintLegend();
+      $('ft').textContent = footText();
+      renderAll();
+      if (k && /compare=1/.test(location.search)) setCompare(true);
+      try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
+      postStatus();
+      startRemoteRefresh(true);   /* 首轮已在上面取过，不再重复打远端 */
+    }).catch(function () {
+      $('gen').textContent = '数据加载失败';
+      $('upd').textContent = '全A股 · 数据未更新，请检查跑批';
+      $('dot').classList.add('old');
+    });
 
-    loadRemoteS()
-      .then(function (k) {
-        if (!sseOK(k)) throw new Error('sse-symbol-check');
-        S.K = k;
-        if (S.B) cmp.disabled = false;
-        cmp.title = '';
-        if (S.B) {
-          $('ft').textContent = footText();
-          if (/compare=1/.test(location.search)) setCompare(true);
-        }
-        renderAll();
-      })
-      .catch(function () {
-        return loadJSON('data/sse.json').then(function (k) {
-          if (!sseOK(k)) throw new Error('sse-symbol-check');
-          S.K = k;
-          if (S.B) cmp.disabled = false;
-          if (S.B) $('ft').textContent = footText();
-          renderAll();
-        });
-      })
-      .catch(function () {
-        cmp.disabled = true;
-        /* v278：区分「缺数据」与「数据标的校验失败」——后者是抓错标的，必须显式提示 */
-        cmp.title = '上证数据缺失或校验失败，无法对比';
-        try { if ($('gen')) $('gen').textContent = '上证数据校验失败'; } catch (e) {}
-        $('gen').textContent = '上证数据缺失';   /* v265：移动端 hover 不出 title，给可见提示 */
-      });
   }
 
   /* 浏览器里才启动；node（自测）require 时不碰 DOM */

@@ -160,8 +160,7 @@
           if (S.to < S.from) S.to = S.from;
           $('upd').textContent = '全A股 · ' + updText(d);
           $('dot').classList.remove('old');
-          $('ft').textContent = '全部A股 ' + d.meta.universe + ' 只 · 有效 ' +
-            d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · ' + updText(d);
+          $('ft').textContent = footText(d);
           if (S.cursor >= 0 && S.cursor < d.dates.length) updateCards(S.cursor);
           else updateCards(d.dates.length - 1);
           paintLegend();
@@ -182,33 +181,35 @@
   }
   function loadData() {
     return new Promise(function (resolve, reject) {
-      var srcs = dataSources(), done = false, pending = srcs.length;
-      var stale = null, staleDay = '';
-      var hard = setTimeout(function () {
-        if (done) return;
-        done = true;
-        if (stale) resolve(stale); else reject(new Error('全部数据源超时'));
-      }, 9000);
+      var srcs = dataSources(), remoteDone = 0, done = false;
+      var best = null, bestDay = '', fresh = null, freshDay = '';
+      function consider(d) {
+        if (!validData(d)) return;
+        var day = d.dates[d.dates.length - 1];
+        if (!best || day > bestDay) { best = d; bestDay = day; }
+        if (isFresh(d) && (!fresh || day > freshDay)) { fresh = d; freshDay = day; }
+      }
+      function finish() {
+        if (done) return; done = true; clearTimeout(hard); clearTimeout(grace);
+        var pick = fresh || best;
+        if (pick) resolve(pick); else reject(new Error('全部数据源失败'));
+      }
+      var hard = setTimeout(finish, 9000);
+      /* v340：三个远端全返回、或最多 2.5s 宽限期即结算；按「最后交易日最大」
+       * 选数据，本地 dist 快照延后 700ms 只作全挂兜底，杜绝旧数据先上屏再跳。 */
+      var grace = setTimeout(finish, 2500);
       srcs.forEach(function (u, i) {
         var go = function () {
-        fetch(u, { cache: 'no-store' })
-          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-          .then(function (d) {
-            if (done || !validData(d)) return;
-            var day = d.dates[d.dates.length - 1];
-            if (!isFresh(d)) {
-              if (!stale || day > staleDay) { stale = d; staleDay = day; }
-              return;
-            }
-            done = true; clearTimeout(hard); resolve(d);
-          })
-          .catch(function () { /* 单个源失败不影响其余 */ })
-          .then(function () {
-            if (--pending === 0 && !done) {
-              done = true; clearTimeout(hard);
-              if (stale) resolve(stale); else reject(new Error('全部数据源失败'));
-            }
-          });
+          fetch(u, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (d) { if (!done) consider(d); })
+            .catch(function () {})
+            .then(function () {
+              if (!done && i < srcs.length - 1) {
+                remoteDone++;
+                if (remoteDone >= srcs.length - 1) finish();
+              }
+            });
         };
         if (i === srcs.length - 1) setTimeout(go, 700); else go();
       });
@@ -227,6 +228,15 @@
     /* v288 方案1：跑批上游失败时保留上一份成功数据，明确标注停留日期，不假装今天 */
     if (m.stale) return '数据停留在 ' + day + '（跑批未更新' + (m.stale_reason ? ' · ' + m.stale_reason : '') + '）';
     return '数据 ' + day + ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '');
+  }
+
+  function footText(d) {
+    var m = d.meta || {}, g = String(m.generated || '');
+    var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
+    var day = m.trade_date || d.dates[d.dates.length - 1] || '';
+    return 'A股 ' + m.universe + '/' + m.valid + ' · ' + m.days + '日 · ' + day
+      + (short ? ' · ' + short + (m.generated_tz ? ' 北京' : '') : '')
+      + (m.stale ? ' · 未更新' : '');
   }
 
   /* 全屏：优先 Fullscreen API；WebView 会走 WebChromeClient.onShowCustomView。
