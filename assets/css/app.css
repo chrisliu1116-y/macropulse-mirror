@@ -2694,20 +2694,9 @@ body.light .set-row code{background:#eef2f9;color:#3a485e}
 .ev-card-hl b.down{color:var(--down)}
 .ev-card-hl em{font-style:normal;font-size:10px;color:var(--tx3);font-family:var(--mono)}
 .ev-card-ft{font-size:10px;color:var(--tx3);margin-top:8px}
-/* v349【卡片本身实时化】最新动态 + 心跳。
- * 只有一条 10px 的小行，不挤占 headline / 实时行情的视觉重心。
- * 有真实快讯时圆点呼吸并变蓝，无快讯时保持灰点 + 「实时追踪中」。 */
-.ev-latest{display:flex;align-items:center;gap:6px;margin-top:9px;font-size:10px;color:var(--tx3);min-width:0}
-.ev-latest .ev-pulse{width:6px;height:6px;border-radius:50%;background:var(--tx3);opacity:.45;flex:0 0 6px}
-.ev-latest.is-live .ev-pulse{background:var(--accent);opacity:1;animation:evPulse 2.4s ease-in-out infinite}
-@keyframes evPulse{0%,100%{box-shadow:0 0 0 2px rgba(79,157,255,.12)}50%{box-shadow:0 0 0 5px rgba(79,157,255,.02)}}
-.ev-latest-h{font-weight:600;letter-spacing:.2px;flex:0 0 auto}
-.ev-latest.is-live .ev-latest-h{color:var(--accent-tx)}
-.ev-latest-t{font-family:var(--mono);flex:0 0 auto;opacity:.85}
-.ev-latest p{margin:0;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx2)}
+/* v352：卡片「最新动态」行已按用户要求移除，相关样式一并删除。 */
 .ev-q-idle{font-style:normal;font-size:9.5px;color:var(--tx3);opacity:.75}
 .ev-stage-at{font-style:normal;font-size:9px;color:var(--tx3);font-weight:400;letter-spacing:0}
-body.light .ev-latest p{color:#5b6779}
 .ev-arrow{font-size:20px;color:var(--tx3);align-self:center;flex:0 0 auto}
 
 /* 事件详情 */

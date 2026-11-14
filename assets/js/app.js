@@ -7109,7 +7109,18 @@
    * 若 autoProgress 已把 headline 推进成「停火达成」这类真实进展，阶段值优先，
    * 天数退到副行，绝不覆盖真实进展。 */
   function eventAutoHeadline(ev, view) {
-    const h = ev.headline, a = h && h.auto;
+    const h = ev.headline;
+    let a = h && h.auto;
+    /* v352：用户端若缓存了旧版 events.js（headline 还没有 auto 字段），
+     * 就从 metrics 里带 auto.daysSince 的进度指标推导，避免又显示写死的「第 2 天」。
+     * 这条兜底不依赖新增配置，混合缓存下也能算对天数。 */
+    if (!a && h && h.value && /第\s*2\s*天/.test(String(h.value)) && !h.asset && !h.pred) {
+      const m = (ev.metrics || []).find(x => x.auto && x.auto.type === 'daysSince');
+      if (m) a = { type: 'daysSince', date: m.auto.date,
+                   template: '第 {n} 天 · {status}',
+                   sub: '自 ' + String(m.auto.date).slice(5) + ' 启动 · 已进行 {n} 天',
+                   terminal: ['停火达成', '首脑会晤', '谈判遇挫', '本轮会谈结束'] };
+    }
     if (!a || a.type !== 'daysSince') return view;
     const d = Date.parse(String(a.date) + 'T00:00:00+08:00');
     if (!isFinite(d)) return view;
@@ -7363,7 +7374,6 @@
     const view = eventAutoHeadline(ev, eventAutoView(ev, news));
     /* 人工核实的 seed 条目是兜底叙事，不算「实时」；只有抓到的快讯才算。 */
     const liveNews = news.filter(n => !n.seed && (n.ts || 0) > 0);
-    const latest = liveNews[0];
     const picks = (ev.assets || []).filter(k => U.get(k) && evLive(k)).slice(0, 3);
     const strip = picks.length
       ? `<div class="ev-card-q"><span class="ev-qh">实时行情<i class="ev-livetag">实时</i></span>${picks.map(k => {
@@ -7376,18 +7386,12 @@
       /* 原来无报价时整块消失，用户会以为卡片根本没接行情；改成诚实占位。 */
       : `<div class="ev-card-q is-idle"><span class="ev-qh">实时行情</span>`
         + `<i class="ev-q-idle">暂无实时报价 · 自动重试</i></div>`;
-    /* v349：卡片正面新增「最新动态」——有真实快讯就显示标题+相对时间，
-     * 没有就明确写「实时追踪中 / 暂无新的相关快讯」，绝不拿 seed 冒充更新。 */
+    /* v352【移除「最新动态」行】用户明确要求去掉：
+     * ① 点进卡片本来就能看到相关报道，重复占版面；
+     * ② 第一条相关快讯未必与事件强相关（如「英国央行…伊朗冲突」被归到美伊卡）；
+     * ③ 大字号新闻标题与卡片 UI 不融合。
+     * 相关信息保留为脚注里的「实时快讯 N 条」计数，正文仍由详情页承载。 */
     const checkTs = _evLastCheck || Date.now();
-    const latestHTML = latest
-      ? `<div class="ev-latest is-live"><i class="ev-pulse"></i>`
-        + `<span class="ev-latest-h">最新动态</span>`
-        + `<span class="ev-latest-t" data-rel-ts="${latest.ts}">${relTime(latest.ts)}</span>`
-        + `<p>${esc(plain(latest.title))}</p></div>`
-      : `<div class="ev-latest is-idle"><i class="ev-pulse"></i>`
-        + `<span class="ev-latest-h">实时追踪中</span>`
-        + `<span class="ev-latest-t" data-rel-ts="${checkTs}">${relTime(checkTs)}</span>`
-        + `<p>暂无新的相关快讯 · 监控持续运行</p></div>`;
     /* 状态是 autoProgress 按快讯推进的，标出推进时间，避免被当成写死文案 */
     const stageAt = evStageAt(ev.id);
     const stageTag = stageAt
@@ -7411,7 +7415,6 @@
         <div class="ev-card-sum">${esc(plain(ev.summary))}</div>
         ${eventHeadlineHTML(view, 'ev-card-hl')}
         ${strip}
-        ${latestHTML}
         <div class="ev-card-ft">${ft}</div>
       </div>
       <i class="ev-arrow">›</i>

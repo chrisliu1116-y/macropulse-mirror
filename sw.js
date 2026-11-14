@@ -9,7 +9,10 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v351';
+const CACHE = 'macro-pulse-v352';
+/* VER 从 CACHE 名推导，升版只改上面一行即可；
+ * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
+const VER = CACHE.replace('macro-pulse-v', '');
 const NET_TIMEOUT = 1200;
 
 const CORE = [
@@ -40,10 +43,21 @@ const CORE = [
   './assets/js/app.js'
 ];
 
+/* v352【版本指纹必须生效】页面请求是 assets/js/app.js?v=352，
+ * 而 install 预缓存的是无版本号的 ./assets/js/app.js。原来 matchCache 用
+ * ignoreSearch:true 让 ?v=349 / ?v=351 / ?v=352 命中同一个键，
+ * staleWhileRevalidate 立即回吐旧脚本，升版本号也换不掉 —— 用户实测
+ * 「版本戳是新的，卡片内容还是旧的」「字体还是旧的」。
+ * 这里把带版本号的 URL 也预缓存成**当前版本的内容**，
+ * 配合下面的精确匹配：既秒开，又保证一定是新文件。 */
+const VERSIONED = CORE.filter(p => /\.(js|css)$/.test(p)).map(p => p + '?v=' + VER);
+
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(CORE).catch(() => {}))
+      /* 逐条 add，单个失败不影响其它条目；原 addAll 是原子的，
+       * 一个 404 就整批失败并被 catch 吞掉，缓存里全是旧条目。 */
+      .then(c => Promise.all(CORE.concat(VERSIONED).map(p => c.add(p).catch(() => {}))))
       .then(() => self.skipWaiting())
   );
 });
@@ -91,7 +105,11 @@ function netFirst(req) {
 /* 资源（js/css/图标）stale-while-revalidate：有缓存立即返回（0 延迟），
  * 后台静默拉网络并更新缓存。这样整页重载不再逐个资源等网络。 */
 function staleWhileRevalidate(req) {
-  const cached = matchCache(req);
+  /* v352：带 ?v= 的静态资源**只认精确缓存键**，绝不再用 ignoreSearch
+   * 回退到别的版本。精确命中 → 立即返回并后台更新；未命中 → 走网络拿新文件。
+   * 只有网络也失败时才允许忽略版本号取预缓存，保证离线仍可秒开。 */
+  const hasVer = new URL(req.url).search.indexOf('v=') >= 0;
+  const cached = hasVer ? caches.match(req) : matchCache(req);
   const net = fetch(req).then(res => {
     if (res && res.ok && res.type === 'basic') {
       const cp = res.clone();
@@ -99,7 +117,9 @@ function staleWhileRevalidate(req) {
     }
     return res;
   }).catch(() => null);
-  return cached.then(hit => hit || net.then(res => res || new Response('', { status: 504 })));
+  return cached.then(hit => hit || net.then(res => res
+    || matchCache(req)
+    || new Response('', { status: 504 })));
 }
 
 self.addEventListener('fetch', e => {
