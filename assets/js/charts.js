@@ -440,7 +440,14 @@
        *   session 未定义的品种维持原比例判定。 */
       const _phase = (w.Session && w.Session.state) ? (w.Session.state(key) || {}).phase : null;
       const covered = total > 0 && spanMin >= total * 0.6 && (!_phase || _phase === 'closed');
-      return { want: Math.round(total / gran), n: pts.length, covered: covered };
+      /* v386【用户口径：轴恒定「开盘→收盘」，不随轮次/进度漂移】v383 后盘中走
+       * to=min(want, 2.2n)——2.2n < want 时轴右边界随时间**移动**（曲线相对轴
+       * 位置恒定 45%），换一个交易日/轮次观感又变成「跑向最右」。现在所有有
+       * 固定场次的品种（A股 09:30–15:00、美股 09:30–16:00、台 09:00–13:30、
+       * 日/韩、23h 商品）一律 fixed：轴从开盘钉到收盘，盘中线走到哪算哪、
+       * 右侧留白到收盘时刻，**不管切到哪个轮都一样**。滚动品种（24×5/7×24/VIX）
+       * 无固定场次概念，维持 rolling 逻辑。收盘后 covered → fitContent 贴边（不变）。 */
+      return { want: Math.round(total / gran), n: pts.length, covered: covered, fixed: total > 0 };
     }
 
     /* 把分时可视范围钉到「开盘 → 当前应有位置」。
