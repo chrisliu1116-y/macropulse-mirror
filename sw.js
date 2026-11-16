@@ -9,7 +9,7 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v391';
+const CACHE = 'macro-pulse-v392';
 /* VER 从 CACHE 名推导，升版只改上面一行即可；
  * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
 const VER = CACHE.replace('macro-pulse-v', '');
@@ -102,7 +102,22 @@ function netFirst(req) {
     new Promise(resolve => setTimeout(() => resolve(null), NET_TIMEOUT))
   ]).then(res => {
     if (res) return res;
-    return cached.then(hit => hit || net.catch(() => new Response('', { status: 504 })));
+    /* v392【回滚不生效的真因】超时回退缓存前，先确认缓存里的 index 是不是当前版本。
+     * 真实事故：v391 回滚到 v388 逻辑后，手机端仍显示 v390 的「多源合并 / 韩股排在
+     * 美股后」。排查：服务器三源（主站/GitHub Pages/jsDelivr）都已是 v391，app.js 也
+     * 不含 v389/v390 的新函数 —— 说明**回滚是成功的，问题在本地缓存**：
+     * 手机网络到 CF 的 TTFB 常 >4s，netFirst 超时后回退到缓存的 v390 index，
+     * 它引用 ?v=390，而旧 SW 缓存里恰好有 ?v=390 的脚本 → 整页 v390 逻辑。
+     * 现在：缓存版本戳 != 当前 VER 时**不再当兜底**，宁可等真实网络跑完（慢但正确）；
+     * 只有网络彻底失败才退回旧缓存（至少还能打开，不至于白屏）。 */
+    return cached.then(hit => {
+      if (!hit) return net.catch(() => new Response('', { status: 504 }));
+      return hit.clone().text().then(txt => {
+        const m = txt.match(/[?&]v=(\d+)/);
+        if (m && m[1] !== VER) return net.catch(() => hit);
+        return hit;
+      }).catch(() => hit);
+    });
   });
 }
 
