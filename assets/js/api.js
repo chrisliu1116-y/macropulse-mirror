@@ -4252,31 +4252,48 @@
                * 时间基准两套都是「北京墙上时间装进 UTC」，可直接按时间戳拼接。 */
               const hasReg = n.points.some(p => p.seg === 'reg');
               if (!hasReg) {
+                let regPts = null, regPre = 0;
                 try {
                   const r = await emTrend(a.secid, 1);
-                  if (r.points.length) {
-                    /* 成交量清零：美股个股的分时量本来就没有（Nasdaq chart 不给量），
-                     * 拼进来之后点数从 391 涨到 650+，histogram 的 barSpacing 掉到
-                     * 0.58px —— 柱子成了亚像素、看上去像一条贴底的空线（实测截图确认）。
-                     * 与其给个「看着像坏了」的副图，不如保持美股分时无副图的原状；
-                     * 日K 的量来自东财日线，不受影响。 */
-                    const regPts = r.points.map(p => Object.assign({}, p, { seg: 'reg', volume: 0, amount: 0 }));
-                    const prePts = n.points.filter(p => p.seg === 'pre');
-                    const postPts = n.points.filter(p => p.seg === 'post');
-                    const merged = regPts
-                      .concat(prePts.length ? prePts : n.points.filter(p => p.seg !== 'reg'))
-                      .concat(postPts);
-                    merged.sort((x, y) => x.time - y.time);
-                    return {
-                      points: merged,
-                      preClose: r.preClose || n.preClose || merged[0].close,
-                      regClose: regPts[regPts.length - 1].close || n.preClose,
-                      synthetic: false,
-                      src: 'em',
-                      ext: true
-                    };
-                  }
-                } catch (e2) { /* 东财也拿不到就退回原样（只有盘前段） */ }
+                  if (r.points.length) { regPts = r.points; regPre = r.preClose; }
+                } catch (e2) { /* 东财不通 → 走 Yahoo 兜底 */ }
+                /* v395【东财不通时用 Yahoo 补上一交易日常规段】用户实测：东财对美股
+                 * secid 在移动网络常 ERR_EMPTY_RESPONSE，于是 v215 的「东财补 reg」失效，
+                 * 常规分时拿不到 reg → 退回纯盘前线（截图：常规分时显示 18:00–20:00），
+                 * 盘前分时也没有常规段可接。Yahoo 5m/5d 经 trimToLatestSession（盘前
+                 * 自动回退上一交易日，v394）能稳定给出上一交易日常规段。 */
+                if (!regPts) {
+                  try {
+                    const ys = yahooSymbolFor(key, a);
+                    if (ys) {
+                      const yb = await yahooBars(ys, '5m', '5d', true);
+                      let yp = yahooScale(yb && yb.points, ys);
+                      if (yp && yp.length > 15) {
+                        yp = trimToLatestSession(yp, a);
+                        if (yp.length > 15) { regPts = yp; regPre = yb.preClose; }
+                      }
+                    }
+                  } catch (e3) { /* Yahoo 也失败 → 保持只有盘前段 */ }
+                }
+                if (regPts) {
+                  /* 成交量清零：美股个股分时量本来就没有（Nasdaq chart 不给量），
+                   * 拼进来会让 histogram barSpacing 掉到亚像素、看着像坏了。 */
+                  const regMapped = regPts.map(p => Object.assign({}, p, { seg: 'reg', volume: 0, amount: 0 }));
+                  const prePts = n.points.filter(p => p.seg === 'pre');
+                  const postPts = n.points.filter(p => p.seg === 'post');
+                  const merged = regMapped
+                    .concat(prePts.length ? prePts : n.points.filter(p => p.seg !== 'reg'))
+                    .concat(postPts);
+                  merged.sort((x, y) => x.time - y.time);
+                  return {
+                    points: merged,
+                    preClose: regPre || n.preClose || merged[0].close,
+                    regClose: regMapped[regMapped.length - 1].close || n.preClose,
+                    synthetic: false,
+                    src: 'nasdaq',   /* 主源仍标 Nasdaq（常规段由兜底源补，不对外标多源） */
+                    ext: true
+                  };
+                }
               }
               return {
                 points: n.points,
