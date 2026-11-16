@@ -366,6 +366,17 @@
             const full = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sr) : 1380;
             return { want: full, n: pts.length, fixed: true };
           }
+          /* v387【用户口径：外汇分时也要「最左开盘→最右收盘」固定，禁拖动，
+           * 且「固定品种而不是固定源，所有源都能适用」】。
+           * 外汇（grp:'fx'：DXY/USDCNH/USDJPY/EURUSD）是 24×5 滚动品种，
+           * 各源给的点数差异极大（实测 sinafx USDCNH 200~1197 根）：
+           *   - 不能像 cmdty 钉死 1440 格——200 根时会右侧留白 86%，不是贴边；
+           *   - 正确做法：want=实际点数 pts.length（线尾贴右）+ fixed:true
+           *     （_pinMin 据此 fitContent 禁拖动/缩放，轴从首个真实点铺到末个点）。
+           * 判定用 sr==='fx'（品种 session 属性，来自 grp:'fx'），与数据源无关：
+           * 无论东财/sina/yahoo 哪个源给数，都走同一套固定逻辑。
+           * 注：rate（美债）虽也是 24×5，用户本轮只点名外汇，暂不动。 */
+          if (sr === 'fx') return { want: Math.max(1, pts.length - 1), n: pts.length, fixed: true };
           if (!(ar && ar.minSpan)) return { want: pts.length, n: pts.length };
           /* 有 minSpan 的（VIX）：两个条件任一成立就按实际点数铺满 ——
            * ① 点数 >= 400（v360 的原有判据，完整一场）；
