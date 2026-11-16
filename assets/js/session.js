@@ -265,5 +265,24 @@
     return 0;
   }
 
-  w.Session = { state: state, judge: judge, sessionLive: sessionLive, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes };
-})(window);
+  /* v389【统一设计系统】分时图(charts.js _minBars)与缩略图(app.js sparkFullN)的
+   * 「全天时段分钟数」此前各自实现、独立演化 → 一处对一处错（用户质疑同源）。
+   * 现抽成单一公共函数：品种 minSpan(VIX780) > sess覆盖/grp默认 → fullMinutes
+   * （含 srcEnd 源缺尾调整，如韩股 Yahoo 只到15:00 KST）。两处一律调它算 total，
+   * 再各自 /gran，全天格数从此只有一个出处。24h连续(crypto)返回0=不补点走满。 */
+  function daySpanMin(key) {
+    const U = w.UNIVERSE;
+    const a = U && U.get ? U.get(key) : null;
+    if (a && a.minSpan) return a.minSpan;
+    let sk = a && a.sess;
+    if (!sk && U && U.grp) { const g = U.grp(key); sk = g && g.session; }
+    let total = fullMinutes(sk);
+    const cfg = SESSIONS[sk];
+    if (cfg && cfg.srcEnd && cfg.segs && cfg.segs.length) {
+      const sw = cfg.srcEnd - cfg.segs[0][0];
+      if (sw > 0) total = sw;
+    }
+    return total;
+  }
+
+  w.Session = { state: state, judge: judge, sessionLive: sessionLive, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes, daySpanMin: daySpanMin };})(window);

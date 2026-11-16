@@ -405,34 +405,15 @@
           if (pts.length >= 400 || atClose) return { want: pts.length, n: pts.length };
         }
       } catch (e) { /* 落回原逻辑 */ }
+      /* v389：全天分钟数统一由 Session.daySpanMin 供给（与缩略图 sparkFullN 同源），
+       * 内含 minSpan(VIX780) / sess覆盖 / fullMinutes / srcEnd(韩股源缺尾) 全部规则，
+       * 替代原先此处 minSpan+fullMinutes 与下方 srcEnd 两段独立实现。 */
       try {
-        const a = (U && U.get) ? U.get(key) : null;
-        /* VIX 的 GTH 03:15–16:15 ET 共 780 分钟，比美股常规 390 长一倍 */
-        if (a && a.minSpan) total = a.minSpan;
-        else {
-          let sk = a && a.sess;
-          if (!sk && U && U.grp) { const g = U.grp(key); sk = g && g.session; }
-          total = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sk) : 0;
-        }
+        total = (w.Session && w.Session.daySpanMin) ? w.Session.daySpanMin(key) : 0;
       } catch (e) { total = 0; }
       if (!total || !pts || pts.length < 2) return null;
-      /* v342：源末尾早于官方收盘的品种（Yahoo KOSPI 只到 15:00 KST，
-       * 官方 15:30 KST），锁轴格数按「源实际覆盖跨度」算，让曲线铺满；
-       * 角标仍按官方 segs 显示 14:30，两者互不干扰。
-       * 注：v341 曾在此处按「segs 墙上跨度」覆写 total，但它引用的是上一个
-       * try 块内声明的 const a（作用域外），异常被 catch 吞掉，从未生效；
-       * 若强行修好反而会把 N225 从 66 格拉到 78 格、制造留白，故整段移除，
-       * 这里重新取 a2，只保留 srcEnd 一条规则。 */
-      try {
-        const a2 = (U && U.get) ? U.get(key) : null;
-        let sk2 = a2 && a2.sess;
-        if (!sk2 && U && U.grp) { const g2 = U.grp(key); sk2 = g2 && g2.session; }
-        const c2 = w.Session && w.Session.SESSIONS && w.Session.SESSIONS[sk2];
-        if (c2 && c2.srcEnd && c2.segs && c2.segs.length && !(a2 && a2.minSpan)) {
-          const srcWall = c2.srcEnd - c2.segs[0][0];
-          if (srcWall > 0) total = srcWall;
-        }
-      } catch (e) { /* 保持原 total */ }
+      /* v342 的 srcEnd「源实际覆盖跨度」规则（韩股 Yahoo 只到 15:00 KST、官方 15:30）
+       * 已并入 Session.daySpanMin 统一处理，此处不再单独覆写 total。 */
       /* 粒度取「最常见的相邻间隔」：A股/港股午休那个 90 分钟大跳空会被排除 */
       const c = {};
       for (let i = 1; i < pts.length; i++) {

@@ -2775,6 +2775,21 @@
   }
   function sessRank(sk) { return sessLive(sk) ? 0 : 1; }
   function sessPri(sk) { const i = SESS_PRIORITY.indexOf(sk); return i < 0 ? 90 : i; }
+  /* v389【时段优先排序：盘前 > 盘后】用户口径「盘前肯定优于盘后——盘后代表今天
+   * 交易已结束，盘前是新一天将要开始」。原 sessRank 把「盘中/盘前/盘后」全并成
+   * rank 0、休市 rank 1，于是同在 rank 0 的韩股(盘后) 与 美股(盘前) 只能靠地区序
+   * （SESS_PRIORITY 里 kr 在 us 前）排，韩股盘后压过美股盘前（用户截图 18:04）。
+   * 现在细分四级：盘中(含24h连续)=0 > 盘前=1 > 盘后=2 > 休市=3。同级再按地区序。 */
+  function sessPhaseRank(sk) {
+    try {
+      const j = w.Session.judge(sk, new Date());
+      if (!j) return 3;
+      if (j.phase === 'pre') return 1;
+      if (j.phase === 'post') return 2;
+      if (j.open || j.phase === 'regular') return 0;
+      return 3;
+    } catch (e) { return 3; }
+  }
 
   // 时段区块的出场顺序：正在交易的顶前、休市的沉底（同层按地区优先序）
   function sessionOrder() {
@@ -2788,7 +2803,7 @@
     const all = Object.keys(sessOrder).sort((a, b) => sessOrder[a] - sessOrder[b]);
     if (!S.sessFirst) return all;
     return all.slice().sort((a, b) => {
-      const ra = sessRank(a), rb = sessRank(b);
+      const ra = sessPhaseRank(a), rb = sessPhaseRank(b);
       if (ra !== rb) return ra - rb;
       const pa = sessPri(a), pb = sessPri(b);
       if (pa !== pb) return pa - pb;
@@ -2806,7 +2821,7 @@
     const gs = g => (U.GROUPS[g] && U.GROUPS[g].session) || '';
     return all.slice().sort((a, b) => {
       const sa = gs(a), sb = gs(b);
-      const ra = sa ? sessRank(sa) : 1, rb = sb ? sessRank(sb) : 1;
+      const ra = sa ? sessPhaseRank(sa) : 3, rb = sb ? sessPhaseRank(sb) : 3;
       if (ra !== rb) return ra - rb;
       const pa = sa ? sessPri(sa) : 90, pb = sb ? sessPri(sb) : 90;
       if (pa !== pb) return pa - pb;
@@ -3050,19 +3065,10 @@
   function sparkFullN(k, pts) {
     const n = pts.length;
     try {
-      const a = w.UNIVERSE && w.UNIVERSE.get ? w.UNIVERSE.get(k) : null;
-      /* minSpan：品种自带的一天分钟数（VIX 的 GTH 时段 780 分钟，不是美股的 390） */
-      let total;
-      if (a && a.minSpan) {
-        total = a.minSpan;
-      } else {
-        let sk = a && a.sess;
-        if (!sk && w.UNIVERSE && w.UNIVERSE.grp) {
-          const g = w.UNIVERSE.grp(k);
-          sk = g && g.session;
-        }
-        total = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sk) : 0;
-      }
+      /* v389：全天分钟数改由 Session.daySpanMin 统一供给（与详情页 _minBars 同源），
+       * 内含 minSpan(VIX) / sess覆盖 / fullMinutes / srcEnd(韩股源缺尾) 全部规则，
+       * 不再在这里各自实现一遍。 */
+      const total = (w.Session && w.Session.daySpanMin) ? w.Session.daySpanMin(k) : 0;
       if (!total || n < 2) return n;
       const c = {};
       for (let i = 1; i < n; i++) {
