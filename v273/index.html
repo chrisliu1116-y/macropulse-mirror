@@ -2,6 +2,38 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<script>
+/* 对照版存储隔离（v385 会话加）：/v273/ 与主应用同 origin，localStorage 共享
+ * 会互相污染（VolBank/异动账本 key 相同）。这里把 localStorage 换成内存 shim
+ * —— 273 页面读写全部进内存：不读主应用账本（演示/历史条目不再混入），
+ * 也不会写坏主应用数据。刷新即清，对照实验干净。 */
+(function () {
+  try {
+    const mem = Object.create(null);
+    const shim = {
+      getItem: (k) => (k in mem ? mem[k] : null),
+      setItem: (k, v) => { mem[k] = String(v); },
+      removeItem: (k) => { delete mem[k]; },
+      clear: () => { for (const k of Object.keys(mem)) delete mem[k]; },
+      key: (i) => Object.keys(mem)[i] || null,
+      get length() { return Object.keys(mem).length; }
+    };
+    Object.defineProperty(window, 'localStorage', { value: shim, configurable: false });
+    /* v385b：sessionStorage 同样隔离（mm_last_tab/滚动位置与主应用同 key） */
+    const smem = Object.create(null);
+    const sshim = {
+      getItem: (k) => (k in smem ? smem[k] : null),
+      setItem: (k, v) => { smem[k] = String(v); },
+      removeItem: (k) => { delete smem[k]; },
+      clear: () => { for (const k of Object.keys(smem)) delete smem[k]; },
+      key: (i) => Object.keys(smem)[i] || null,
+      get length() { return Object.keys(smem).length; }
+    };
+    try { Object.defineProperty(window, 'sessionStorage', { value: sshim, configurable: false }); } catch (e) {}
+  } catch (e) { /* 覆盖失败则维持原样（只读场景影响有限） */ }
+})();
+</script>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
 <meta name="theme-color" content="#070a0f">
 <meta name="apple-mobile-web-app-capable" content="yes">
