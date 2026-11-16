@@ -444,7 +444,12 @@
        *   的场景在收盘后 judge='closed'，仍 covered ✓（v375 目的保留）；
        *   session 未定义的品种维持原比例判定。 */
       const _phase = (w.Session && w.Session.state) ? (w.Session.state(key) || {}).phase : null;
-      const covered = total > 0 && spanMin >= total * 0.6 && (!_phase || _phase === 'closed');
+      /* v390：covered 追加 post —— 用户口径「已经收盘分时图没有跑满」。盘后阶段
+       * 常规段早已收盘（韩股 15:30 KST / 美股 16:00 ET），此时若还在看「常规分时」，
+       * 一场已走完就该 fitContent 铺满，而不是按盘中进度留白到盘后结束。
+       * 仍在盘中(regular)时不 covered，保留进度留白（v383 口径不变）。 */
+      const covered = total > 0 && spanMin >= total * 0.6 &&
+        (!_phase || _phase === 'closed' || _phase === 'post');
       /* v386【用户口径：轴恒定「开盘→收盘」，不随轮次/进度漂移】v383 后盘中走
        * to=min(want, 2.2n)——2.2n < want 时轴右边界随时间**移动**（曲线相对轴
        * 位置恒定 45%），换一个交易日/轮次观感又变成「跑向最右」。现在所有有

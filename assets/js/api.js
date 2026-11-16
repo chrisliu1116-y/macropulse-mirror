@@ -4158,7 +4158,10 @@
                 const nx = await krNaverMinutes(key);
                 const post = nx && nx.points ? nx.points.filter(p => p.seg === 'post') : [];
                 if (post.length > 5) {
-                  return { points: pts.concat(post), preClose: preC, synthetic: false, src: 'mixed', ext: true };
+                  /* v390：源标注沿用本分支主源 yahoo（用户口径「不要显示多源合并，
+                   * 这样我就不知道是哪个源了，恢复之前的」）。盘后段来自 Naver 属实现
+                   * 细节，不再对外暴露 'mixed'。 */
+                  return { points: pts.concat(post), preClose: preC, synthetic: false, src: 'yahoo', ext: true };
                 }
               } catch (eNx) { /* 拿不到就保持常规分时 */ }
             }
@@ -4343,7 +4346,8 @@
               const post = nx.points.filter(p => p.seg === 'post');
               if (post.length > 5) {
                 const merged = pts.concat(post);
-                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'mixed', ext: true };
+                /* v390：源标注沿用东财（本分支主源），不再对外显示 'mixed'（多源合并）。 */
+                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'em', ext: true };
               }
             }
           } catch (e) { /* 拿不到就保持常规分时 */ }
