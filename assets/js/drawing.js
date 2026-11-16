@@ -79,6 +79,7 @@
     this._press = false;
     this._hoverXY = null;
     this._loupeRect = null;
+    this._loupeLayers = null;  /* v400：放大镜图层几何快照（按下冻结、松手清空） */
     /* v192：正在拖动的锚点（端点），供放大镜取价格；整条平移时为 null */
     this._dragPt = null;
     this.hover = null;
@@ -165,6 +166,7 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
+      this._loupeLayers = null;
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (!sameCtx) {
         this.pending = [];
@@ -238,6 +240,7 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
+      this._loupeLayers = null;
       this.drag = null;
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; }
@@ -576,6 +579,8 @@
       /* v190：按住期间显示取点放大镜 */
       this._press = true;
       this._hoverXY = xy;
+      /* v400：按下这一刻冻结放大镜图层几何，后续 pointermove 全程复用 */
+      this._loupeLayers = null;
 
       /* ① 已经在画（落了点、还没收尾）：这一下**永远是下一个点**。
        * 【v180 关键修复】原来这一支排在命中检测后面：用户点 C 时手指只要压到
@@ -792,6 +797,7 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
+      this._loupeLayers = null;   /* v400：释放放大镜几何快照 */
       /* v187：短按（长按计时未到就抬手）→ 只保留选中，不拖线也不落点 */
       if (this._hold) {
         clearTimeout(this._hold.timer);
@@ -841,6 +847,7 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
+      this._loupeLayers = null;   /* v400：释放放大镜几何快照 */
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; this.pending = []; this.hover = null; }
       if (this.drag) { this.save(this.drag.arr || this.list()); this.drag = null; this.redraw(); }
@@ -1102,6 +1109,29 @@
      * 位置规则（用户口径）：取点在右半屏 → 窗口在左；取点在左半屏 → 窗口在右；
      * 上下同样取对侧（对角），保证手指/手背都盖不到放大窗。
      * 窗口不越出绘图区右边界（plotR），不会盖住价格轴。 */
+    /* v400：放大镜图层几何快照。按下时取一次，整个过程复用，松手清空。
+     * 避免每帧 querySelectorAll + N 次 getBoundingClientRect（强制同步布局→拖动卡顿）。 */
+    _freezeLoupe: function () {
+      var out = [];
+      var host = this._host;
+      if (!host) { this._loupeLayers = out; return out; }
+      var hr = null;
+      try { hr = host.getBoundingClientRect(); } catch (e) {}
+      var cvs = host.querySelectorAll('canvas');
+      for (var c = 0; c < cvs.length; c++) {
+        var sc = cvs[c];
+        if (!sc.width || !sc.getBoundingClientRect) continue;
+        var rr;
+        try { rr = sc.getBoundingClientRect(); } catch (e) { continue; }
+        if (!rr.width) continue;
+        if (hr && (Math.abs(rr.left - hr.left) > 2 || Math.abs(rr.top - hr.top) > 2)) continue;
+        if (rr.width < this._w * 0.6) continue;
+        out.push({ cv: sc, k: sc.width / rr.width });
+      }
+      this._loupeLayers = out;
+      return out;
+    },
+
     _loupe: function (ctx, pt, xy, plotR) {
       if (!pt || !xy) return;
       var avail = Math.max(80, (plotR || this._w) - 4);
@@ -1144,17 +1174,14 @@
        *    按 host 宽去匹配会把 K 线层全部漏掉，放大镜里就只剩十字线。 */
       var sx = xy.x - W / (2 * Z), sy = xy.y - H / (2 * Z);
       var sw = W / Z, sh = H / Z;
-      var hr = this._host ? this._host.getBoundingClientRect() : null;
-      var cvs = this._host ? this._host.querySelectorAll('canvas') : [];
-      for (var c = 0; c < cvs.length; c++) {
-        var sc = cvs[c];
-        if (!sc.width || !sc.getBoundingClientRect) continue;
-        var rr = sc.getBoundingClientRect();
-        if (!rr.width) continue;
-        if (hr && (Math.abs(rr.left - hr.left) > 2 || Math.abs(rr.top - hr.top) > 2)) continue;
-        if (rr.width < this._w * 0.6) continue;
-        var k = sc.width / rr.width;
-        try { ctx.drawImage(sc, sx * k, sy * k, sw * k, sh * k, lx, ly, W, H); } catch (e) {}
+      /* v400【放大镜拖动卡顿】v190/v192 的放大镜在这里每帧做 querySelectorAll
+       * + host 一次 + 每个 canvas 一次 getBoundingClientRect —— 正是 v225 修掉过的
+       * 「高频 pointermove 里读布局→强制 reflow」又回来了。按下时冻结一次图层几何，
+       * 松手/取消清空；drawImage 仍每帧读实时像素（放大镜要看到正在画的线），只缓存几何。 */
+      var layers = this._loupeLayers || this._freezeLoupe();
+      for (var c = 0; c < layers.length; c++) {
+        var L = layers[c];
+        try { ctx.drawImage(L.cv, sx * L.k, sy * L.k, sw * L.k, sh * L.k, lx, ly, W, H); } catch (e) {}
       }
 
       /* ② 十字准线 + 落点红点（窗口中心就是当前取点） */
