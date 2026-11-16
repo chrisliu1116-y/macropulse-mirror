@@ -4255,7 +4255,7 @@
                       preClose: r.preClose || n.preClose || merged[0].close,
                       regClose: regPts[regPts.length - 1].close || n.preClose,
                       synthetic: false,
-                      src: 'mixed',
+                      src: 'em',
                       ext: true
                     };
                   }
@@ -4329,7 +4329,9 @@
               const post = nx.points.filter(p => p.seg === 'post');
               if (post.length > 5) {
                 const merged = pts.concat(post);
-                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'mixed', ext: true };
+                /* v393【不再显示「多源合并」】用户口径：这样不知道是哪个源，要恢复之前的。
+                 * 这里常规段来自东财、盘后段来自 Naver（v65 起），主源记 em。 */
+                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'em', ext: true };
               }
             }
           } catch (e) { /* 拿不到就保持常规分时 */ }
