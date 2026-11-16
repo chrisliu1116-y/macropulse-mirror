@@ -80,6 +80,7 @@
     this._hoverXY = null;
     this._loupeRect = null;
     this._loupeLayers = null;  /* v400：放大镜图层几何快照（按下冻结、松手清空） */
+    this._loupeBg = null;      /* v401：按下时预合成的背景离屏 canvas（避免每帧 GPU 回读） */
     /* v192：正在拖动的锚点（端点），供放大镜取价格；整条平移时为 null */
     this._dragPt = null;
     this.hover = null;
@@ -98,6 +99,12 @@
     var cv = document.createElement('canvas');
     cv.className = 'draw-layer';
     this.cv = cv;
+    /* v401【拖动卡顿第二根因】放大镜每帧要 drawImage 读取本层像素。若 canvas 由
+     * GPU 合成，每次读取都会触发 GPU→CPU 回读（真机几十毫秒/次），拖动就一卡一卡。
+     * willReadFrequently 让浏览器把本层放在 CPU 内存（软件渲染）：本层只画几条线，
+     * 绘制开销可忽略，但读取变成内存拷贝 —— 配合背景预合成，放大镜全程零 GPU 回读。
+     * 【必须在第一次 getContext 时声明】之后再传参无效，所以这里预取 context。 */
+    try { this._ctx = cv.getContext('2d', { willReadFrequently: true }); } catch (e) { this._ctx = null; }
     host.appendChild(cv);
 
     /* 【为什么挂在 host 的捕获阶段，而不是 canvas 自己】
@@ -167,6 +174,7 @@
       this._hoverXY = null;
       this._dragPt = null;
       this._loupeLayers = null;
+      this._loupeBg = null;
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (!sameCtx) {
         this.pending = [];
@@ -241,6 +249,7 @@
       this._hoverXY = null;
       this._dragPt = null;
       this._loupeLayers = null;
+      this._loupeBg = null;
       this.drag = null;
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; }
@@ -579,8 +588,11 @@
       /* v190：按住期间显示取点放大镜 */
       this._press = true;
       this._hoverXY = xy;
-      /* v400：按下这一刻冻结放大镜图层几何，后续 pointermove 全程复用 */
+      /* v400/v401：按下这一刻就冻结图层几何 + 预合成背景（一次性开销放在按下时，
+       * 拖动过程中不再有任何布局读取和 GPU 回读）。 */
       this._loupeLayers = null;
+      this._loupeBg = null;
+      try { this._freezeLoupe(); } catch (e) {}
 
       /* ① 已经在画（落了点、还没收尾）：这一下**永远是下一个点**。
        * 【v180 关键修复】原来这一支排在命中检测后面：用户点 C 时手指只要压到
@@ -797,7 +809,8 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
-      this._loupeLayers = null;   /* v400：释放放大镜几何快照 */
+      this._loupeLayers = null;
+      this._loupeBg = null;   /* v401：释放背景快照 */
       /* v187：短按（长按计时未到就抬手）→ 只保留选中，不拖线也不落点 */
       if (this._hold) {
         clearTimeout(this._hold.timer);
@@ -847,7 +860,8 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
-      this._loupeLayers = null;   /* v400：释放放大镜几何快照 */
+      this._loupeLayers = null;
+      this._loupeBg = null;   /* v401：释放背景快照 */
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; this.pending = []; this.hover = null; }
       if (this.drag) { this.save(this.drag.arr || this.list()); this.drag = null; this.redraw(); }
@@ -870,7 +884,8 @@
     _draw: function () {
       var cv = this.cv;
       if (!cv || !this.chart || !this.series) return;
-      var ctx = cv.getContext('2d');
+      /* v401：复用构造时用 willReadFrequently 预取的 context（换参数重新 getContext 无效） */
+      var ctx = this._ctx || cv.getContext('2d');
       if (!ctx) return;
       ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
       ctx.clearRect(0, 0, this._w, this._h);
@@ -924,11 +939,17 @@
         try { this._loupe(ctx, loupePt, this._hoverXY, plotR); } catch (e) {}
       }
 
-      /* 记下本次绘制时的价格轴基准，供看门狗判断“轴有没有变” */
-      try {
-        var dd = this.series && this.series.data ? this.series.data() : null;
-        if (dd && dd.length) this._probeY = this._yOf(dd[dd.length - 1].close);
-      } catch (e) {}
+      /* 记下本次绘制时的价格轴基准，供看门狗判断“轴有没有变”。
+       * v401：`series.data()` 返回整个数据集（日K 上千根），拖动时每帧调用会
+       * 反复分配大数组 → 移动端掉帧。看门狗只需要「轴有没有变」，400ms 采一次足够。 */
+      var nowTs = Date.now();
+      if (!this._probeAt || nowTs - this._probeAt > 400) {
+        this._probeAt = nowTs;
+        try {
+          var dd = this.series && this.series.data ? this.series.data() : null;
+          if (dd && dd.length) this._probeY = this._yOf(dd[dd.length - 1].close);
+        } catch (e) {}
+      }
     },
 
     _fmt: function (p) {
@@ -1110,25 +1131,62 @@
      * 上下同样取对侧（对角），保证手指/手背都盖不到放大窗。
      * 窗口不越出绘图区右边界（plotR），不会盖住价格轴。 */
     /* v400：放大镜图层几何快照。按下时取一次，整个过程复用，松手清空。
-     * 避免每帧 querySelectorAll + N 次 getBoundingClientRect（强制同步布局→拖动卡顿）。 */
+     * 避免每帧 querySelectorAll + N 次 getBoundingClientRect（强制同步布局→拖动卡顿）。
+     * v401【放大镜没有 K 线】根因：`.pane-main` 用 `left:calc(-1*var(--paneL))` 向左外扩
+     * 一个价格轴宽（实测 -56px），原来用「canvas.left 必须等于 host.left（±2px）」筛选，
+     * 正好把主图 K 线层全部滤掉，只剩 drawing 自己的层 → 放大镜里只有线。
+     * 现在改成：按「尺寸/所属面板」筛选（排除副图、价格轴窄条、时间轴矮条），
+     * 并记录每层相对 host 的物理像素偏移 (ox,oy)，源区域按偏移修正，内容不再错位。
+     * v401【拖动一卡一卡】根因：真机上 LWC 的 canvas 由 GPU 合成，每帧 drawImage 抓像素
+     * 会触发 GPU→CPU 回读（几十毫秒/层）；桌面 headless 的 canvas 在 CPU 内存里，
+     * 所以本地测只有 0.02ms、真机却卡死。这里在**按下时一次性**把背景层合成到
+     * 离屏普通 canvas，之后每帧只读这张（CPU），回读次数从 N 降到 0。 */
     _freezeLoupe: function () {
       var out = [];
       var host = this._host;
+      this._loupeBg = null;
       if (!host) { this._loupeLayers = out; return out; }
       var hr = null;
       try { hr = host.getBoundingClientRect(); } catch (e) {}
       var cvs = host.querySelectorAll('canvas');
       for (var c = 0; c < cvs.length; c++) {
         var sc = cvs[c];
-        if (!sc.width || !sc.getBoundingClientRect) continue;
+        if (!sc.width || !sc.height || !sc.getBoundingClientRect) continue;
+        /* 自己（画线层）不参与预合成 —— 每帧单独叠一次，保证「正在画的线」实时 */
+        if (sc === this.cv) continue;
+        /* 副图（成交量/成交额）不放大：放大镜只看主图 */
+        if (sc.closest && sc.closest('.pane-vol')) continue;
         var rr;
         try { rr = sc.getBoundingClientRect(); } catch (e) { continue; }
-        if (!rr.width) continue;
-        if (hr && (Math.abs(rr.left - hr.left) > 2 || Math.abs(rr.top - hr.top) > 2)) continue;
-        if (rr.width < this._w * 0.6) continue;
-        out.push({ cv: sc, k: sc.width / rr.width });
+        if (!rr.width || !rr.height) continue;
+        /* 价格轴（窄条 ~58px）与时间轴（矮条 ~28px）排除，避免把刻度数字放大进去 */
+        if (rr.width < this._w * 0.5) continue;
+        if (rr.height < this._h * 0.5) continue;
+        var k = sc.width / rr.width;
+        out.push({
+          cv: sc, k: k,
+          ox: hr ? (hr.left - rr.left) * k : 0,
+          oy: hr ? (hr.top - rr.top) * k : 0
+        });
       }
       this._loupeLayers = out;
+      /* 背景预合成：把主图各层按偏移对齐画进一张 host 尺寸的离屏 canvas。
+       * 一次性开销（按下时），换来拖动全程零 GPU 回读。 */
+      try {
+        if (out.length && this._w > 0 && this._h > 0) {
+          var dpr = this._dpr || 1;
+          var bg = document.createElement('canvas');
+          bg.width = Math.round(this._w * dpr);
+          bg.height = Math.round(this._h * dpr);
+          var bctx = bg.getContext('2d');
+          if (bctx) {
+            for (var b = 0; b < out.length; b++) {
+              try { bctx.drawImage(out[b].cv, -out[b].ox, -out[b].oy); } catch (e) {}
+            }
+            this._loupeBg = bg;
+          }
+        }
+      } catch (e) { this._loupeBg = null; }
       return out;
     },
 
@@ -1179,9 +1237,28 @@
        * 「高频 pointermove 里读布局→强制 reflow」又回来了。按下时冻结一次图层几何，
        * 松手/取消清空；drawImage 仍每帧读实时像素（放大镜要看到正在画的线），只缓存几何。 */
       var layers = this._loupeLayers || this._freezeLoupe();
-      for (var c = 0; c < layers.length; c++) {
-        var L = layers[c];
-        try { ctx.drawImage(L.cv, sx * L.k, sy * L.k, sw * L.k, sh * L.k, lx, ly, W, H); } catch (e) {}
+      var dpr = this._dpr || 1;
+      /* ① 背景（K 线/网格/已有画线）：优先用按下时预合成的离屏快照。
+       *    源是普通 canvas（CPU 内存），每帧 drawImage 不再触发 GPU 回读。 */
+      if (this._loupeBg) {
+        try {
+          ctx.drawImage(this._loupeBg, sx * dpr, sy * dpr, sw * dpr, sh * dpr, lx, ly, W, H);
+        } catch (e) {}
+      } else {
+        /* 兜底（预合成失败）：逐层直抓，源区域按各层偏移修正 */
+        for (var c = 0; c < layers.length; c++) {
+          var L = layers[c];
+          try {
+            ctx.drawImage(L.cv, sx * L.k + L.ox, sy * L.k + L.oy, sw * L.k, sh * L.k, lx, ly, W, H);
+          } catch (e) {}
+        }
+      }
+      /* ② 画线层（自己的 canvas）：单独实时叠一层，保证放大镜里「正在画的线」跟手。
+       *    这 1 次回读无法省（内容每帧都变），但已从 N 次降到 1 次。 */
+      if (this.cv) {
+        try {
+          ctx.drawImage(this.cv, sx * dpr, sy * dpr, sw * dpr, sh * dpr, lx, ly, W, H);
+        } catch (e) {}
       }
 
       /* ② 十字准线 + 落点红点（窗口中心就是当前取点） */
