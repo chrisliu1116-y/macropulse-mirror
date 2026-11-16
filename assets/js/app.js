@@ -2775,25 +2775,6 @@
   }
   function sessRank(sk) { return sessLive(sk) ? 0 : 1; }
   function sessPri(sk) { const i = SESS_PRIORITY.indexOf(sk); return i < 0 ? 90 : i; }
-  /* v390【回到上一版排序，只加「盘前 > 盘后」】用户口径：「直接按上一版的排序加上
-   * 盘前大于盘后就行」。v389 的四级(盘中0/盘前1/盘后2/休市3) 把 24h 品种
-   * (fx/rate/cmdty/crypto，phase=regular) 顶到了股票市场(pre/post) 前面 → 分组顺序全乱。
-   * 现在：第一层恢复 v388 的「交易中 0 / 休市 1」+ 地区序 sessPri（保持上一版观感：
-   * A股›港股›韩股›日股›台股›美股…）；仅在同一层内，若一个盘前、一个盘后，盘前优先
-   * （美股盘前 > 韩股盘后）。其余一律按上一版的 sessPri 排，不再插队。 */
-  function sessPhase(sk) {
-    try { return (w.Session.judge(sk, new Date()) || {}).phase || ''; } catch (e) { return ''; }
-  }
-  function sessCmp(a, b, ordA, ordB) {
-    const ra = sessLive(a) ? 0 : 1, rb = sessLive(b) ? 0 : 1;
-    if (ra !== rb) return ra - rb;
-    const pa = sessPhase(a), pb = sessPhase(b);
-    if (pa === 'pre' && pb === 'post') return -1;
-    if (pa === 'post' && pb === 'pre') return 1;
-    const sa = sessPri(a), sb = sessPri(b);
-    if (sa !== sb) return sa - sb;
-    return (ordA || 0) - (ordB || 0);
-  }
 
   // 时段区块的出场顺序：正在交易的顶前、休市的沉底（同层按地区优先序）
   function sessionOrder() {
@@ -2806,7 +2787,13 @@
     }
     const all = Object.keys(sessOrder).sort((a, b) => sessOrder[a] - sessOrder[b]);
     if (!S.sessFirst) return all;
-    return all.slice().sort((a, b) => sessCmp(a, b, sessOrder[a], sessOrder[b]));
+    return all.slice().sort((a, b) => {
+      const ra = sessRank(a), rb = sessRank(b);
+      if (ra !== rb) return ra - rb;
+      const pa = sessPri(a), pb = sessPri(b);
+      if (pa !== pb) return pa - pb;
+      return sessOrder[a] - sessOrder[b];
+    });
   }
 
   /* v209：添加品种弹窗的分组顺序也走同一套「实时交易时段」判定，
@@ -2817,8 +2804,14 @@
       (U.GROUPS[a] ? U.GROUPS[a].order : 99) - (U.GROUPS[b] ? U.GROUPS[b].order : 99));
     if (!S.sessFirst) return all;
     const gs = g => (U.GROUPS[g] && U.GROUPS[g].session) || '';
-    const go = g => (U.GROUPS[g] ? U.GROUPS[g].order : 99);
-    return all.slice().sort((a, b) => sessCmp(gs(a), gs(b), go(a), go(b)));
+    return all.slice().sort((a, b) => {
+      const sa = gs(a), sb = gs(b);
+      const ra = sa ? sessRank(sa) : 1, rb = sb ? sessRank(sb) : 1;
+      if (ra !== rb) return ra - rb;
+      const pa = sa ? sessPri(sa) : 90, pb = sb ? sessPri(sb) : 90;
+      if (pa !== pb) return pa - pb;
+      return (U.GROUPS[a] ? U.GROUPS[a].order : 99) - (U.GROUPS[b] ? U.GROUPS[b].order : 99);
+    });
   }
 
   // 当前排序依据的一句话说明（行情页顶部提示）
@@ -2881,13 +2874,8 @@
        * v255：VIX（CBOE 恐慌指数）例外 —— CBOE GTH 延展时段 03:15–16:15 ET 有真实
        * 连续成交，CNBC `.VIX` 给得出真实盘前价（inExt），此时必须显示「盘前」，
        * 不能把正在交易 VIX 标成「已收盘」（用户实测纠错）。 */
-      /* v390【所有指数都不该挂「盘前/盘后」标】v215 只对美股指数降级成「已收盘」，
-       * 韩国 KOSPI（grp:apac、sess:kr）在韩股盘后时段仍显示「盘后」——但指数没有
-       * 盘后交易（用户图1 明确指出）。现在扩展到**所有 kind:'index'**。
-       * VIX 例外逻辑保留：它 inExt=true（CBOE GTH 真有盘前连续成交），!inExt 不成立
-       * → 不降级，仍显示真实时段。 */
-      const isIdx = a.kind === 'index';
-      const idxExt = isIdx && (sess.phase === 'pre' || sess.phase === 'post') && !inExt;
+      const isUsIdx = (a.grp === 'us' || a.grp === 'usstock') && a.kind === 'index';
+      const idxExt = isUsIdx && (sess.phase === 'pre' || sess.phase === 'post') && !inExt;
       const sessLbl = idxExt ? '已收盘' : sess.label;
       const sessCls = idxExt ? 'closed' : (sess.open ? 'open' : sess.phase);
       return `<div class="mk-row qrow" data-k="${esc(k)}">
@@ -3062,10 +3050,19 @@
   function sparkFullN(k, pts) {
     const n = pts.length;
     try {
-      /* v389：全天分钟数改由 Session.daySpanMin 统一供给（与详情页 _minBars 同源），
-       * 内含 minSpan(VIX) / sess覆盖 / fullMinutes / srcEnd(韩股源缺尾) 全部规则，
-       * 不再在这里各自实现一遍。 */
-      const total = (w.Session && w.Session.daySpanMin) ? w.Session.daySpanMin(k) : 0;
+      const a = w.UNIVERSE && w.UNIVERSE.get ? w.UNIVERSE.get(k) : null;
+      /* minSpan：品种自带的一天分钟数（VIX 的 GTH 时段 780 分钟，不是美股的 390） */
+      let total;
+      if (a && a.minSpan) {
+        total = a.minSpan;
+      } else {
+        let sk = a && a.sess;
+        if (!sk && w.UNIVERSE && w.UNIVERSE.grp) {
+          const g = w.UNIVERSE.grp(k);
+          sk = g && g.session;
+        }
+        total = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sk) : 0;
+      }
       if (!total || n < 2) return n;
       const c = {};
       for (let i = 1; i < n; i++) {

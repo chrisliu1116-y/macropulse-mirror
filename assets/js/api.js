@@ -4147,25 +4147,8 @@
              * （11-13 盘中给 7376.86，而 11-12 收盘是 7592.40），
              * 拿它当分母会算出「全天 +2.15%」和头部 -0.79% 打架。 */
             const q0 = cachedQuote(key) || {};
-            const preC = (q0.prev > 0 ? q0.prev : (yb.prevClose || pts[0].close));
-            /* v389【韩股盘后分时·Yahoo 兜底也补】主源(东财)失败落 Yahoo 时，原先只有
-             * 东财成功分支才调 krNaverMinutes 拼 Nextrade 盘后段，导致「盘后数字有、
-             * 分时没有」（用户截图：海力士盘后 1,124,000 +0.36% 但分时无盘后段）。
-             * 无头浏览器实测 krNaverMinutes 在页面里能拿到 214 个盘后点（Naver 代理通），
-             * 只是 Yahoo 这条分支没调它。这里对 Yahoo 兜底同样补上，与东财分支一致。 */
-            if (a.grp === 'krstock') {
-              try {
-                const nx = await krNaverMinutes(key);
-                const post = nx && nx.points ? nx.points.filter(p => p.seg === 'post') : [];
-                if (post.length > 5) {
-                  /* v390：源标注沿用本分支主源 yahoo（用户口径「不要显示多源合并，
-                   * 这样我就不知道是哪个源了，恢复之前的」）。盘后段来自 Naver 属实现
-                   * 细节，不再对外暴露 'mixed'。 */
-                  return { points: pts.concat(post), preClose: preC, synthetic: false, src: 'yahoo', ext: true };
-                }
-              } catch (eNx) { /* 拿不到就保持常规分时 */ }
-            }
-            return { points: pts, preClose: preC, synthetic: false, src: 'yahoo' };
+            return { points: pts, preClose: (q0.prev > 0 ? q0.prev : (yb.prevClose || pts[0].close)),
+              synthetic: false, src: 'yahoo' };
           }
         }
       }
@@ -4346,8 +4329,7 @@
               const post = nx.points.filter(p => p.seg === 'post');
               if (post.length > 5) {
                 const merged = pts.concat(post);
-                /* v390：源标注沿用东财（本分支主源），不再对外显示 'mixed'（多源合并）。 */
-                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'em', ext: true };
+                return { points: merged, preClose: r.preClose, regClose: base, synthetic: false, src: 'mixed', ext: true };
               }
             }
           } catch (e) { /* 拿不到就保持常规分时 */ }
