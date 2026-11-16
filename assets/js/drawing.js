@@ -81,6 +81,9 @@
     this._loupeRect = null;
     this._loupeLayers = null;  /* v400：放大镜图层几何快照（按下冻结、松手清空） */
     this._loupeBg = null;      /* v401：按下时预合成的背景离屏 canvas（避免每帧 GPU 回读） */
+    this._loupeBgAt = 0;       /* v402：快照生成时刻（3 秒内复用，避免每次按下重做回读） */
+    this._loupeKRange = null;  /* v402：可视 K 线的价格区间(映射成 y)，用于夹住放大镜源区域 */
+    this._loupeData = null;    /* v402b：按下时缓存的 K 线数据（供按触点x取局部价格区间） */
     /* v192：正在拖动的锚点（端点），供放大镜取价格；整条平移时为 null */
     this._dragPt = null;
     this.hover = null;
@@ -175,6 +178,8 @@
       this._dragPt = null;
       this._loupeLayers = null;
       this._loupeBg = null;
+      this._loupeBgAt = 0;      /* v402：换品种/周期 → 快照必然过期，强制重建 */
+      this._loupeData = null;
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (!sameCtx) {
         this.pending = [];
@@ -250,6 +255,8 @@
       this._dragPt = null;
       this._loupeLayers = null;
       this._loupeBg = null;
+      this._loupeBgAt = 0;
+      this._loupeData = null;
       this.drag = null;
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; }
@@ -264,6 +271,16 @@
       }
       if (this.onTool) this.onTool(this.tool);
       this.redraw();
+      /* v402【刚进工具画第一根线特别卡】首次执行 _freezeLoupe（querySelectorAll +
+       * 多次 getBoundingClientRect + 两次 GPU 回读预合成）是冷路径：V8 解释执行、
+       * GPU canvas 首次回读，用户体感就是"一卡一卡，过一会儿才好"。
+       * 进入画图工具时先异步预热一次，把冷路径提前跑掉；按下时直接命中 3 秒缓存。 */
+      if (this.tool) {
+        var selfWarm = this;
+        setTimeout(function () {
+          try { if (!selfWarm._press) selfWarm._freezeLoupe(true); } catch (e) {}
+        }, 80);
+      }
     },
     setVisible: function (v) { this.visible = !!v; this.redraw(); },
     setEditOnly: function (v) { this.editOnly = !!v; this.redraw(); },
@@ -383,6 +400,9 @@
       cv.style.width = wpx + 'px';
       cv.style.height = hpx + 'px';
       this._w = wpx; this._h = hpx; this._dpr = dpr;
+      /* v402：尺寸变了，快照与图层几何全部失效（漏清 _loupeLayers 会引用旧尺寸 canvas） */
+      this._loupeBg = null; this._loupeBgAt = 0; this._loupeKRange = null; this._loupeLayers = null;
+      this._loupeData = null;
       this.redraw();
     },
     /* 绘图区右边界（不含右侧价格轴）。
@@ -589,9 +609,9 @@
       this._press = true;
       this._hoverXY = xy;
       /* v400/v401：按下这一刻就冻结图层几何 + 预合成背景（一次性开销放在按下时，
-       * 拖动过程中不再有任何布局读取和 GPU 回读）。 */
-      this._loupeLayers = null;
-      this._loupeBg = null;
+       * 拖动过程中不再有任何布局读取和 GPU 回读）。
+       * v402：**不再无条件重建** —— _freezeLoupe 内部对 3 秒内的快照直接复用，
+       * 连续画线/拖线时省掉重复的 GPU 回读（用户：刚进工具画第一根线特别卡）。 */
       try { this._freezeLoupe(); } catch (e) {}
 
       /* ① 已经在画（落了点、还没收尾）：这一下**永远是下一个点**。
@@ -809,8 +829,8 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
-      this._loupeLayers = null;
-      this._loupeBg = null;   /* v401：释放背景快照 */
+      /* v402：保留 K 线区间缓存 3 秒供下一笔复用（_freezeLoupe 按 _loupeBgAt 判断），
+       * 换品种/周期/尺寸会强制清空。 */
       /* v187：短按（长按计时未到就抬手）→ 只保留选中，不拖线也不落点 */
       if (this._hold) {
         clearTimeout(this._hold.timer);
@@ -860,8 +880,7 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
-      this._loupeLayers = null;
-      this._loupeBg = null;   /* v401：释放背景快照 */
+      /* v402：同 _up，保留快照供下一笔复用（3 秒内） */
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; this.pending = []; this.hover = null; }
       if (this.drag) { this.save(this.drag.arr || this.list()); this.drag = null; this.redraw(); }
@@ -1141,10 +1160,19 @@
      * 会触发 GPU→CPU 回读（几十毫秒/层）；桌面 headless 的 canvas 在 CPU 内存里，
      * 所以本地测只有 0.02ms、真机却卡死。这里在**按下时一次性**把背景层合成到
      * 离屏普通 canvas，之后每帧只读这张（CPU），回读次数从 N 降到 0。 */
-    _freezeLoupe: function () {
+    _freezeLoupe: function (force) {
+      var now = Date.now();
+      /* v402【一开始卡、过一会才好】缓存 K 线区间与数据引用 3 秒：连续画线/拖线时
+       * 不必每次按下都重新 series.data() + 遍历可视范围。
+       * 图表切换/尺寸变化/超时由 attach/setTool/resize 把 _loupeBgAt 归零强制重算。 */
+      /* v402b：不再有像素快照，缓存判据改为「K 线区间是否已就绪 + 时间戳」。 */
+      if (!force && this._loupeKRange && this._loupeBgAt && now - this._loupeBgAt < 3000) {
+        return this._loupeLayers || [];
+      }
       var out = [];
       var host = this._host;
       this._loupeBg = null;
+      this._loupeKRange = null;
       if (!host) { this._loupeLayers = out; return out; }
       var hr = null;
       try { hr = host.getBoundingClientRect(); } catch (e) {}
@@ -1170,23 +1198,41 @@
         });
       }
       this._loupeLayers = out;
-      /* 背景预合成：把主图各层按偏移对齐画进一张 host 尺寸的离屏 canvas。
-       * 一次性开销（按下时），换来拖动全程零 GPU 回读。 */
+      /* v402b【放弃像素快照，改矢量重画】原方案把主图 canvas 预合成到离屏 canvas，
+       * 但 LWC 的价格轴有动画/数据加载会重排，快照与 _yOf() 的映射一旦错位，
+       * 放大镜取到的就是空白（用户看到的"有的位置有 K 线、有的位置没有"，
+       * 以及"过一会儿才好"）。改为在 _loupe 里用数据矢量重画蜡烛：
+       * 零 GPU 回读、永远与当前坐标一致。这里不再生成 _loupeBg。 */
+      this._loupeBg = null;
+      /* v402【放大镜整窗空白】触点可能远离 K 线（画趋势线时手落在空白区），
+       * 2 倍放大只取触点周围一小块 → 放大镜里只剩网格和线，看起来像"没 K 线"。
+       * 这里记下**可视范围内 K 线的价格区间**（映射成 y），供 _loupe 把源区域
+       * 垂直中心夹进去：触点再偏，窗口里也一定能看到 K 线。
+       * 只在按下时算一次（可视范围约百来根），不进每帧路径。 */
       try {
-        if (out.length && this._w > 0 && this._h > 0) {
-          var dpr = this._dpr || 1;
-          var bg = document.createElement('canvas');
-          bg.width = Math.round(this._w * dpr);
-          bg.height = Math.round(this._h * dpr);
-          var bctx = bg.getContext('2d');
-          if (bctx) {
-            for (var b = 0; b < out.length; b++) {
-              try { bctx.drawImage(out[b].cv, -out[b].ox, -out[b].oy); } catch (e) {}
-            }
-            this._loupeBg = bg;
+        var vr = (this.chart && this.chart.timeScale) ? this.chart.timeScale().getVisibleLogicalRange() : null;
+        var dd = (this.series && this.series.data) ? this.series.data() : null;
+        if (dd && dd.length) this._loupeData = dd;   /* v402b：缓存给 _loupe 按 x 取局部区间 */
+        if (vr && dd && dd.length) {
+          var from = Math.max(0, Math.floor(vr.from));
+          var to = Math.min(dd.length - 1, Math.ceil(vr.to));
+          var lo = Infinity, hi = -Infinity;
+          for (var ii = from; ii <= to; ii++) {
+            var bar = dd[ii];
+            if (!bar) continue;
+            var bl = (bar.low != null) ? bar.low : bar.close;
+            var bh = (bar.high != null) ? bar.high : bar.close;
+            if (bl < lo) lo = bl;
+            if (bh > hi) hi = bh;
+          }
+          var yA = (lo < Infinity) ? this._yOf(lo) : null;
+          var yB = (hi > -Infinity) ? this._yOf(hi) : null;
+          if (yA != null && yB != null && isFinite(yA) && isFinite(yB)) {
+            this._loupeKRange = { top: Math.min(yA, yB), bot: Math.max(yA, yB) };
           }
         }
-      } catch (e) { this._loupeBg = null; }
+      } catch (e) { this._loupeKRange = null; }
+      this._loupeBgAt = now;
       return out;
     },
 
@@ -1206,9 +1252,12 @@
       var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
       if (y0 == null) y0 = xy.y;
       if (x0 == null) x0 = xy.x;
+      /* v402：源区域的垂直中心。默认就是触点位置；若触点远离 K 线（画趋势线时手落在
+       * 空白区），下面会把它夹进可视 K 线价格区间，保证放大镜里一定能看到 K 线。 */
+      var cySrc = xy.y;
       var self = this;
       var X = function (t) { var v = self._xOf(t); return (v == null) ? null : cx + (v - x0) * Z; };
-      var Y = function (p) { var v = self._yOf(p); return (v == null) ? null : cy + (v - y0) * Z; };
+      var Y = function (p) { var v = self._yOf(p); return (v == null) ? null : cy + (v - cySrc) * Z; };
 
       ctx.save();
       /* 底板 + 边框 */
@@ -1230,48 +1279,120 @@
        *    跳开右侧价格轴（宽约 58）与底部时间轴（高约 26）。
        *    【坑】主 pane canvas 的 CSS 宽 = host 宽 - 价格轴宽（例 630→572），
        *    按 host 宽去匹配会把 K 线层全部漏掉，放大镜里就只剩十字线。 */
-      var sx = xy.x - W / (2 * Z), sy = xy.y - H / (2 * Z);
-      var sw = W / Z, sh = H / Z;
+      var sx = xy.x - W / (2 * Z), sw = W / Z, sh = H / Z;
+      /* v402：把垂直源中心夹进「可视 K 线价格区间」，触点再偏也能看到 K 线。
+       * 区间比窗口还矮（极度缩小时）就不夹，保持原行为。 */
+      var kr = this._loupeKRange;
+      if (kr && isFinite(kr.top) && isFinite(kr.bot)) {
+        var halfH = H / (2 * Z);
+        var kTop = kr.top, kBot = kr.bot;
+        /* v402b：优先用「触点所在位置附近 9 根 K 线」的价格区间 —— 比全局区间精确得多。
+         * 全局区间只解决"触点跑到 K 线整体范围之外"；若触点这一列恰好是回调低点、
+         * 而全局区间被别处的高点撑开，仍然会落在空白处（用户看到的"右边没 K 线"）。 */
+        try {
+          var d = this._loupeData;
+          if (d && d.length && this.chart && this.chart.timeScale) {
+            var li = this.chart.timeScale().coordinateToLogical(xy.x);
+            if (li != null && isFinite(li)) {
+              var ci = Math.round(li);
+              var i0 = Math.max(0, ci - 4), i1 = Math.min(d.length - 1, ci + 4);
+              var lo2 = Infinity, hi2 = -Infinity;
+              for (var q = i0; q <= i1; q++) {
+                var bb = d[q];
+                if (!bb) continue;
+                var l2 = (bb.low != null) ? bb.low : bb.close;
+                var h2 = (bb.high != null) ? bb.high : bb.close;
+                if (l2 < lo2) lo2 = l2;
+                if (h2 > hi2) hi2 = h2;
+              }
+              var y1 = (lo2 < Infinity) ? this._yOf(lo2) : null;
+              var y2 = (hi2 > -Infinity) ? this._yOf(hi2) : null;
+              if (y1 != null && y2 != null && isFinite(y1) && isFinite(y2)) {
+                kTop = Math.min(y1, y2); kBot = Math.max(y1, y2);
+              }
+            }
+          }
+        } catch (e) {}
+        if (kBot - kTop >= halfH * 2) {
+          /* 局部区间够宽：把触点夹进去（触点仍在窗口内可见，只是不贴边） */
+          cySrc = Math.max(kTop + halfH, Math.min(kBot - halfH, xy.y));
+        } else {
+          /* 局部区间比窗口还窄（该处 K 线波动很小）→ **直接以该处 K 线为中心**。
+           * 早先这里回退到全局区间，结果又被别处的高点撑开、夹到空白处 ——
+           * 正是"有的位置有 K 线、有的位置没有"的剩余原因。 */
+          cySrc = (kTop + kBot) / 2;
+        }
+      }
+      var sy = cySrc - H / (2 * Z);
       /* v400【放大镜拖动卡顿】v190/v192 的放大镜在这里每帧做 querySelectorAll
        * + host 一次 + 每个 canvas 一次 getBoundingClientRect —— 正是 v225 修掉过的
        * 「高频 pointermove 里读布局→强制 reflow」又回来了。按下时冻结一次图层几何，
        * 松手/取消清空；drawImage 仍每帧读实时像素（放大镜要看到正在画的线），只缓存几何。 */
       var layers = this._loupeLayers || this._freezeLoupe();
       var dpr = this._dpr || 1;
-      /* ① 背景（K 线/网格/已有画线）：优先用按下时预合成的离屏快照。
-       *    源是普通 canvas（CPU 内存），每帧 drawImage 不再触发 GPU 回读。 */
-      if (this._loupeBg) {
+      /* ① K 线：**用数据矢量重画**（v402b）。
+       * 完全不读任何 canvas → 真机零 GPU 回读；也不存在"像素快照与坐标映射错位"
+       * 导致的整窗空白（那正是"有的位置有 K 线、有的位置没有 / 过一会儿才好"的根因）。
+       * 坐标变换：源区域中心 (x0, cySrc) → 窗口中心 (cx, cy)，放大 Z 倍。 */
+      var dd = this._loupeData;
+      if (dd && dd.length) {
+        var bi0 = 0, bi1 = dd.length - 1;
         try {
-          ctx.drawImage(this._loupeBg, sx * dpr, sy * dpr, sw * dpr, sh * dpr, lx, ly, W, H);
+          var li0 = this.chart.timeScale().coordinateToLogical(x0 - W / (2 * Z));
+          var li1 = this.chart.timeScale().coordinateToLogical(x0 + W / (2 * Z));
+          if (li0 != null && isFinite(li0)) bi0 = Math.max(0, Math.floor(li0) - 1);
+          if (li1 != null && isFinite(li1)) bi1 = Math.min(dd.length - 1, Math.ceil(li1) + 1);
         } catch (e) {}
-      } else {
-        /* 兜底（预合成失败）：逐层直抓，源区域按各层偏移修正 */
-        for (var c = 0; c < layers.length; c++) {
-          var L = layers[c];
-          try {
-            ctx.drawImage(L.cv, sx * L.k + L.ox, sy * L.k + L.oy, sw * L.k, sh * L.k, lx, ly, W, H);
-          } catch (e) {}
+        if (bi1 - bi0 > 600) bi1 = bi0 + 600;   /* 安全阀：极度缩小时别画上千根 */
+        var upC = light ? '#e5344b' : '#f6465d';
+        var dnC = light ? '#0a9e63' : '#0ecb81';
+        var prevBX = null, bw = 2;
+        for (var bi = bi0; bi <= bi1; bi++) {
+          var bar = dd[bi];
+          if (!bar) continue;
+          var bx = X(bar.time);
+          if (bx == null) continue;
+          if (prevBX != null) bw = Math.max(1, Math.abs(bx - prevBX) * 0.72);
+          prevBX = bx;
+          if (bx < lx - 6 || bx > lx + W + 6) continue;
+          var bo = Y(bar.open), bc = Y(bar.close), bh = Y(bar.high), bl = Y(bar.low);
+          if (bo == null || bc == null || bh == null || bl == null) continue;
+          var col = (bar.close >= bar.open) ? upC : dnC;
+          ctx.strokeStyle = col;
+          ctx.fillStyle = col;
+          ctx.lineWidth = Math.max(1, bw * 0.18);
+          /* 影线 */
+          ctx.beginPath(); ctx.moveTo(bx, bh); ctx.lineTo(bx, bl); ctx.stroke();
+          /* 实体 */
+          var topY = Math.min(bo, bc), hgt = Math.abs(bc - bo);
+          if (hgt < 1) hgt = 1;
+          ctx.fillRect(bx - bw / 2, topY, bw, hgt);
         }
       }
-      /* ② 画线层（自己的 canvas）：单独实时叠一层，保证放大镜里「正在画的线」跟手。
-       *    这 1 次回读无法省（内容每帧都变），但已从 N 次降到 1 次。 */
+      /* ② 画线层（自己的 canvas）：实时叠加，保证放大镜里「正在画的线」跟手。
+       * 这是唯一一次 canvas 读取（本层已 willReadFrequently，落在 CPU 内存）。 */
       if (this.cv) {
         try {
           ctx.drawImage(this.cv, sx * dpr, sy * dpr, sw * dpr, sh * dpr, lx, ly, W, H);
         } catch (e) {}
       }
 
-      /* ② 十字准线 + 落点红点（窗口中心就是当前取点） */
+      /* ③ 十字准线 + 落点红点。
+       * v402：源区域被垂直夹过时，落点在窗口内的真实位置随之偏移（不再固定窗口中心），
+       * 十字线与红点必须画在真实位置，否则会误导「落点就在这里」。 */
+      var cyReal = cy + (xy.y - cySrc) * Z;
+      if (cyReal < ly + 6) cyReal = ly + 6;
+      if (cyReal > ly + H - 6) cyReal = ly + H - 6;
       ctx.setLineDash([3, 3]);
       ctx.strokeStyle = light ? 'rgba(90,105,135,0.55)' : 'rgba(160,175,200,0.55)';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(lx + 2, cy); ctx.lineTo(lx + W - 2, cy);
+      ctx.moveTo(lx + 2, cyReal); ctx.lineTo(lx + W - 2, cyReal);
       ctx.moveTo(cx, ly + 2); ctx.lineTo(cx, ly + H - 2);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = '#ff3b52';
-      ctx.beginPath(); ctx.arc(cx, cy, 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cyReal, 4.5, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
 
       /* ③ 顶栏：当前价格 + 放大倍率 */
