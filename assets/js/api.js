@@ -569,8 +569,37 @@
       const ov = RT_OVERRIDE[key];
       if (ov) {
         if (ov.t === 'sinag') {
-          r = await sinaGlobalQuote(ov.sym);
+          /* v399：sinaGlobalQuote 内部 proxyText 的代理链全挂时会**抛异常**
+           * （不是返回 null），若不在此就地接住，会直接跳到 directQuote 外层
+           * catch，下面的腾讯回落永远执行不到。这里先吞掉异常置 r=null。 */
+          try { r = await sinaGlobalQuote(ov.sym); } catch (eSina) { r = null; }
           if (r && a && a.pxScale) { r.price *= a.pxScale; if (r.prev) r.prev *= a.pxScale; }
+          /* v399【铜竖线根因】新浪 hq.sinajs.cn 在浏览器/PWA 下被 CORS/Referer 拦
+           * （实测直接 fetch = Failed to fetch），sinaGlobalQuote 静默返回 null →
+           * directQuote 失败 → 报价落到补漏链的 TV（COMEX:HG1!，官方延 600 秒）。
+           * 于是顶部价 6.04（TV 延价）、分时线 6.15（新浪实时），补点时偏差 1.75%
+           * 卡在 2% 阈值内没拦住 → 分时尾被拉成一根 90° 竖线。
+           * 回落通道用腾讯 qt.gtimg.cn/q=hf_HG：同一外盘合约、浏览器 CORS 开放、
+           * 真实时（实测与新浪同秒），且 txQuote() 早有成熟解析（美分→美元 pxScale）。
+           * 这样顶部报价与分时线同源同口径，竖线根除；TV 仅作最后兜底。 */
+          if (!r) {
+            try {
+              const txt = String(await proxyText('https://qt.gtimg.cn/q=' + ov.sym, 'https://gu.qq.com/') || '');
+              /* 必须匹配具体代码的 v_hf_XXX 引号串：腾讯无此代码时返回
+               * v_pv_none_match="1"，用宽松的 /="..."/ 会误把占位 1 当价格
+               * （A50 实测中招）。代码部分转义 ov.sym 里的 . 等正则元字符。 */
+              const symEsc = String(ov.sym).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const m = new RegExp('v_' + symEsc + '="([^"]*)"').exec(txt);
+              if (m && m[1]) {
+                const f = m[1].split(',');
+                const px = +f[0], prev0 = +f[7];
+                if (px > 0) {
+                  const sc = (a && a.pxScale) || 1;
+                  r = { price: px * sc, prev: prev0 > 0 ? prev0 * sc : 0, src: 'tencent' };
+                }
+              }
+            } catch (eTx) { /* 腾讯也挂 → 落原链路 TV 兜底 */ }
+          }
         }
         else if (ov.t === 'tencent') {
           const txt = String(await proxyText('https://qt.gtimg.cn/q=' + ov.sym, 'https://gu.qq.com/') || '');
@@ -4537,6 +4566,11 @@
        * 线头晚几分钟由 _liveTick（每 8 秒）补上，不该拿首屏时间换。 */
       const q = cachedQuote(key);
       if (!q || !(q.price > 0)) return res;
+      /* v399【延时源禁止补实时线】TV 等官方延时源（delayed>0，商品实测 600 秒）
+       * 的价格天生落后于新浪/东财实时分时线，把它补到线尾必然拉出竖线
+       * （铜 6.04 延价 vs 6.15 实时线）。这类报价只能作顶部展示且已被标「延迟」，
+       * 绝不参与分时续尾；实时源（src=tencent/sina/em/...）不受影响。 */
+      if (q.delayed && +q.delayed > 0) return res;
       /* v346：补点前必须校验「实时报价 vs 分钟线尾点」的偏差。
        * _liveTick 早有 jumpLim，但这里（首屏补点）一直没校验：报价与分钟线
        * 来自不同源/不同合约/不同单位口径时，会把线尾硬拉成一根 90° 竖线
