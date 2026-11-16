@@ -4252,10 +4252,10 @@
                * 时间基准两套都是「北京墙上时间装进 UTC」，可直接按时间戳拼接。 */
               const hasReg = n.points.some(p => p.seg === 'reg');
               if (!hasReg) {
-                let regPts = null, regPre = 0;
+                let regPts = null, regPre = 0, regSrc = '';
                 try {
                   const r = await emTrend(a.secid, 1);
-                  if (r.points.length) { regPts = r.points; regPre = r.preClose; }
+                  if (r.points.length) { regPts = r.points; regPre = r.preClose; regSrc = 'em'; }
                 } catch (e2) { /* 东财不通 → 走 Yahoo 兜底 */ }
                 /* v395【东财不通时用 Yahoo 补上一交易日常规段】用户实测：东财对美股
                  * secid 在移动网络常 ERR_EMPTY_RESPONSE，于是 v215 的「东财补 reg」失效，
@@ -4270,7 +4270,7 @@
                       let yp = yahooScale(yb && yb.points, ys);
                       if (yp && yp.length > 15) {
                         yp = trimToLatestSession(yp, a);
-                        if (yp.length > 15) { regPts = yp; regPre = yb.preClose; }
+                      if (yp.length > 15) { regPts = yp; regPre = yb.preClose; regSrc = 'yahoo'; }
                       }
                     }
                   } catch (e3) { /* Yahoo 也失败 → 保持只有盘前段 */ }
@@ -4290,7 +4290,8 @@
                     preClose: regPre || n.preClose || merged[0].close,
                     regClose: regMapped[regMapped.length - 1].close || n.preClose,
                     synthetic: false,
-                    src: 'nasdaq',   /* 主源仍标 Nasdaq（常规段由兜底源补，不对外标多源） */
+                    src: 'nasdaq',   /* 主源仍标 Nasdaq（盘前段来自它） */
+                    regSrc: regSrc,  /* v396：常规段真实来源（em/yahoo），常规分时图例用它 */
                     ext: true
                   };
                 }

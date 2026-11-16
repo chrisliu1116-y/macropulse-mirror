@@ -841,6 +841,11 @@
       /* v284【来源三要素】数据源 + 时间戳（图例里的 HH:MM）+ 是否延迟（app.js 的
        * 「延迟」角标）。来源直接标在图例上，用户不必猜这条线是谁给的。 */
       const srcName = SRC_NAME[data.src];
+      /* v396【常规分时的源要按「实际提供常规段的源」标】用户口径：美股常规分时是
+       * 上一交易日的走势，那段来自东财/Yahoo，不该标成「纳斯达克」（Nasdaq 只给了
+       * 当天盘前段）。只有切到「盘前分时」（含盘前段）才该显示纳斯达克。
+       * data.regSrc 由 api.js 在该品种常规段来自兜底源时写入。 */
+      const regSrcName = (data.regSrc && SRC_NAME[data.regSrc]) ? SRC_NAME[data.regSrc] : '';
       /* v318【盘前/盘后与图例一致】初次渲染就用 CNBC 延展报价校准图尾。
        * 分钟序列（Yahoo/腾讯）与 CNBC 实时延展报价是两套数据，打开瞬间
        * 图例「盘前 ±x%」会和报价差半个点（美光 11-13 22:17 截图：头部
@@ -1313,7 +1318,7 @@
               `<span class="lg-item ${cls}" title="相对昨收 ${priceFmt(prev)}">全天 ${chg >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>`) +
             (useExt ? `<span class="lg-item lg-ext" title="这条曲线把延展时段接进来了（美股：盘前 04:00–09:30 ET / 盘后 16:00–20:00 ET；韩股：收盘定价 15:40–16:00 + Nextrade 애프터마켓 16:00–20:00）">${extTagText(pts)}</span>` : '') +
             amtTag(p) +
-            (srcName ? `<span class="lg-item lg-src" title="分时数据源：${srcName}">${srcName}</span>` : '');
+            (srcName ? `<span class="lg-item lg-src" title="分时数据源：${(!useExt && regSrcName) ? regSrcName : srcName}">${(!useExt && regSrcName) ? regSrcName : srcName}</span>` : '');
         } else {
           this.legendEl.innerHTML =
             `<span class="lg-item">开 <b>${priceFmt(p.open)}</b></span>` +
