@@ -594,9 +594,18 @@
        * 实时报价回来后 class 仍是 "qp snap up"，.qp.snap::after 继续显示「上次」，
        * 要等 120 秒整页 renderMarket() 重建 DOM 才消失（用户：一两分钟才消除）。
        * 数据其实早就是实时的，只是这个标签赖着不走。 */
+      /* v361【休市不再挂「上次」】休市品种显示的本就是上一交易日收盘价，
+       * 列表里已经有「休市 / 收盘价」灰标，再挂一个「上次」（首屏落盘快照
+       * 标记）会让人误以为数据没刷新（用户 11-15 反馈整页都是「上次」）。
+       * 只在「交易中却没拿到新价」时才提示：snap=冷启动占位、snap-old=延迟。 */
+      let _closedNow = false;
+      try {
+        const _st = w.Session && w.Session.state ? w.Session.state(k) : null;
+        _closedNow = !!(_st && !_st.open);
+      } catch (e) {}
       el.className = el.className.replace(/\b(up|down|flat|snap|snap-old)\b/g, '').trim()
         + ' ' + (flat ? 'flat' : (up ? 'up' : 'down'))
-        + (q.snapped ? ' snap' : stale ? ' snap-old' : '');
+        + (!_closedNow && (q.snapped || stale) ? (stale ? ' snap-old' : ' snap') : '');
       el.title = stale ? ('上次更新 ' + hhmm(q.at) + '（已 ' + Math.round(age / 60000) + ' 分钟未刷新）') : '';
     });
     $$(`.qpx[data-k="${cssq(k)}"]`).forEach(el => { el.textContent = U.fmt(k, q.price); });
@@ -3158,6 +3167,9 @@
     const stale = _mkSparkStale.has(k);
     if (!cooling && (vals === undefined || stale)) {
       try {
+        /* v368：缩略图属「后台预热」，标记后走低优先级串行队列 —— 用户在
+         * 详情页点开的请求会插队，不会被这 80 多个预热请求堵住。 */
+        if (w.API && w.API.bgBegin) w.API.bgBegin();
         const r = await w.API.intraday(k);
         /* v286 防假数据硬闸：API 出口有 trusted() 就以它为唯一判据，
          * 缺失时回退到 failed/synthetic 标记；不可信结果一律不画缩略图。 */
@@ -3190,6 +3202,7 @@
           sparkFailMark(k);
         }
       } catch (e) { if (vals === undefined) sparkFailMark(k); }
+      finally { if (w.API && w.API.bgEnd) w.API.bgEnd(); }
     }
     if (!vals) return;
     const body = $('#marketBody');
@@ -3213,19 +3226,26 @@
     if (node) { node.setAttribute('data-mksp', k); slot.replaceWith(node); }
   }
 
-  /* 限并发队列：最多 8 个请求在飞，逐行补齐，最终每行都有分时线
-   * （不做视口懒加载 —— 用户口径是「像图四一样每行都有」）。 */
+  /* v370【恢复原并发】用户口径：不再为防封牺牲速度，并发恢复原样（8 并发、
+   * 完成即补位）。只保留一个「防队列叠加」的锁 —— renderMarket 多次调用时
+   * 不会重复建队列（这是纯收益，不降速）。v367/v368/v369 的串行+间隔全部撤掉。 */
+  let _mkSparkBusy = false;
   function fillMkSparks() {
     const body = $('#marketBody');
     if (!body || !w.API || !w.API.intraday) return;
-    /* data-mksp="" 是「没有数据」的空占位（mkSparkSVG 兜底时用的），
-     * 不过滤就会拿着空 key 去请求，抛 unknown asset。 */
+    if (_mkSparkBusy) return;
     const keys = [...body.querySelectorAll('.mk-sp-ph[data-mksp]')]
       .map(el => el.dataset.mksp).filter(Boolean);
     if (!keys.length) return;
+    _mkSparkBusy = true;
     let i = 0;
     const next = () => {
-      if (i >= keys.length) return;
+      if (i >= keys.length) {
+        _mkSparkBusy = false;
+        /* DOM 在队列跑动中被重建时（新占位出现）再补一轮 */
+        if (body.querySelector('.mk-sp-ph[data-mksp]')) setTimeout(fillMkSparks, 400);
+        return;
+      }
       const k = keys[i++];
       Promise.resolve(loadMkSpark(k)).then(next, next);
     };
@@ -3968,17 +3988,19 @@
         }
         /* v273：远程建议（ETF/基金/美股杠杆，含正两倍负两倍这类杠杆产品）。
          * 渲染前先 synthSecid 预写进 ASSETS，点「＋」时现有委托直接能加。 */
-        /* v288：桥结果不再被本地名录的 seen 过滤掉（那正是分叉的直接原因） */
-        const sug = (S._pkSug || []).filter(x =>
-          x && (x.secid || x.yh || x.opSina) && S.watch.indexOf(String(x.code)) < 0);
+        /* v359【搜索条双区】整行左侧点进分时详情；最右 ＋ / − 圆形图标只管增减自选。
+         * 已在自选的品种不再被过滤（否则自己加过的票反而搜不到）。
+         * 两套状态仍是同一份 mm_own / mm_watch2，与详情页按钮完全同源。 */
+        const sug = (S._pkSug || []).filter(x => x && (x.secid || x.yh || x.opSina));
         const sugHTML = sug.map(x => {
           try {
             if (x.secid) U.synthSecid(x.secid, x.code, x.name);
             else if (x.opSina && U.regSinaOption) U.regSinaOption(x.code, x.name);
             else if (x.yh && U.regYahooSym) U.regYahooSym(x.code, x.name, x.yh, x.grp || 'option', 'option');
           } catch (e) { }
-          return `<button class="pk-i" data-k="${esc(x.code)}">
-            <span>${esc(x.name)}<em>${esc(x.code)} · ${esc(x.type || 'ETF')}</em></span><i>＋</i>
+          const on = S.own.indexOf(String(x.code)) >= 0;
+          return `<button class="pk-i ${on ? 'on' : ''}" data-k="${esc(x.code)}" title="点条目看分时行情">
+            <span>${esc(x.name)}<em>${esc(x.code)} · ${esc(x.type || 'ETF')}</em></span><i class="pk-add ${on ? 'on' : ''}" data-k="${esc(x.code)}" title="${on ? '从自选移除' : '加入自选'}">${on ? '−' : '＋'}</i>
           </button>`;
         }).join('');
         const items = found.map(f => {
@@ -3988,9 +4010,9 @@
           const a = /^\d{6}$/.test(f.code) ? U.synthCN(f.code)
             : (/^\d{4}$/.test(f.code) ? U.get(f.code) : U.synthGlobal(f.code));
           if (!a) return '';
-          const on = S.watch.indexOf(f.code) >= 0;
-          return `<button class="pk-i ${on ? 'on' : ''}" data-k="${esc(f.code)}">
-            <span>${esc(f.nm)}<em>${esc(f.code)}</em></span><i>${on ? '已添加' : '＋'}</i>
+          const on = S.own.indexOf(f.code) >= 0;
+          return `<button class="pk-i ${on ? 'on' : ''}" data-k="${esc(f.code)}" title="点条目看分时行情">
+            <span>${esc(f.nm)}<em>${esc(f.code)}</em></span><i class="pk-add ${on ? 'on' : ''}" data-k="${esc(f.code)}" title="${on ? '从自选移除' : '加入自选'}">${on ? '−' : '＋'}</i>
           </button>`;
         }).join('');
         /* v288：桥结果才是「全市场匹配」；本地名录拼音库口径不同
@@ -4008,21 +4030,33 @@
           if (!list.length) return '';
           const meta = U.GROUPS[g] || { label: g, color: '#8b95a6' };
           return `<div class="pk-g"><div class="pk-gh" style="color:${meta.color}">${esc(meta.full || meta.label)}</div>
-            ${list.map(k => `<button class="pk-i ${S.watch.indexOf(k) >= 0 ? 'on' : ''}" data-k="${esc(k)}">
-              <span>${esc(U.get(k).kind === 'index' ? U.get(k).name : (U.get(k).short || U.get(k).name))}<em>${esc(k)}</em></span><i>${S.watch.indexOf(k) >= 0 ? '已添加' : '＋'}</i>
+            ${list.map(k => `<button class="pk-i ${S.own.indexOf(k) >= 0 ? 'on' : ''}" data-k="${esc(k)}" title="点条目看分时行情">
+              <span>${esc(U.get(k).kind === 'index' ? U.get(k).name : (U.get(k).short || U.get(k).name))}<em>${esc(k)}</em></span><i class="pk-add ${S.own.indexOf(k) >= 0 ? 'on' : ''}" data-k="${esc(k)}" title="${S.own.indexOf(k) >= 0 ? '从自选移除' : '加入自选'}">${S.own.indexOf(k) >= 0 ? '−' : '＋'}</i>
             </button>`).join('')}
           </div>`;
         }).join('') : '')
         : '<div class="empty"><b>没找到匹配品种</b><span>支持代码（000660 / 285A / 300308）、中文名（SK海力士 / 中际旭创）或首字母（zjxc）</span></div>';
     };
     box.innerHTML = `<div class="pk-panel">
-      <div class="pk-h"><b>添加 / 移除品种</b><button class="pk-x">✕</button></div>
+      <div class="pk-h"><b>搜索品种 · 点条目看行情 · ＋加自选</b><button class="pk-x">✕</button></div>
       <div class="pk-search"><input type="text" id="pkSearch" placeholder="输代码或名称搜索：SK海力士 / 铠侠 / 国巨 / 000660 / 285A…" autocomplete="off" inputmode="none"></div>
       <div class="pk-body"></div>
       <div id="pkKb"></div>
     </div>`;
     box.classList.add('on');
-    renderList('');
+    /* v359：从详情页后退回来时恢复上一次搜索词与结果（远程建议 S._pkSug 仍在内存里），
+     * 用户看到的是刚才那个搜索页，而不是直接掉回行情列表。 */
+    const _restore = S._pkRestore || '';
+    S._pkRestore = '';
+    if (_restore) {
+      const inp = box.querySelector('#pkSearch');
+      if (inp) inp.value = _restore;
+      S._pkQuery = _restore;
+      renderList(_restore);
+    } else {
+      S._pkQuery = '';
+      renderList('');
+    }
     /* 添加品种面板同样支持「点任意处关闭」。 */
     bindTapClose(box, '.pk-body', () => box.classList.remove('on'));
     box.querySelector('.pk-x').onclick = () => box.classList.remove('on');
@@ -4033,6 +4067,7 @@
     box.querySelector('#pkSearch').addEventListener('input', (e) => {
       renderList(e.target.value);
       const q = (e.target.value || '').trim();
+      S._pkQuery = q;          // v359：后退回来靠它恢复搜索词
       clearTimeout(sugT);
       if (!q || /^\d{1,3}$/.test(q)) { S._pkSug = []; return; }
       sugT = setTimeout(() => {
@@ -4045,17 +4080,35 @@
         });
       }, (w.NativePulse && typeof w.NativePulse.nativeSearch === 'function') ? 20 : 350);
     });
+    /* v359【搜索条双区】最右 ＋ / − 图标只管增减自选；点其余区域进分时详情。
+     * 详情来源标成 'picker'，closeSheet 时据此退回搜索页。 */
     box.querySelector('.pk-body').addEventListener('click', (e) => {
+      const add = e.target.closest('.pk-add');
+      if (add) {
+        const k = add.dataset.k;
+        if (!k) return;
+        const has = S.own.indexOf(k) >= 0;
+        if (has) { S.watch = S.watch.filter(x => x !== k); ownDel(k); }
+        else { if (S.watch.indexOf(k) < 0) S.watch.push(k); ownAdd(k); }
+        store.set('mm_watch2', S.watch);
+        const row = add.closest('.pk-i');
+        if (row) row.classList.toggle('on', !has);
+        add.classList.toggle('on', !has);
+        add.textContent = has ? '＋' : '−';
+        add.title = has ? '加入自选' : '从自选移除';
+        renderMarket();
+        return;
+      }
       const b = e.target.closest('.pk-i');
       if (!b) return;
       const k = b.dataset.k;
-      const i = S.watch.indexOf(k);
-      if (i >= 0) { S.watch.splice(i, 1); ownDel(k); } else { S.watch.push(k); ownAdd(k); }
-      store.set('mm_watch2', S.watch);
-      b.classList.toggle('on', S.watch.indexOf(k) >= 0);
-      const it = b.querySelector('i');
-      if (it) it.textContent = S.watch.indexOf(k) >= 0 ? '已添加' : '＋';
-      renderMarket();
+      if (!k) return;
+      /* 远程建议的品种在渲染时已 synthSecid / regSinaOption / regYahooSym 注册，
+       * 这里再兜一次底，避免个别条目注册失败导致点了没反应。 */
+      if (!U.get(k)) { try { U.synthGlobal(k); } catch (e2) { } }
+      if (!U.get(k)) return;
+      box.classList.remove('on');
+      openSheet(k, 'picker');   // 默认分时；关闭时退回搜索页
     });
 
     /* v275：自定义股票键盘（照同花顺 123 / ABC / 中文 三键）。
@@ -5033,8 +5086,11 @@
     } catch (e) {}
   }
 
-  function openSheet(key) {
+  function openSheet(key, from) {
     if (!U.get(key)) return;
+    /* v359：记录详情从哪一层打开；'picker' 时 closeSheet 要退回搜索页。
+     * 其余几十个调用点都不传 from，自动置 null，不会误触发。 */
+    S.sheetFrom = from || null;
     S.sheetKey = key;
     /* v290-rev：打开天然气详情页时异步拉一次带年月合约的实时价（不阻塞） */
     if (key === 'NG') { try { ngRealtimeOnce(); } catch (e) {} }
@@ -5060,6 +5116,18 @@
     syncLock();
 
     const q = QuoteHub.get(key);
+    /* v361【头部数据源标签】台股报价主源是 TWSE 证交所官方实时（twseQuote，v292 起），
+     * 分钟线走钜亨/Yahoo；以前因 src:'em' 被写死显示「东方财富」，与实际链路不符
+     * （用户 11-15 国巨截图）。如实标注，不再挂一个没在用的源名。 */
+    /* v378【头部源标注整体移除·用户定】头部不再挂任何源名/策略字样（「腾讯优先」
+     * 「东方财富」「腾讯 · 新浪」等全部删掉）——实际用了哪个源看**分时图图例末尾**
+     * 的实时标注（charts.js SRC_NAME），头部只留 分组·时段·单位·延N分。 */
+    /* v355【详情页自选按钮】状态以 S.own 为准（v316 口径：自选 = 用户手动加的，预设不进）。
+     * v356：预设默认品种（MARKET_DEFAULT）未加自选时不显示按钮（它们本就不属于自选）；
+     * 只有「已在自选」或「非预设（搜索添加）」的品种才显示。 */
+    const _isDefault = (U.MARKET_DEFAULT || []).indexOf(key) >= 0;
+    const _ownOn = S.own.indexOf(key) >= 0;
+    const _showOwn = _ownOn || !_isDefault;
     /* v215：美股指数没有连续盘前/盘后成交，头部也不挂「盘前/盘后」，统一「已收盘」。
      * v255：与列表同口径 —— 拿到真实延展报价（VIX 的 CNBC 盘前）时不强制「已收盘」。 */
     const _extNow = S.ext[key];
@@ -5076,13 +5144,7 @@
             <div class="sh-sub">
               <span style="color:${gColor(g)}">${esc(g.label)}</span>
               <span class="sh-sess ${_idxExt ? '' : (sess.open ? 'open' : '')}">${esc(_sessLbl)}</span>
-              ${a.unit && a.kind !== 'index' ? '· ' + esc(a.unit) + ' ' : ''}· ${a.src === 'binance' ? 'Binance'
-                : (a.rt === 'tx' ? '腾讯 · 新浪'
-                : (a.rt === 'cnbc' ? 'CNBC'
-                : (a.src === 'cboe' ? 'CBOE'
-                /* v285：A股 / 港股的分时已改为腾讯优先（东财 trends2 挂了时仍能画），
-                 * 这里不再写死「东方财富」；具体哪条源给了数据，图例末尾有标注。 */
-                : ((a.grp === 'cn' || a.grp === 'cnstock' || a.grp === 'hkstock' || a.sess === 'hk') ? '腾讯 · 东财' : '东方财富'))))}${a.lag ? ' · 延' + Math.round(a.lag / 60) + '分' : ''}
+              ${a.unit && a.kind !== 'index' ? '· ' + esc(a.unit) + ' ' : ''}${a.lag ? '· 延' + Math.round(a.lag / 60) + '分' : ''}
             </div>
           </div>
           <div class="sh-px">
@@ -5092,11 +5154,15 @@
           </div>
         </div>
         <div class="sh-tabs">
-          <button data-m="min" class="on">分时</button>
-          <button data-m="d">日K</button>
-          <button data-m="w">周K</button>
-          <button data-m="m">月K</button>
-          <button data-m="ext">暗盘·链上</button>
+          <!-- v357：tab 放进可横向滚动的子容器，自选按钮留在行内固定右侧 -->
+          <div class="sh-tablist">
+            <button data-m="min" class="on">分时</button>
+            <button data-m="d">日K</button>
+            <button data-m="w">周K</button>
+            <button data-m="m">月K</button>
+            <button data-m="ext">暗盘·链上</button>
+          </div>
+          ${_showOwn ? '<button class="sh-own ' + (_ownOn ? 'on' : '') + '" id="shOwn" data-own="' + esc(key) + '" type="button" title="' + (_ownOn ? '从自选列表移除该品种' : '把该品种加入自选列表') + '">' + (_ownOn ? '删自选' : '加自选') + '</button>' : ''}
         </div>
         <div class="sh-chartbar" id="shChartBar" hidden>
           <button class="cb-ind" id="cbInd" title="主图指标：裸K线 / 三五法则">裸K ▾</button>
@@ -5124,6 +5190,30 @@
 
     sheet.querySelector('.sh-x').onclick = closeSheet;
     sheet.onclick = (e) => { if (e.target === sheet) closeSheet(); };
+    /* v355【详情页直接增减自选】不必再去搜索栏找该品种。
+     * 与 openPicker 的 .pk-i 点击完全同一套状态：S.watch（全部/列表）+ S.own（自选）。
+     * 预设品种本来就在 S.watch 里，加自选时只补 own，避免重复 push。
+     * 按钮在 tabs 下方的公共行，切分时/日K/周K/月K 都不重建，状态实时同步。 */
+    const ownBtn = sheet.querySelector('#shOwn');
+    if (ownBtn) {
+      ownBtn.onclick = () => {
+        const k = ownBtn.dataset.own;
+        if (!k) return;
+        const has = S.own.indexOf(k) >= 0;
+        if (has) {
+          S.watch = S.watch.filter(x => x !== k);
+          ownDel(k);
+        } else {
+          if (S.watch.indexOf(k) < 0) S.watch.push(k);
+          ownAdd(k);
+        }
+        store.set('mm_watch2', S.watch);
+        ownBtn.classList.toggle('on', !has);
+        ownBtn.textContent = has ? '加自选' : '删自选';   /* v358：去掉 ＋/－ 符号，省宽度给「暗盘·链上」 */
+        ownBtn.title = has ? '把该品种加入自选列表' : '从自选列表移除该品种';
+        renderMarket();
+      };
+    }
     /* v164：等比/对数 + 画图工具 */
     const indBtn = sheet.querySelector('#cbInd');
     if (indBtn) indBtn.onclick = () => openIndMenu();
@@ -5155,7 +5245,7 @@
      * 不用再去找左上角那个 ✕。判定口径见 bindTapClose 的注释。 */
     bindTapClose(sheet, '.sh-panel', closeSheet);
 
-    const tabs = sheet.querySelectorAll('.sh-tabs button');
+    const tabs = sheet.querySelectorAll('.sh-tabs button[data-m]');
     tabs.forEach(b => b.onclick = () => {
       tabs.forEach(x => x.classList.remove('on'));
       b.classList.add('on');
@@ -6358,7 +6448,9 @@
     }, 80);
     /* 关掉一层后重算：还有层 → 再压一条哨兵（下次继续逐层退）；
      * 没有层 → 不补，下一次返回键才轮到原生「再按一次退出 APP」。 */
-    setTimeout(() => { try { bkSync(); } catch (e) {} }, 0);
+    /* v362：等 WebView 把本次 goBack 事务落地再重算，避免与 popstate 期间的
+     * pushState 抢同一个历史栈（真机手势返回第二次直接退出 APP 的根因）。 */
+    setTimeout(() => { try { bkSync(); } catch (e) {} }, 80);
   });
   /* 任何点击 / Esc 之后重算哨兵（覆盖点 ×、点返回按钮、点空白关闭等所有入口） */
   d.addEventListener('click', () => setTimeout(() => { try { bkSync(); } catch (e) {} }, 0), true);
@@ -6400,7 +6492,22 @@
     const sheet = $('#sheet');
     sheet.classList.remove('on');
     sheet.style.zIndex = '';   // 还原内联 z-index，免得影响下次的层叠
+    /* v359【后退回搜索页】从搜索结果点进的详情，✕ / 点遮罩 / 手机返回键
+     * 都会走这里：重新打开搜索面板并恢复刚才的搜索词，而不是直接掉回行情列表。
+     * 再按一次返回键才轮到 bkTop() 关 picker，形成「详情 → 搜索 → 行情」两级。 */
+    const backToPicker = S.sheetFrom === 'picker';
+    S.sheetFrom = null;
     syncLock();
+    if (backToPicker) {
+      S._pkRestore = S._pkQuery || '';
+      try { openPicker(); } catch (e) {}
+      /* v362【返回键第二层 · 真机修正】v361 在这里同步 bkSync() 压哨兵，
+       * 但它发生在 WebView 的 goBack() → popstate 处理**期间**：此时同步
+       * pushState 会撞上尚未完成的返回事务，WebView 可能不把它算进后退栈，
+       * 于是第二次返回 canGoBack()=false，手势返回通道直接 finish() 退出 APP。
+       * 改为等本次返回事务落地后再压（80ms），与 popstate 末尾的重算配合。 */
+      setTimeout(() => { try { bkSync(); } catch (e) {} }, 80);
+    }
   }
 
   /* ---------------- 真实快讯接入 ---------------- */
@@ -8171,9 +8278,11 @@
       if (e.key === 'Escape') {
         if (LINK.on) { closeLink(); return; }
         closeNews();
+        /* v359：Esc 同样遵守「详情 → 搜索页」；非搜索来源才把 picker 一起关掉 */
+        const backToPicker = S.sheetFrom === 'picker';
         closeSheet();
         $('#sModal').classList.remove('on');
-        $('#picker').classList.remove('on');
+        if (!backToPicker) $('#picker').classList.remove('on');
       }
     });
   }
@@ -8615,8 +8724,11 @@
      * 所以这里退回温和轮询：25 秒、按 TTL 自然过期、不强制全量。
      * 既把报价从 120 秒提到 25 秒，又不额外制造请求压力。 */
     setInterval(() => {
-      if (S.tab !== 'market' || document.hidden) return;
-      QuoteHub.refresh(mktCatKeys().filter(k => U.get(k)));
+      if (document.hidden) return;
+      /* v380：矩阵（radar）tab 也刷报价 —— 原来只在行情页刷，矩阵页报价缓存
+       * 过期/缺失 → 卡片涨跌幅用 bars 旧数据，与行情对不上（用户实测）。 */
+      if (S.tab === 'market') QuoteHub.refresh(mktCatKeys().filter(k => U.get(k)));
+      else if (S.tab === 'radar') QuoteHub.refresh((U.RADAR || []).map(x => x.k).filter(k => U.get(k)));
     }, 25000);
     /* v284：报价停止更新时，「延迟」标记要能自动亮起来 —— 只重画缓存，不发请求 */
     setInterval(() => {
@@ -8701,14 +8813,16 @@
         setTimeout(checkUpd, 8000);
         /* 新 SW 接管后自动刷一次（只刷一次，避免死循环）。
          * 首次安装时 controllerchange 也会触发，此时页面本来就是最新版，
-         * 靠 hadController 把它排除掉。 */
+         * 靠 hadController 把它排除掉。
+         * v365：去掉 mm_sw_pending 时序条件 —— 真实事故：reg.waiting 的存在
+         * 与 controllerchange 之间是竞态（checkUpd 恰好没赶上 waiting 窗口
+         * 就永远不 reload），用户手机因此连卡 v361/v362 三轮「改了还是有」。
+         * 新 SW activate 必然触发一次 controllerchange，reload 后新页面的
+         * controller 就是新 SW，不会再触发 —— 无死循环。 */
         const hadController = !!navigator.serviceWorker.controller;
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!hadController) return;
-          if (sessionStorage.getItem('mm_sw_pending')) {
-            sessionStorage.removeItem('mm_sw_pending');
-            location.reload();
-          }
+          location.reload();
         });
       } catch (e) {}
     }
@@ -8785,6 +8899,12 @@
     });
   }
 
-  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', () => { boot(); initEffectBar(); });
-  else { boot(); initEffectBar(); }
+  const _start = () => {
+    boot(); initEffectBar();
+    /* v358：启动 1.2s 后后台预热 VIX 的 CNBC 报价 + 1D 分钟线（仅 2 个请求，
+     * 与东财无关、不影响行情风控）；点进 VIX 详情时直接命中缓存，不再等冷启动。 */
+    setTimeout(() => { try { w.API && w.API.warmVix && w.API.warmVix(); } catch (e) {} }, 1200);
+  };
+  if (d.readyState === 'loading') d.addEventListener('DOMContentLoaded', _start);
+  else _start();
 })(window, document);

@@ -1186,6 +1186,17 @@ body.light .run-tag.exp{color:#b4530c;background:#fff3e6;border-color:rgba(180,8
 .pk-i i{font-style:normal;font-size:10px;color:var(--tx3)}
 .pk-i.on{background:rgba(79,157,255,.1)}
 .pk-i.on i{color:var(--accent)}
+/* v359：搜索条最右的 ＋ / − 圆形按钮，独立点击区只管增减自选；
+ * 点这一行别处仍然是进分时详情。选择器带 .pk-add 提高优先级，盖过 .pk-i.on i。 */
+.pk-i i.pk-add{
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;margin-left:8px;border-radius:50%;
+  font-size:16px;line-height:1;font-weight:600;
+  color:var(--accent-tx2);border:1px solid rgba(79,157,255,.45);
+  background:rgba(79,157,255,.10);transition:.16s;
+}
+.pk-i i.pk-add.on{color:var(--tx3);border-color:var(--line2);background:var(--hair)}
+.pk-i i.pk-add:active{transform:scale(.92)}
 
 /* ---------------- 设置 ---------------- */
 #setBody{padding:0 12px 24px;display:flex;flex-direction:column;gap:10px}
@@ -1315,13 +1326,21 @@ input[type=range]::-webkit-slider-thumb{
 .sh-exthead em.up{color:var(--up)}
 .sh-exthead em.down{color:var(--down)}
 .sh-tabs{
-  display:flex;gap:4px;padding:4px 12px 10px;position:sticky;top:56px;z-index:5;
+  display:flex;align-items:center;gap:4px;padding:4px 10px 10px;position:sticky;top:56px;z-index:5;
   background:linear-gradient(180deg,var(--panel),color-mix(in srgb,var(--panel) 92%,transparent));
-  overflow-x:auto;scrollbar-width:none;
 }
-.sh-tabs::-webkit-scrollbar{display:none}
-.sh-tabs button{flex:0 0 auto;font-size:12px;padding:5.5px 12px;border-radius:8px;color:var(--tx3);border:1px solid transparent;transition:.16s}
-.sh-tabs button.on{color:var(--accent-tx2);background:rgba(79,157,255,.14);border-color:rgba(79,157,255,.4)}
+/* v357：只有 tab 区域横向滚动；自选按钮不参与滚动，固定在这一行最右，
+ * 永远完整可见，也不会单独占一行（v356 把按钮塞进滚动区导致右侧被裁切）。
+ * v358：用户反馈「暗盘·链上」的「上」被吃掉 → 整体收紧 tab 内边距/行间距，
+ * 并去掉按钮里的 ＋ / － 符号，把省下来的宽度还给 tab，5 个 tab 全部完整显示。 */
+.sh-tablist{display:flex;gap:3px;flex:1 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
+.sh-tablist::-webkit-scrollbar{display:none}
+.sh-tablist button{flex:0 0 auto;font-size:12px;padding:5.5px 9px;border-radius:8px;color:var(--tx3);border:1px solid transparent;transition:.16s}
+.sh-tablist button.on{color:var(--accent-tx2);background:rgba(79,157,255,.14);border-color:rgba(79,157,255,.4)}
+/* 加自选 = 主色描边，删自选 = 灰底弱化，减少误触。全屏时随 .sh-tabs 一起隐藏。 */
+.sh-tabs .sh-own{flex:0 0 auto;font-size:11px;font-weight:600;letter-spacing:0;padding:5px 9px;border-radius:8px;color:var(--accent-tx2);background:rgba(79,157,255,.12);border:1px solid rgba(79,157,255,.45);transition:.16s}
+.sh-tabs .sh-own:active{transform:scale(.97)}
+.sh-tabs .sh-own.on{font-weight:500;color:var(--tx3);background:var(--hair);border-color:var(--line2)}
 /* v205：开高低收那行加了「额/量」，收紧间距让所有字段在窄屏也能一行排下 */
 .sh-legend{display:flex;flex-wrap:wrap;gap:5px 7px;padding:0 12px 6px;font-size:9.5px;color:var(--tx3);min-height:16px}
 .lg-item b{color:var(--tx);font-weight:600;margin-left:3px}

@@ -18,7 +18,8 @@
     em: '东财', tencent: '腾讯', sina: '新浪', cboe: 'CBOE', cnbc: 'CNBC',
     yahoo: 'Yahoo', binance: '币安', nasdaq: '纳斯达克', naver: 'Naver',
     mixed: '多源合并', tx: '腾讯外盘', tv: 'TradingView', 'jp-pts': '日股',
-    twse: '台湾证交所', treasury: '美国财政部', sinaopt: '新浪期权', cboeopt: 'CBOE期权', okx: 'OKX'
+    twse: '台湾证交所', treasury: '美国财政部', sinaopt: '新浪期权', cboeopt: 'CBOE期权', okx: 'OKX',
+    ths: '同花顺'
   });
 
   // 图表配色跟随深浅主题（每次建图时重新取，切主题后重绘即可生效）
@@ -348,8 +349,36 @@
         const rolling = (sr === 'cmdty' || sr === 'fx' || sr === 'rate' ||
                          sr === 'crypto' || sr === 'vix') ||
                         !!(cr && (cr.cme || cr.always || cr.vix24));
-        if (rolling && !(ar && ar.minSpan) && pts && pts.length > 2) {
-          return { want: pts.length, n: pts.length };
+        /* v360：VIX 的 minSpan:780 是按「03:15–16:15 ET」估的，但 CNBC 1D
+         * 实测长度每天都不同（674 / 703 根）—— 固定 780 格会把线尾钉在半路。
+         * v376：阈值 400 → 200。实测 2026-11-16 凌晨 CNBC 1D 对**上一交易日只回
+         * 后半段**（VIX 283 根 / 282 分钟，首点 ~11:33 ET），400 根的门槛永远达不到
+         * → 轴按 780 格铺、右侧留一大块（用户截图 19.30 那条线只画到 05:15 就停）。
+         * 降到 200：收盘后（数据已过半场）按实际点数铺满；盘中刚开盘（<200 根）
+         * 仍走 780 格，保留「走到哪了」的进度留白。 */
+        if (rolling && pts && pts.length > 2) {
+          /* v377：cmdty（CME 商品，23 小时循环、北京 07:00 开 → 06:00 收）用户口径：
+           * 固定「最左=开盘、最右=收盘」一整场，盘中不做进度留白、不允许拖动。
+           * fixed 标记由 _pinMin 处理（to=want 并禁拖动），want=完整场次分钟数。 */
+          if (sr === 'cmdty') {
+            /* total 在后面的 try 块才算，这里分支提前 return 必须自己算
+             * （v377 首版引用了未赋值的 total，want=0 → 轴缩到 2 分钟，实测抓到） */
+            const full = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sr) : 1380;
+            return { want: full, n: pts.length, fixed: true };
+          }
+          if (!(ar && ar.minSpan)) return { want: pts.length, n: pts.length };
+          /* 有 minSpan 的（VIX）：两个条件任一成立就按实际点数铺满 ——
+           * ① 点数 >= 400（v360 的原有判据，完整一场）；
+           * ② **末点已到收盘位**（16:15 ET = 北京 05:15 冬令时 / 04:15 夏令时，
+           *    取 240~340 分钟窗口）。实测 CNBC 1D 现在只回后半段（283 根 / 282 分钟），
+           *    400 永远达不到；但末点就在 05:15，说明「这一场已经走完」，
+           *    再按 780 格铺就会右侧留一大块（用户截图 19.30 那条线只画到 05:15）。
+           * 盘中（末点 17:00–04:00 之间）仍走 780 格，保留进度留白。 */
+          const lt = pts[pts.length - 1].time;
+          const dm = new Date(lt * 1000);
+          const lastMin = dm.getUTCHours() * 60 + dm.getUTCMinutes();
+          const atClose = lastMin >= 240 && lastMin <= 340;
+          if (pts.length >= 400 || atClose) return { want: pts.length, n: pts.length };
         }
       } catch (e) { /* 落回原逻辑 */ }
       try {
@@ -388,7 +417,30 @@
       }
       let best = 0;
       for (const k in c) if (c[k] > best) { best = c[k]; gran = +k; }
-      return { want: Math.round(total / gran), n: pts.length };
+      /* v363【收盘后完整一场 → 钉到线尾】台股 Yahoo 5m 实测 11-13 有 1 个
+       * close:null 被 yahooBars 丢掉（55 → 54 根），而 fullMinutes('tw')/gran
+       * 仍算出 want=54；_pinMin 的 to 公式（min(want, max(n+8, 2.2n))）在数据
+       * 已覆盖整场时也没把右边界钉到最后一根，用户看到「分时没到最右边」。
+       * 这里用首尾时间跨度判定：>= 官方时段 90% 视为收盘后的完整一场，
+       * 交给 _pinMin 把右边界钉到 n-1；盘中跨度不足时保持原逻辑，
+       * 右侧留白继续表示「今天走到哪了」。 */
+      const spanMin = (pts[pts.length - 1].time - pts[0].time) / 60;
+      /* v375：0.9 → 0.6。实测美股指数在**没有东财**的网络下，任何可用源都给不出
+       * 完整一场：CNBC 1D 只回后半段（267/390=68%）、Yahoo 5m/5d 跨日裁切后 300 分钟
+       * （77%）、新浪 null、同花顺不覆盖。按 90% 判定就永远不铺满，
+       * 用户看到「右侧缺一大块」。放宽到 60%：覆盖过半即按实际数据铺满
+       * （轴标签仍是真实时间，不会把 00:34 冒充成 22:30）；
+       * 盘中早段（覆盖不足 60%）仍保留时间进度留白。 */
+      /* v383【用户四张截图：台股/日经/韩股盘中贴右】0.6 占比误伤亚太盘中——
+       * 台股 12:00 已走 67%≥60% 被当「收盘」fitContent 铺满，日经/韩股同理。
+       * covered 语义 = 「本场已走完」，收盘判定交给 Session：
+       *   盘中（regular/pre/post）永不 covered → 保留进度留白（to=min(want,2.2n)）；
+       *   收盘后（closed）才 fitContent 铺满 —— 美股指数无东财缺段（span 68%）
+       *   的场景在收盘后 judge='closed'，仍 covered ✓（v375 目的保留）；
+       *   session 未定义的品种维持原比例判定。 */
+      const _phase = (w.Session && w.Session.state) ? (w.Session.state(key) || {}).phase : null;
+      const covered = total > 0 && spanMin >= total * 0.6 && (!_phase || _phase === 'closed');
+      return { want: Math.round(total / gran), n: pts.length, covered: covered };
     }
 
     /* 把分时可视范围钉到「开盘 → 当前应有位置」。
@@ -408,7 +460,34 @@
       }
       const m = this._minBars(pts, key);
       if (!m) return;
-      const to = Math.min(m.want, Math.max(m.n + 8, Math.round(m.n * 2.2)));
+      /* v377：cmdty 类固定完整一场（最左开盘→最右收盘）且禁止拖动/缩放，
+       * 防止用户把轴拖离场次（用户截图：商品分时可以被拖到任意位置）。 */
+      try {
+        if (m.fixed) {
+          this.chart.timeScale().applyOptions({ handleScroll: false, handleScale: false });
+          if (this.volChart) this.volChart.timeScale().applyOptions({ handleScroll: false, handleScale: false });
+        }
+      } catch (eF) { }
+      /* v363：收盘后完整一场（covered）右边界直接钉到最后一根真实数据,
+       * 线尾贴右边、不留白；盘中仍按 want / 2.2n 保留时间进度留白。
+       * rolling 分支（24×5 / 7×24 / VIX）提前 return，没有 covered，走原逻辑。
+       * v365：covered 改用 fitContent() —— v232 起 series 不含 whitespace 点，
+       * 数据首尾就是「开盘 → 收盘」，fitContent 精确铺满、绝对贴边；
+       * setVisibleLogicalRange 的格数换算在真机 barSpacing 取整下
+       * 仍可能残留几格空白（用户真机截图复现，本地无头却贴边）。 */
+      if (m.covered) {
+        /* keepUserZoom=true（8 秒活线追加）且用户自己缩放过时不抢视野 */
+        if (!(keepUserZoom && this._pinTo != null)) {
+          try {
+            this.chart.timeScale().fitContent();
+            if (this.volChart) this.volChart.timeScale().fitContent();
+          } catch (e) {}
+          this._pinTo = m.n - 1;
+        }
+        return;
+      }
+      const to = m.fixed ? m.want
+        : Math.min(m.want, Math.max(m.n + 8, Math.round(m.n * 2.2)));
       try {
         if (keepUserZoom && this._pinTo != null) {
           const r = this.chart.timeScale().getVisibleLogicalRange();
@@ -1171,9 +1250,19 @@
         const cls = chg >= 0 ? 'up' : 'down';
         if (isMin) {
           const d0 = new Date(p.time * 1000);
-          const tm = String(d0.getUTCHours()).padStart(2, '0') + ':' + String(d0.getUTCMinutes()).padStart(2, '0');
+          const hhmm = String(d0.getUTCHours()).padStart(2, '0') + ':' + String(d0.getUTCMinutes()).padStart(2, '0');
+          /* v360：休市时看的是上一交易日完整曲线，末点时间（如 09:20）容易被
+           * 误读成「今天 9:20」或「A 股某个时点」。不是今天的数据就带上日期 +
+           * 悬停说明；时间值本身不做任何伪造或平移。 */
+          const nBj = new Date(Date.now() + 8 * 3600e3);
+          const sameDay = d0.getUTCFullYear() === nBj.getUTCFullYear()
+            && d0.getUTCMonth() === nBj.getUTCMonth()
+            && d0.getUTCDate() === nBj.getUTCDate();
+          const tm = sameDay ? hhmm
+            : String(d0.getUTCMonth() + 1).padStart(2, '0') + '-'
+              + String(d0.getUTCDate()).padStart(2, '0') + ' ' + hhmm;
           this.legendEl.innerHTML =
-            `<span class="lg-item">${tm}</span>` +
+            `<span class="lg-item"${sameDay ? '' : ' title="上一交易日最后一个数据点的时间（北京时间）"'}>${tm}</span>` +
             `<span class="lg-item">价 <b class="${cls}">${priceFmt(p.close)}</b></span>` +
             (p.avg ? `<span class="lg-item">均 <b>${priceFmt(p.avg)}</b></span>` : '') +
             segChip(p) +

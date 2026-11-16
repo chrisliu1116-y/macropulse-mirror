@@ -31,7 +31,7 @@
     ['指数', [['SPX', null], ['IXIC', null], ['HSI', null]]],
     ['加密', [['BTC', '比特币'], ['SOL', null]]],
     ['外汇', [['USDCNH', null], ['USDJPY', null]]],
-    ['美债', [['US10Y', null], ['US30Y', null], ['US2Y', null]]],
+    ['美债', [['US10Y', null], ['US30Y', null]]],
     ['商品期货', [['WTI', '原油'], ['GOLD', '黄金'], ['NG', '天然气'], ['COPPER', null]]],
     ['股指期货', [['IF', null], ['NQ', null], ['A50', null]]],
     ['国债期货', [['TL', null], ['T', null], ['511260', null], ['511090', null]]],

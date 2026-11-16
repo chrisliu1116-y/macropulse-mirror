@@ -118,6 +118,23 @@
   const BAR_TTL = 30 * 60 * 1000;
   const JINA = 'https://r.jina.ai/';
 
+  /* v367【首屏请求风暴的真凶】2026-11-15 22:2x 用 playwright hook fetch 抓堆栈：
+   * `fetchRawBars ← rawBars ← profile`，异动看板 loadProfiles 用 Promise.all
+   * 对 U.RADAR 全列表 × 3 个窗口并发算筹码分布 → 同一秒发出 **84 个东财
+   * trends2（ndays=5）**。东财把这种爆发直接判成采集客户端并封 IP ——
+   * 这就是用户「换 IP 后什么都没做又被封」的真因：换任何出口，打开一次 APP
+   * 就再爆发一次。修法两件：① 同一个 key 的并发请求合并成一次（3 个窗口
+   * 本来就该共用一次原始分钟线）；② 全局串行槽位 ≥320ms。
+   * 84 → 28 个请求、摊到约 7 秒，首屏不再形成采集特征。 */
+  const BAR_INFLIGHT = new Map();
+  let _vpChain = Promise.resolve();
+  /* v369：与 api.js 共用一个全局闸门（window.__mpEmGate），否则两个独立队列
+   * 各自 150ms 计时会叠加成 50+/s 的峰值。 */
+  const GATE = (w.__mpEmGate = w.__mpEmGate || { t: 0 });
+  /* v370：用户要求恢复原并发 → 不再节流/让路，只保留 in-flight 合并
+   * （同 key 的 3 个窗口共用一次原始分钟线，这是纯优化不减速）。 */
+  function vpSlot() { return Promise.resolve(); }
+
   function groupByDay(bars) {
     const days = new Map();
     for (const b of bars) {
@@ -186,31 +203,74 @@
       };
     }
 
-    const url = `https://push2his.eastmoney.com/api/qt/stock/trends2/get`
-      + `?secid=${encodeURIComponent(a.secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8`
-      + `&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=5&iscr=0&iscca=0`;
-    const r = await fetch(url, { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    const rows = (d && d.data && d.data.trends) || [];
-    const bars = [];
-    for (const s of rows) {
-      const p = s.split(',');
-      if (p.length < 6) continue;
-      const t = new Date(p[0].replace(' ', 'T')).getTime();
-      const close = +p[2], high = +p[3], low = +p[4];
-      if (!isFinite(t) || !(close > 0) || !(high > 0) || !(low > 0)) continue;
-      bars.push({ t, close, high, low });
+    /* v380【矩阵多源化·用户实测矩阵全黑根因】矩阵取数原为**东财单源直连**，
+     * 无任何兜底 —— 东财被限/断网时股指卡全 `--`（行情页有数是因为行情链
+     * 有腾讯/同花顺/新浪多源兜底，矩阵没接这条链）。现在东财失败自动落
+     * `API.intraday`（v378 多源链）构造**当日** bars：
+     *   · 30 分振幅/当日涨跌幅照算（矩阵不再黑、异动不失效）；
+     *   · 历史 5 日分布退化为当日（VolBank 阈值有静态先验加权兜底）；
+     *   · VIX（cboe 无 secid，原「永远 no secid」）也由此路覆盖（CNBC）。
+     * 与行情层同源同链，矩阵与行情显示自然同步。 */
+    const apiFallback = async () => {
+      if (!(w.API && w.API.intraday)) throw new Error('no api');
+      const dres = await w.API.intraday(key);
+      const pts = (dres && dres.points) || [];
+      if (pts.length < 20) throw new Error('thin');
+      return {
+        bars: pts.map(p => ({ t: p.time * 1000, close: p.close,
+          high: p.high || p.close, low: p.low || p.close })),
+        step: 1,
+        fb: true          /* v381：兜底来源标记 → rawBars 用短缓存（见下） */
+      };
+    };
+    if (a && a.secid) {
+      try {
+        const url = `https://push2his.eastmoney.com/api/qt/stock/trends2/get`
+          + `?secid=${encodeURIComponent(a.secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8`
+          + `&fields2=f51,f52,f53,f54,f55,f56,f57,f58&ndays=5&iscr=0&iscca=0`;
+        await vpSlot();                     // v367：全局串行，禁止首屏爆发
+        const r = await fetch(url, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const rows = (d && d.data && d.data.trends) || [];
+        const bars = [];
+        for (const s of rows) {
+          const p = s.split(',');
+          if (p.length < 6) continue;
+          const t = new Date(p[0].replace(' ', 'T')).getTime();
+          const close = +p[2], high = +p[3], low = +p[4];
+          if (!isFinite(t) || !(close > 0) || !(high > 0) || !(low > 0)) continue;
+          bars.push({ t, close, high, low });
+        }
+        if (bars.length >= 20) return { bars, step: 1 };
+        throw new Error('em thin');
+      } catch (eEm) { /* 东财失败 → 多源兜底 */ }
     }
-    return { bars, step: 1 };
+    return await apiFallback();
   }
 
   async function rawBars(key, fresh) {
     const hit = BAR_CACHE.get(key);
     if (!fresh && hit && Date.now() - hit.t < BAR_TTL) return hit;
-    const v = await fetchRawBars(key);
-    BAR_CACHE.set(key, { t: Date.now(), bars: v.bars, step: v.step });
-    return BAR_CACHE.get(key);
+    /* v367：同 key 并发合并（3 个窗口共用一次原始分钟线，不再各打一次） */
+    if (!fresh) {
+      const inf = BAR_INFLIGHT.get(key);
+      if (inf) return inf;
+    }
+    const pr = (async () => {
+      try {
+        const v = await fetchRawBars(key);
+        /* v381【用户口径：矩阵不能走长缓存】兜底来源（当日多源）只缓存 5 分钟，
+         * 东财 5 日完整数据维持 30 分钟 —— 异动阈值不至于拿着半小时前的旧数据。 */
+        const ttl = v.fb ? 5 * 60 * 1000 : BAR_TTL;
+        BAR_CACHE.set(key, { t: Date.now() - (BAR_TTL - ttl), bars: v.bars, step: v.step });
+        return BAR_CACHE.get(key);
+      } finally {
+        BAR_INFLIGHT.delete(key);
+      }
+    })();
+    if (!fresh) BAR_INFLIGHT.set(key, pr);
+    return pr;
   }
 
   /* ============================================================

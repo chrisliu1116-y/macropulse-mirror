@@ -237,7 +237,10 @@
     'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
     'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
     'US5Y': { name: '美债5年期收益率', short: '美债5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' , cnbc: 'US5Y' },
-    'US2Y': { name: '美债2年期收益率', short: '美债2Y', src: 'cnbc', cnbc: 'US2Y', secid: '133.US2Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
+    /* v357【US2Y 已整只剔除】确认与 IP 封禁无关：报价 CNBC 可通，但 2 年期
+     * 分钟序列客观不存在（东财 133.US2Y 断连/空体、CNBC bars 8 变体全 404、
+     * Yahoo ^IRX 是 13 周国库券不是 2 年期），且拒绝用 2YY=F 期货推算冒充。
+     * 日 K 的财政部曲线虽有 2 Yr 列，但点进去分时永远失败，留着只会误导。 */
     /* v310【中债真指数】CNBC restQuote 实测 CN10Y 返回 China 10 Year Bond；
      * 与 511260/511090 国债 ETF 并存，指数本身不冒充、ETF 作实时参考。 */
     'CN10Y': { name: '中债10年期国债收益率', short: '中债10Y', src: 'cnbc', cnbc: 'CN10Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' },
@@ -394,7 +397,7 @@
     'AX', 'HS300', 'SZ', 'CYB', 'SZ50', 'KC50',
     'HSI', 'HSTECH', 'KS11', 'N225', 'TWII',
     'SPX', 'NDX', 'SOX', 'DJI', 'VIX',
-    'US10Y', 'US30Y',
+    'US5Y', 'US10Y', 'US30Y',
     'DXY', 'USDCNH', 'USDJPY', 'EURUSD',
     'BRENT', 'WTI', 'NG',
     'GOLD', 'SILVER',

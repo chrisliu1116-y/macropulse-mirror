@@ -9,11 +9,15 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v352';
+const CACHE = 'macro-pulse-v385';
 /* VER 从 CACHE 名推导，升版只改上面一行即可；
  * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
 const VER = CACHE.replace('macro-pulse-v', '');
-const NET_TIMEOUT = 1200;
+/* v365：1200 → 4000。真实事故：手机网络到主站（CF 托管）TTFB 经常 >1.2s，
+ * netFirst 频繁超时回退到**缓存的旧 index.html** —— 用户连续几个版本
+ * 「改了还是有」（截图特征停在 v361/v362，线上早已 v363/v364）。
+ * 多等 2.8s 换「打开就是新版」，弱网首屏慢一点可接受。 */
+const NET_TIMEOUT = 4000;
 
 const CORE = [
   './',
