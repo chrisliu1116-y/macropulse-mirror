@@ -1379,6 +1379,26 @@
       ctx.fillStyle = light ? '#8a93a5' : '#8b95a8';
       var zt = '×2.0';
       ctx.fillText(zt, lx + W - 7 - ctx.measureText(zt).width, ly + 13);
+      /* v405【临时诊断】放大镜内部状态两行小字，定位真机错位（用户截图回传后移除）。
+       * p=放大镜价格  r=触点重算价  ok=中心K线是否=端点(1是/0否)  i=拖的端点索引
+       * y=y0/xy.y  x=x0/xy.x  d=K线数据条数  L=左轴宽。 */
+      try {
+        var _p2 = null, _ok = '?';
+        try { _p2 = this.series.coordinateToPrice(xy.y); } catch (e) {}
+        try {
+          var _rc = Math.round(this.chart.timeScale().coordinateToLogical(x0));
+          _ok = (this._loupeData && this._loupeData[_rc] && this._loupeData[_rc].time === pt.t) ? 1 : 0;
+        } catch (e) {}
+        var _d1 = 'p' + Math.round(pt.p) + ' r' + (_p2 == null ? '?' : Math.round(_p2)) + ' ok' + _ok + ' i' + (this.drag ? this.drag.i : '-');
+        var _d2 = 'y' + Math.round(y0) + '/' + Math.round(xy.y) + ' x' + Math.round(x0) + '/' + Math.round(xy.x) + ' d' + (this._loupeData ? this._loupeData.length : 0) + ' L' + paneL;
+        ctx.font = '7.5px monospace';
+        var _bw = Math.max(ctx.measureText(_d1).width, ctx.measureText(_d2).width) + 5;
+        ctx.fillStyle = 'rgba(0,0,0,0.82)';
+        ctx.fillRect(lx + 2, ly + H - 22, _bw, 21);
+        ctx.fillStyle = '#ff0';
+        ctx.fillText(_d1, lx + 4, ly + H - 13);
+        ctx.fillText(_d2, lx + 4, ly + H - 4);
+      } catch (e) {}
       ctx.restore();
     },
 
