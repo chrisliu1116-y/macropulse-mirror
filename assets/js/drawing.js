@@ -1243,23 +1243,37 @@
 
     _loupe: function (ctx, pt, xy, plotR) {
       if (!pt || !xy) return;
-      var avail = Math.max(80, (plotR || this._w) - 4);
-      var W = Math.min(148, Math.max(100, avail * 0.34));
+      /* v404【根因修复】真实页面里 DrawLayer.canvas 挂在 .pane-main 上，而 .pane-main
+       * 用 CSS `left: calc(-1 * var(--paneL))` 向左外扩——canvas 左边缘在可见区左边约
+       * 54px（真机价格数字更宽，实测更大）。原来窗口按 canvas 坐标 0..plotR 定位，
+       * lx 最小=6 → 屏幕位置 = -paneL+6 < 0 → **整个放大镜被 host 的 overflow:hidden
+       * 裁在左边缘**（用户截图：窗口只剩右半、价格标签被截成 84/45、×2.0 却完整）。
+       * 修法：窗口只在【可见绘图区】[paneL, plotR] 内选边，左右判断也用可见区中点。 */
+      var paneL = 0;
+      try { paneL = Math.round(this.chart.priceScale('left').width() || 0); } catch (e) { paneL = 0; }
+      if (!isFinite(paneL) || paneL < 0) paneL = 0;
+      var visL = paneL, visR = Math.max(paneL + 80, (plotR || this._w) - 2);
+      var visW = visR - visL;
+      var W = Math.min(148, Math.max(100, visW * 0.34));
       var H = Math.min(108, Math.max(74, this._h * 0.32));
       var Z = 2.0;
-      var lx = (xy.x >= avail / 2) ? 6 : (avail - W - 6);
+      var rightSide = (xy.x >= (visL + visR) / 2);
+      var lx = rightSide ? (visL + 6) : (visR - W - 6);
       var ly = (xy.y >= this._h / 2) ? 6 : (this._h - H - 6);
-      lx = Math.max(2, Math.min(avail - W - 2, lx));
+      lx = Math.max(visL + 2, Math.min(visR - W - 2, lx));
       ly = Math.max(2, Math.min(this._h - H - 2, ly));
-      this._loupeRect = { x: lx, y: ly, w: W, h: H, side: (xy.x >= avail / 2) ? 'left' : 'right' };
+      this._loupeRect = { x: lx, y: ly, w: W, h: H, side: rightSide ? 'left' : 'right' };
       var light = document.body.classList.contains('light');
       var cx = lx + W / 2, cy = ly + H / 2;
       var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
       if (y0 == null) y0 = xy.y;
       if (x0 == null) x0 = xy.x;
-      /* v402：源区域的垂直中心。默认就是触点位置；若触点远离 K 线（画趋势线时手落在
-       * 空白区），下面会把它夹进可视 K 线价格区间，保证放大镜里一定能看到 K 线。 */
-      var cySrc = xy.y;
+      /* v404【根因修复②】放大镜的源中心必须是【端点的真实坐标】(x0,y0)，不能用触点 xy。
+       * 拖动已有线端点时，xy 是手指位置，一旦它与端点数据坐标有偏差（坐标系/捕获抖动），
+       * 放大的就是旁边那根 K 线 —— 用户："放大镜放大的不是我端点拖到的位置"。
+       * 统一用端点真实坐标后：端点 X(pt.t)=cx、Y(pt.p)=cy 落在窗口正中，红点也在正中，
+       * K 线矢量与画线层(像素抓取)共用同一源中心，三者必然对齐。 */
+      var cySrc = y0;
       var self = this;
       var X = function (t) { var v = self._xOf(t); return (v == null) ? null : cx + (v - x0) * Z; };
       var Y = function (p) { var v = self._yOf(p); return (v == null) ? null : cy + (v - cySrc) * Z; };
@@ -1284,11 +1298,11 @@
        *    跳开右侧价格轴（宽约 58）与底部时间轴（高约 26）。
        *    【坑】主 pane canvas 的 CSS 宽 = host 宽 - 价格轴宽（例 630→572），
        *    按 host 宽去匹配会把 K 线层全部漏掉，放大镜里就只剩十字线。 */
-      var sx = xy.x - W / (2 * Z), sw = W / Z, sh = H / Z;
-      /* v403【撤销 clamp】v402 曾把源区域中心夹到 K 线区间，结果是"放大镜里能看到 K 线，
-       * 但不是端点拖到的位置"（用户原话）。放大镜的第一要义是**准确**：中心就是触点，
-       * 触点周围有 K 线就显示 K 线、没有就显示空白+网格+线（v190 原本的行为）。
-       * 绝不能为了"保证有 K 线"而把中心拽离端点。 */
+      /* v404：源矩形中心 = 端点真实坐标 (x0,y0)，与下方矢量 K 线的 X/Y 变换同一基准。
+       * 原用 xy.x / cySrc(=触点 xy.y)，端点与触点一旦有偏差就会放大到旁边的位置。 */
+      var sx = x0 - W / (2 * Z), sw = W / Z, sh = H / Z;
+      /* v403【撤销 clamp】放大镜第一要义是**准确**：中心就是端点，绝不为"保证有 K 线"
+       * 把中心拽离端点（v402 的教训）。 */
       var sy = cySrc - H / (2 * Z);
       /* v400【放大镜拖动卡顿】v190/v192 的放大镜在这里每帧做 querySelectorAll
        * + host 一次 + 每个 canvas 一次 getBoundingClientRect —— 正是 v225 修掉过的
