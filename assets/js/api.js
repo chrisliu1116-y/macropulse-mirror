@@ -3325,7 +3325,24 @@
         timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'
       });
       const days = pts.map(p => fmt.format(new Date(p.time * 1000 - 8 * 3600e3)));
-      const latest = days[days.length - 1];
+      let latest = days[days.length - 1];
+      /* v394【常规分时看「上一个完整交易日」】盘前时段"今天"只有盘前几根，
+       * 用户口径：没点「盘前分时」时，常规分时该显示上一个交易日的完整分时
+       * （已收盘、满屏），而不是当天盘前的碎线（截图：19:48 显示 18:00–19:30）。
+       * 判据：最新一天**最后一点**的交易所当地时刻早于常规开盘（segs[0][0]，
+       * 美股 570=09:30）→ 当天常规还没开 → 回退到前一个交易日。
+       * 24h 品种（fx/rate，segs[0][0]=0）永不满足，不受影响。 */
+      try {
+        const hm = new Intl.DateTimeFormat('en-GB', {
+          timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false
+        });
+        const lastT = pts[pts.length - 1].time;
+        const s = hm.format(new Date(lastT * 1000 - 8 * 3600e3));
+        const mm = (+s.slice(0, 2)) * 60 + (+s.slice(3, 5));
+        const openMin = (cfg && cfg.segs && cfg.segs[0]) ? cfg.segs[0][0] : 570;
+        const uniq = days.filter((d, i) => i === 0 || d !== days[i - 1]);
+        if (mm < openMin && uniq.length >= 2) latest = uniq[uniq.length - 2];
+      } catch (e2) { /* 判断失败就保持最新一天 */ }
       const out = pts.filter((p, i) => days[i] === latest);
       return out.length >= 5 ? out : pts;
     } catch (e) { return pts; }

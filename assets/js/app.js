@@ -5316,7 +5316,12 @@
     if (phase === 'regular') return false;
     if (phase === 'pre' || phase === 'post') {
       if (S.minExt === true || S.minExt === false) return S.minExt;
-      return true;
+      /* v394【用户口径纠正】盘前/盘后不再自动接延展段。原 v296 写「没手动选过就
+       * 自动接上（和富途一致）」，结果用户没点「盘前分时」按钮，常规分时里却混进了
+       * 当天盘前走势（截图：19:48 显示 18:00–19:30 盘前曲线）——而用户要的是
+       * 「常规分时 = 上一个完整交易日、已收盘、满屏」。现在默认 false（只画常规段），
+       * 想看盘前/盘后必须手动点按钮。 */
+      return false;
     }
     return false;
   }

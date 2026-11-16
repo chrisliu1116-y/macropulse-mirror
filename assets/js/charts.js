@@ -463,7 +463,15 @@
        *   的场景在收盘后 judge='closed'，仍 covered ✓（v375 目的保留）；
        *   session 未定义的品种维持原比例判定。 */
       const _phase = (w.Session && w.Session.state) ? (w.Session.state(key) || {}).phase : null;
-      const covered = total > 0 && spanMin >= total * 0.6 && (!_phase || _phase === 'closed');
+      /* v394：covered 分「看哪一段」——
+       *   · 收盘后(closed)：一场走完 → 铺满；
+       *   · 盘前/盘后但**在看常规分时**（!showExt，数据已是上一个完整交易日）→ 铺满；
+       *   · 盘前/盘后且在**看延展段**（showExt，该段还在进行）→ 不铺满，保留进度留白；
+       *   · 盘中(regular) → 永不 covered（v383 口径不变）。 */
+      const _extView = !!this.showExt;
+      const covered = total > 0 && spanMin >= total * 0.6 &&
+        (!_phase || _phase === 'closed' ||
+         ((_phase === 'post' || _phase === 'pre') && !_extView));
       /* v386【用户口径：轴恒定「开盘→收盘」，不随轮次/进度漂移】v383 后盘中走
        * to=min(want, 2.2n)——2.2n < want 时轴右边界随时间**移动**（曲线相对轴
        * 位置恒定 45%），换一个交易日/轮次观感又变成「跑向最右」。现在所有有
