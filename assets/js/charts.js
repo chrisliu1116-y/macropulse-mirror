@@ -366,6 +366,15 @@
             const full = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sr) : 1380;
             return { want: full, n: pts.length, fixed: true };
           }
+          /* v397【美债也必须固定开收盘】用户口径：10Y / 5Y / 30Y 的分时不能按实际
+           * 点数铺满，必须「最左=开盘、最右=收盘」，且**按品种固定、与数据源无关**。
+           * 美债是 CME 23 小时场次（每日 17:00–18:00 ET 结算暂停，
+           * fullMinutes('rate')=1380），与 cmdty 完全同口径，直接用同一套 fixed 轴。
+           * 判定用 sr==='rate'（品种 session 属性），东财/CNBC 哪个源给数都一样。 */
+          if (sr === 'rate') {
+            const full = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sr) : 1380;
+            return { want: full, n: pts.length, fixed: true };
+          }
           /* v388【用户口径纠正：外汇分时轴要像缩略图一样「固定开收盘时段、
            * 线只走当前进度、右侧留白」，不是铺满全屏】。
            * 用户截图证据：缩略图（app.js sparkFullN）按 fullMinutes/gran 定全天格数，
