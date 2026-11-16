@@ -329,7 +329,8 @@
     'em', 'tencent', 'sina', 'cboe', 'cnbc', 'yahoo', 'binance',
     'nasdaq', 'naver', 'mixed', 'tx', 'tv', 'jp-pts', 'twse',
     /* v310：财政部官方日频收益率 / 新浪 ETF 期权 / CBOE 期权链 */
-    'treasury', 'sinaopt', 'cboeopt', 'okx', 'ths'
+    /* v398：cache=分时本地缓存兜底（实时源全挂时用，图例明确显示「缓存」不冒充实时） */
+    'treasury', 'sinaopt', 'cboeopt', 'okx', 'ths', 'cache'
   ]);
   function trusted(res) {
     if (!res || res.failed || res.synthetic) return false;
@@ -909,14 +910,14 @@
      * 台账：东财 clist 的 m:10（50/300/科创50 ETF 期权）与 m:8（IO/MO/HO 中金所
      * 股指期权）给出带 f13.f12 的官方 secid；经 synthSecid 注册后，报价 / 分时 /
      * 日 K 全部同源，日 K 更是唯一有效源（新浪官方恒 data:null）。
-     * 两条链并行竞速：东财 2.5s 内有结果就用东财，否则用新浪，避免串行白等。
+     * 两条链并行竞速：东财 1.2s 内有结果就用东财，否则用新浪，避免串行白等（v398 2.5s→1.2s 快速降级）。
      * 美股期权不走这里（usOptionChain 保持 CBOE + Yahoo）。 */
     const emTask = (async () => {
       const hit = OPT_MARKETS.filter(x => x.re.test(qs))[0];
       if (!hit) return [];
       const url = EM_CLIST + '?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f6&fs='
         + encodeURIComponent(hit.fs) + '&fields=f12,f13,f14,f2,f3,f6';
-      const txt = await fastText(url, 'https://quote.eastmoney.com/', 2500);
+      const txt = await fastText(url, 'https://quote.eastmoney.com/', 1200);
       const cut = String(txt || '').indexOf('{');
       if (cut < 0) return [];
       const d = JSON.parse(String(txt).slice(cut));
@@ -3305,11 +3306,11 @@
   }
 
   /* v308【K线不卡死】emHistJSON 会串行试 2 个东财域名 + 代理，最坏 27s；
-   * 给它 4 秒硬闸，超时立即进并行兜底，别让自检/页面白等。 */
+   * 给它 1.2 秒硬闸（v398 2.5s→1.2s），超时立即进并行兜底，别让自检/页面白等。 */
   function klineFast(p, ms) {
     return Promise.race([
       p,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('em kline slow')), ms || 2500))
+      new Promise((_, rej) => setTimeout(() => rej(new Error('em kline slow')), ms || 1200))
     ]);
   }
 
@@ -3360,13 +3361,13 @@
       /* v354【国内 ETF 期权日K：东财 10. 段优先，新浪并列/兜底】
        * 台账判决（v311）：新浪官方 getOptionDayline 等三个接口恒返回 data:null，
        * 只有东财 10. 段能拉出 20 根日 K。原来的「新浪先、东财兜底」顺序反了，
-       * 且本机东财可达后应第一时间命中。2.5s 硬闸，超时立刻落新浪，防白等。
+       * 且本机东财可达后应第一时间命中。1.2s 硬闸（v398），超时立刻落新浪，防白等。
        * 中金所股指期权 8. 段（由 cffexOptionChain 的 secid 经 synthSecid 注册为
        * src:'em'）走下方 emFirstKey 的 emKline 主源分支，同样是东财优先。 */
       if (a && a.src === 'sinaopt') {
         try {
           const num = String(a.opSina || key).replace(/^CON_OP_/, '');
-          const ep = await klineFast(emKline('10.' + num, 101, m, 1), 2500);
+          const ep = await klineFast(emKline('10.' + num, 101, m, 1), 1200);
           if (ep && ep.length >= 5) return finalize({ points: dedupe(ep), synthetic: false, src: 'em' });
         } catch (e) { /* 落新浪 */ }
         try {
@@ -3415,7 +3416,7 @@
           try {
             if (a.secid) {
               /* emKline 返回的是点数组（非 {points}），空包/不足由 emKline 自己抛错 */
-              const epts = await klineFast(emKline(a.secid, 101, m, 1), 2500);
+              const epts = await klineFast(emKline(a.secid, 101, m, 1), 1200);
               if (epts && epts.length >= 20) return finalize({ points: dedupe(toMode(epts, mode, m)), synthetic: false, src: 'em' });
             }
           } catch (eEmFx) { /* 东财挂/数据不足 → 新浪 */ }
@@ -3474,9 +3475,9 @@
         pts = shift(await bnKline(a.sym, BN_IV[mode] || '1d', m), 28800); // 币安是 UTC，统一成北京时区分量
       } else {
         const klt = mode === 'd' ? 101 : mode === 'w' ? 102 : 103;
-        pts = await klineFast(emKline(a.secid, klt, m, 1), 2500);
+        pts = await klineFast(emKline(a.secid, klt, m, 1), 1200);
         if (!klineValid(pts)) {
-          const raw = await klineFast(emKline(a.secid, klt, m, 0), 2500);
+          const raw = await klineFast(emKline(a.secid, klt, m, 0), 1200);
           if (raw.length && klineValid(raw)) pts = raw;
           else pts = pts.filter(p => p.close > 0 && p.low > 0);
         }
@@ -3995,7 +3996,7 @@
        * （TCP 连接超时而非秒断），串行链 东财2.5s→腾讯3.5s→同花顺2.5s→新浪2.5s→Yahoo6s
        * 最坏累积 ~17s/次 —— 每次点开详情页都是「一直加载中」。改为四个实时源
        * **同时发起、先到先用**（_firstSuccess）：东财仍带 2.5s 硬闸挡挂起，
-       * 腾讯/同花顺/新浪任一 0.3~1s 返回立即出图。全挂 → 落 Yahoo（第二波）。 */
+       * 腾讯/同花顺/新浪任一 0.3~1s 返回立即出图。全挂 → 落 Yahoo（第二波）。v398：东财硬闸 2.5s→1.2s。 */
       /* v384【后台预热不竞速·用户实测 WiFi/流量都不稳的根因】v382 的 4 源并发
        * 让首屏 86 缩略图预热变成 ~344 并发请求 —— 手机弱网直接被自己打爆，
        * 所有源集体超时（「有时候能出有时候出不来」「两网络都加载中」）。
@@ -4005,7 +4006,7 @@
         try {
           const et = await Promise.race([
             emTrend(a.secid, 1),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('em min timeout')), 2500))
+            new Promise((_, rej) => setTimeout(() => rej(new Error('em min timeout')), 1200))
           ]);
           let ep = (et && et.points) || [];
           if (ep.length > 15) {
@@ -4032,7 +4033,7 @@
       _racers.push((async () => {
         const et = await Promise.race([
           emTrend(a.secid, 1),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('em min timeout')), 2500))
+          new Promise((_, rej) => setTimeout(() => rej(new Error('em min timeout')), 1200))
         ]);
         let ep = (et && et.points) || [];
         if (ep.length > 15) {
@@ -4126,14 +4127,22 @@
         }
       }
       if (a && dk === 'cnbc') {
-        /* v310：用户指定的 CNBC bars 首选（本机 404 时快速落 Yahoo） */
+        /* v398【美债换源：CNBC charts/1D 替换 404 的 bars/1M/1D】
+         * 实测(2026-11-16)：旧接口 cnbcBars('US5Y','1M','1D') → ts-api
+         * /bars/US5Y/1M/1D.json 稳定 404，于是 rate 分时每次都落 Yahoo ^FVX，
+         * 而 Yahoo 5m/5d 周末不更新、只给上周五 03:55 的旧线（用户截图
+         * 「美债今天已开盘却显示上周五」）。VIX 同款 charts/1D.json?symbol=
+         * 实测 US5Y 709 根 / US10Y 680 / US30Y 703，末点=今天实时，
+         * GET 带 Origin 返回 Access-Control-Allow-Origin:*（浏览器可直连）。
+         * 改用已封装的 cnbcIntraday()（内部 pickDayBars 只留最近一场 + 45s 缓存）。
+         * 昨收优先实时报价 prev（与头部同源），再退 CNBC 首根。 */
         try {
-          const cb = await cnbcBars(a.cnbc || key, '1M', '1D');
+          const cb = await cnbcIntraday(a.cnbc || key);
           if (cb.length > 10) {
             return { points: cb, preClose: (cachedQuote(key) || {}).prev || cb[0].close,
               synthetic: false, src: 'cnbc' };
           }
-        } catch (e) { /* 落 Yahoo */ }
+        } catch (e) { /* 落 Yahoo 兜底 */ }
       }
       if (a && (dk === 'yahoo' || dk === 'cnbc' || dk === 'sinafx')) {
         const ys = yahooSymbolFor(key, a);
@@ -4164,7 +4173,25 @@
              * （11-13 盘中给 7376.86，而 11-12 收盘是 7592.40），
              * 拿它当分母会算出「全天 +2.15%」和头部 -0.79% 打架。 */
             const q0 = cachedQuote(key) || {};
-            return { points: pts, preClose: (q0.prev > 0 ? q0.prev : (yb.prevClose || pts[0].close)),
+            /* v398【修 +6.91% 假涨幅】禁用 yb.prevClose（chartPreviousClose 是
+             * 5d range 第一天前，实测 ^FVX 给 4.659 而上一交易日收盘 4.981，
+             * (4.981-4.659)/4.659=+6.91% 假涨幅 + Y轴撑到 ±7%）。回退改为
+             * points 倒数第二个交易日的末点 close（相邻日交界处）。
+             * 优先仍是实时报价 prev（与头部同源）。 */
+            let prevDayClose = 0;
+            try {
+              const df = new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
+              });
+              const lastDay = df.format(new Date((pts[pts.length - 1].time - 8 * 3600) * 1000));
+              for (let j = pts.length - 2; j >= 0; j--) {
+                if (df.format(new Date((pts[j].time - 8 * 3600) * 1000)) !== lastDay) {
+                  prevDayClose = pts[j].close; break;
+                }
+              }
+            } catch (eF) { /* 取不到就用首根 */ }
+            const preFallback = prevDayClose > 0 ? prevDayClose : pts[0].close;
+            return { points: pts, preClose: (q0.prev > 0 ? q0.prev : preFallback),
               synthetic: false, src: 'yahoo' };
           }
         }
@@ -4524,8 +4551,40 @@
     return res;
   }
 
+  /* v398【分时本地缓存兜底】用户口径：东财限速不稳、频繁跳源，连不上时至少给
+   * 上一次真实的完整分时（图例明确标「缓存」，绝不冒充实时）。localStorage 持久化
+   * 便于周末/跨会话直读；7 天过期保护避免陈旧数据长期挂着。
+   * 只在实时源全部失败（r.failed）时启用，成功时永远走实时，不影响正常链路。 */
+  const MIN_CACHE_MAX_AGE = 7 * 24 * 3600 * 1000;
+  function minCacheKey(key) { return 'mp_min_cache_v1:' + key; }
+  function readMinCache(key) {
+    try {
+      const raw = (w.localStorage && localStorage.getItem(minCacheKey(key)));
+      if (!raw) return null;
+      const c = JSON.parse(raw);
+      if (!c || !c.t || (Date.now() - c.t > MIN_CACHE_MAX_AGE)) return null;
+      if (!c.r || !c.r.points || c.r.points.length < 5) return null;
+      return Object.assign({}, c.r, { src: 'cache', cachedAt: c.t });
+    } catch (e) { return null; }
+  }
+  function writeMinCache(key, r) {
+    try {
+      if (!w.localStorage || !r || r.failed || r.synthetic || !r.points || r.points.length < 15) return;
+      /* src=cache 自身不回写，避免缓存链无限自我延续 */
+      if (r.src === 'cache') return;
+      localStorage.setItem(minCacheKey(key), JSON.stringify({
+        t: Date.now(), r: { points: r.points, preClose: r.preClose, regClose: r.regClose,
+          src: r.src, ext: r.ext, unit: r.unit }
+      }));
+    } catch (e) { /* 存储不可用（隐私模式/配额）不影响主链路 */ }
+  }
   async function intraday(key) {
-    const r = finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
+    let r = finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
+    /* 实时全挂 → 读缓存兜底（图例标「缓存」，诚实可见） */
+    if (r && r.failed) {
+      const cached = readMinCache(key);
+      if (cached) r = cached;
+    }
     /* v346【源末尾孤立坏点清洗】外盘分钟线偶发在最后一根塞一个跨合约 /
      * 跨结算的孤立价（实测同一接口会返回 786 点与 1306 点两种长度，长的那份
      * 末尾约有 1.5% 单点跳变），图上就是一根 90° 竖线。只处理两种极保守
@@ -4572,6 +4631,8 @@
         }
       }
     } catch (e) { /* 校准失败不影响出图 */ }
+    /* v398：成功后写本地缓存，供下次实时全挂时兜底 */
+    writeMinCache(key, r);
     return r;
   }
 

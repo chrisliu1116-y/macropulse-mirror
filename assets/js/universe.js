@@ -236,7 +236,11 @@
     'YM':  { name: '道指期货',         short: 'YM', src: 'yahoo', sym: 'YM=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CBOT_MINI:YM1!' },
     'NK':  { name: '日经225期货',      short: 'NK', src: 'yahoo', sym: 'NKD=F', dec: 1, grp: 'glbfut', kind: 'future', unit: '点', tv: 'CME:NKD1!' },
     'A50': { name: '富时中国A50期货',  short: 'A50', src: 'yahoo', sym: 'XIN9.FGI', dec: 1, grp: 'glbfut', kind: 'future', unit: '点' },
-    'US5Y': { name: '美债5年期收益率', short: '美债5Y', src: 'yahoo', sym: '^FVX', dec: 3, grp: 'rate', kind: 'rate', unit: '%' , cnbc: 'US5Y' },
+    /* v398【美债5Y 换源：与 US10Y/US30Y 同构走东财优先】旧定义 src:'yahoo' 覆盖了
+     * 前面 line 83 的 src:'em'，导致 5Y 分时每次都落 Yahoo ^FVX（周末不更新、只给
+     * 上周五旧线 + 假 +6.91%）。实测 US10Y/US30Y 走东财 emTrend 拿今天完整 491 根，
+     * 5Y 改用同款 171.US5Y；三层兜底：东财 → CNBC charts/1D(今天实时) → Yahoo。 */
+    'US5Y': { name: '美债5年期收益率', short: '美债5Y', src: 'em', secid: '171.US5Y', dec: 3, grp: 'rate', kind: 'rate', unit: '%' , cnbc: 'US5Y', yh: '^FVX', tv: 'TVC:US05Y' },
     /* v357【US2Y 已整只剔除】确认与 IP 封禁无关：报价 CNBC 可通，但 2 年期
      * 分钟序列客观不存在（东财 133.US2Y 断连/空体、CNBC bars 8 变体全 404、
      * Yahoo ^IRX 是 13 周国库券不是 2 年期），且拒绝用 2YY=F 期货推算冒充。
