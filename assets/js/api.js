@@ -1486,12 +1486,24 @@
   function pickDayBars(bars) {
     const rows = [];
     for (const b of bars) {
-      const s = String(b.tradeTime || '');
-      if (s.length < 12) continue;
-      const y = +s.slice(0, 4), mo = +s.slice(4, 6), d = +s.slice(6, 8);
-      const hh = +s.slice(8, 10), mi = +s.slice(10, 12);
-      if (!y || !mo || !d || !isFinite(hh) || !isFinite(mi)) continue;
-      rows.push({ abs: Date.UTC(y, mo - 1, d, hh, mi) / 60000, b: b });
+      let abs = 0;
+      /* v398【美债 charts/1D 无 tradeTime 字符串】VIX 的 charts/1D 带
+       * tradeTime='YYYYMMDDHHMMSS'，但美债 US5Y/10Y/30Y 只给 tradeTimeinMills
+       * （毫秒时间戳），旧代码只认 tradeTime → 全被过滤 → pickDayBars 返回空
+       * → cnbcIntraday 抛 'cnbc empty' → 落 Yahoo 周五旧线（用户截图根因）。
+       * 两种字段都兼容：优先 tradeTimeinMills，回退 tradeTime 字符串。 */
+      const ms = +(b.tradeTimeinMills || 0);
+      if (ms > 0) {
+        abs = Math.floor(ms / 60000);
+      } else {
+        const s = String(b.tradeTime || '');
+        if (s.length < 12) continue;
+        const y = +s.slice(0, 4), mo = +s.slice(4, 6), d = +s.slice(6, 8);
+        const hh = +s.slice(8, 10), mi = +s.slice(10, 12);
+        if (!y || !mo || !d || !isFinite(hh) || !isFinite(mi)) continue;
+        abs = Date.UTC(y, mo - 1, d, hh, mi) / 60000;
+      }
+      rows.push({ abs: abs, b: b });
     }
     if (!rows.length) return [];
     rows.sort((a, z) => a.abs - z.abs);
@@ -4138,8 +4150,11 @@
          * 昨收优先实时报价 prev（与头部同源），再退 CNBC 首根。 */
         try {
           const cb = await cnbcIntraday(a.cnbc || key);
-          if (cb.length > 10) {
-            return { points: cb, preClose: (cachedQuote(key) || {}).prev || cb[0].close,
+          /* v398：cnbcIntraday 返回 {points:[]} 对象（不是裸数组），必须取 .points。
+           * 首版误写 cb.length → undefined>10 恒 false → 每次都落 Yahoo 周五旧线。 */
+          const cbPts = (cb && cb.points) || [];
+          if (cbPts.length > 10) {
+            return { points: cbPts, preClose: (cachedQuote(key) || {}).prev || cbPts[0].close,
               synthetic: false, src: 'cnbc' };
           }
         } catch (e) { /* 落 Yahoo 兜底 */ }
