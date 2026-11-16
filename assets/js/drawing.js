@@ -925,10 +925,15 @@
       ctx.rect(0, 0, plotR, this._h);
       ctx.clip();
 
+      /* v403【拖动卡顿】缺口标注 / 指标（红黑棒）都是静态背景层：缺口每帧要遍历缺口
+       * 列表 + 读轴宽，红黑棒要对每根 K 线做 5 次坐标转换（上千根时极贵）。拖动取点/
+       * 拖线时用户只关心线和落点，这些背景不必每帧重算 —— 拖动期间跳过，松手恢复。
+       * 注意：只在**真正拖动**（drag 或按住起笔）时跳过，普通 hover 仍照常显示。 */
+      var dragging = !!(this.drag || (this._press && this.pending.length));
       /* 缺口 + 可视最高/最低价先画在最底层，再叠主图指标与画线 */
-      if (this.extraPainter) { try { this.extraPainter(ctx, this); } catch (e) {} }
+      if (!dragging && this.extraPainter) { try { this.extraPainter(ctx, this); } catch (e) {} }
       /* 主图指标（如三五法则的红/黑棒）先画在底层，画线再叠上去 */
-      if (this.painter) { try { this.painter(ctx, this); } catch (e) {} }
+      if (!dragging && this.painter) { try { this.painter(ctx, this); } catch (e) {} }
 
       var arr = this._arr();
       /* 选中的线先判一下还在不在（切品种 / 清空后要自动失效） */
@@ -1280,49 +1285,10 @@
        *    【坑】主 pane canvas 的 CSS 宽 = host 宽 - 价格轴宽（例 630→572），
        *    按 host 宽去匹配会把 K 线层全部漏掉，放大镜里就只剩十字线。 */
       var sx = xy.x - W / (2 * Z), sw = W / Z, sh = H / Z;
-      /* v402：把垂直源中心夹进「可视 K 线价格区间」，触点再偏也能看到 K 线。
-       * 区间比窗口还矮（极度缩小时）就不夹，保持原行为。 */
-      var kr = this._loupeKRange;
-      if (kr && isFinite(kr.top) && isFinite(kr.bot)) {
-        var halfH = H / (2 * Z);
-        var kTop = kr.top, kBot = kr.bot;
-        /* v402b：优先用「触点所在位置附近 9 根 K 线」的价格区间 —— 比全局区间精确得多。
-         * 全局区间只解决"触点跑到 K 线整体范围之外"；若触点这一列恰好是回调低点、
-         * 而全局区间被别处的高点撑开，仍然会落在空白处（用户看到的"右边没 K 线"）。 */
-        try {
-          var d = this._loupeData;
-          if (d && d.length && this.chart && this.chart.timeScale) {
-            var li = this.chart.timeScale().coordinateToLogical(xy.x);
-            if (li != null && isFinite(li)) {
-              var ci = Math.round(li);
-              var i0 = Math.max(0, ci - 4), i1 = Math.min(d.length - 1, ci + 4);
-              var lo2 = Infinity, hi2 = -Infinity;
-              for (var q = i0; q <= i1; q++) {
-                var bb = d[q];
-                if (!bb) continue;
-                var l2 = (bb.low != null) ? bb.low : bb.close;
-                var h2 = (bb.high != null) ? bb.high : bb.close;
-                if (l2 < lo2) lo2 = l2;
-                if (h2 > hi2) hi2 = h2;
-              }
-              var y1 = (lo2 < Infinity) ? this._yOf(lo2) : null;
-              var y2 = (hi2 > -Infinity) ? this._yOf(hi2) : null;
-              if (y1 != null && y2 != null && isFinite(y1) && isFinite(y2)) {
-                kTop = Math.min(y1, y2); kBot = Math.max(y1, y2);
-              }
-            }
-          }
-        } catch (e) {}
-        if (kBot - kTop >= halfH * 2) {
-          /* 局部区间够宽：把触点夹进去（触点仍在窗口内可见，只是不贴边） */
-          cySrc = Math.max(kTop + halfH, Math.min(kBot - halfH, xy.y));
-        } else {
-          /* 局部区间比窗口还窄（该处 K 线波动很小）→ **直接以该处 K 线为中心**。
-           * 早先这里回退到全局区间，结果又被别处的高点撑开、夹到空白处 ——
-           * 正是"有的位置有 K 线、有的位置没有"的剩余原因。 */
-          cySrc = (kTop + kBot) / 2;
-        }
-      }
+      /* v403【撤销 clamp】v402 曾把源区域中心夹到 K 线区间，结果是"放大镜里能看到 K 线，
+       * 但不是端点拖到的位置"（用户原话）。放大镜的第一要义是**准确**：中心就是触点，
+       * 触点周围有 K 线就显示 K 线、没有就显示空白+网格+线（v190 原本的行为）。
+       * 绝不能为了"保证有 K 线"而把中心拽离端点。 */
       var sy = cySrc - H / (2 * Z);
       /* v400【放大镜拖动卡顿】v190/v192 的放大镜在这里每帧做 querySelectorAll
        * + host 一次 + 每个 canvas 一次 getBoundingClientRect —— 正是 v225 修掉过的
@@ -1377,12 +1343,8 @@
         } catch (e) {}
       }
 
-      /* ③ 十字准线 + 落点红点。
-       * v402：源区域被垂直夹过时，落点在窗口内的真实位置随之偏移（不再固定窗口中心），
-       * 十字线与红点必须画在真实位置，否则会误导「落点就在这里」。 */
-      var cyReal = cy + (xy.y - cySrc) * Z;
-      if (cyReal < ly + 6) cyReal = ly + 6;
-      if (cyReal > ly + H - 6) cyReal = ly + H - 6;
+      /* ③ 十字准线 + 落点红点。v403：撤销 clamp 后源中心就是触点，落点＝窗口中心。 */
+      var cyReal = cy;
       ctx.setLineDash([3, 3]);
       ctx.strokeStyle = light ? 'rgba(90,105,135,0.55)' : 'rgba(160,175,200,0.55)';
       ctx.lineWidth = 1;
