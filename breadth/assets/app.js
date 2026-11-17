@@ -128,19 +128,41 @@
     });
   }
 
-  /* 收盘窗口内静默追新：数据一落库，已经打开的页面也能在 3 分钟内看到，
-   * 不需要用户手动刷新、更不整页 reload（整页重载会把用户的放大/拖动状态清空，
-   * 正是之前反馈过的那个问题）。只原地替换 S.d 并重绘，保留当前 from/to 视野。 */
-  function intradayWindow() {
-    var n = new Date();
-    var wd = n.getDay();
-    if (wd === 0 || wd === 6) return false;
-    var hm = n.getHours() * 100 + n.getMinutes();
-    return hm >= 1500 && hm <= 1800;
+  /* v414【缓存优先的静默追新】用户口径：
+   *  · 交易日当天数据已出 → 用缓存，当天不再刷新；
+   *  · 甚至下个交易日 15:00 前 → 仍用缓存（不必因为跨天就重抓）；
+   *  · 只有两种情形才反复刷新：① 已过 15:00 且当天数据没出；
+   *    ② 已是下个交易日、上一个交易日数据没出。
+   * 只有真需要刷新时才发 fetch（no-store）；否则保持 S.d 不动 = 用缓存。
+   * 仍不整页 reload，只原地替换 S.d 并重绘，保留用户 from/to 视野。 */
+  function _bjDate(d) {                       // 取 YYYY-MM-DD（本地时区，手机=北京）
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function _isTradeDay(d) { return d.getDay() !== 0 && d.getDay() !== 6; }
+  function needRefresh(lastDay) {
+    if (!lastDay) return true;                                 // 还没数据 → 必须抓
+    var n = new Date(), hm = n.getHours() * 100 + n.getMinutes();
+    var today = _bjDate(n);
+    if (lastDay >= today) return false;                        // 今天数据已在 → 缓存
+    // 数据末日 < 今天：判断"应有交易日"是哪天
+    if (_isTradeDay(n)) {
+      // 交易日：15:00 前用上一交易日数据就够，15:00 后必须有今天
+      if (hm < 1500) {
+        // 找上一交易日（往前推，跳过周末；法定节假日无法离线精确，容忍多缓存一天）
+        var prev = new Date(n.getTime() - 86400e3);
+        while (!_isTradeDay(prev)) prev = new Date(prev.getTime() - 86400e3);
+        return lastDay < _bjDate(prev);                        // 上一交易日数据缺 → 刷
+      }
+      return true;                                             // 过 15:00 今天数据缺 → 反复刷
+    }
+    // 非交易日（周末）：用最近交易日数据即可，只要不是陈旧到上上周就缓存
+    return lastDay < _bjDate(new Date(n.getTime() - 3 * 86400e3));
   }
   function startIntradayRefresh() {
+    /* 3 分钟一轮：原来 setInterval 未传间隔（浏览器按最小间隔狂发 no-store
+     * 请求，正是"每次进那页都刷新/请求不断"的根因）。现在低频 + 缓存优先。 */
     setInterval(function () {
-      if (!intradayWindow() || !S.d || S.pinch || S.drag || S.ptrs.size) return;
+      if (!needRefresh(S.d.dates[S.d.dates.length - 1]) || S.pinch || S.drag || S.ptrs.size) return;
       var u = DATA_SOURCES[0] + '?t=' + Date.now();
       fetch(u, { cache: 'no-store' })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -179,8 +201,23 @@
       return isFinite(t) && (Date.now() - t) < 5 * 86400e3 && (Date.now() - t) > -86400e3;
     } catch (e) { return false; }
   }
+  var BREADTH_CACHE_KEY = 'mm_breadth_cache_v1';
   function loadData() {
     return new Promise(function (resolve, reject) {
+      /* v414【缓存优先】当天数据已出 / 未到下个交易日 15:00 → 直接用本地缓存，
+       * 一发网络请求都不发（用户口径：缓存用到「过 15 点当天数据没出」才刷新）。
+       * 缓存只存数据体，体积可控（~1MB），写入失败也不影响主流程。 */
+      try {
+        var raw = localStorage.getItem(BREADTH_CACHE_KEY);
+        if (raw) {
+          var cached = JSON.parse(raw);
+          var cLast = cached && cached.dates && cached.dates[cached.dates.length - 1];
+          if (validData(cached) && !needRefresh(cLast)) {
+            resolve(cached);
+            return;
+          }
+        }
+      } catch (e) {}
       var srcs = dataSources(), remoteDone = 0, done = false;
       var best = null, bestDay = '', fresh = null, freshDay = '';
       function consider(d) {
@@ -192,7 +229,15 @@
       function finish() {
         if (done) return; done = true; clearTimeout(hard); clearTimeout(grace);
         var pick = fresh || best;
-        if (pick) resolve(pick); else reject(new Error('全部数据源失败'));
+        if (pick) {
+          /* v414：网络拿到的数据写入本地缓存，供下次（含重开 App）零请求复用 */
+          try {
+            if (JSON.stringify(pick).length < 4 * 1024 * 1024) {
+              localStorage.setItem(BREADTH_CACHE_KEY, JSON.stringify(pick));
+            }
+          } catch (e) {}
+          resolve(pick);
+        } else reject(new Error('全部数据源失败'));
       }
       var hard = setTimeout(finish, 9000);
       /* v340：三个远端全返回、或最多 2.5s 宽限期即结算；按「最后交易日最大」
@@ -883,5 +928,4 @@
   boot();
   bind();
   startIntradayRefresh();   // 收盘窗口内静默追新，不整页重载
-
 })();

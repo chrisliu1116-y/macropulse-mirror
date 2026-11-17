@@ -165,6 +165,9 @@ body.light .btn-fs.on{border-color:#9db9e8;background:#e8efff;color:#1d4ed8}
 
 /* ---------- 嵌入主站 H5（?embed=1） ---------- */
 /* 大标题与主站 tab 文案重复，隐藏；保留更新时间(#upd)与全屏按钮(#btnFull) */
+body.embed{overflow:hidden}                 /* v414：嵌入页必须一屏展示，禁止上下拖动 */
+body.embed .wrap{overflow:hidden;min-height:0}
+body.embed .chartbox{flex:1 1 auto;min-height:0}
 body.embed .hd{align-items:center}
 body.embed .hd-l h1{display:none}
 /* v255：embed 里顶部这行「全A股 · 数据 …」与底部「全部A股 N 只 · … · 更新 …」重复，

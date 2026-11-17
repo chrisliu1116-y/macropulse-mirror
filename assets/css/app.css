@@ -418,8 +418,9 @@ body.light .clock.clock-stale{color:#c2610d;border-bottom-color:#c2610d}
 #effCompare{margin-left:auto}
 .eff-bar .mini-btn.on{border-color:var(--blue,#4c8dff);color:var(--blue,#4c8dff);
   background:rgba(76,141,255,.10)}
+#view-effect,#view-effect.on{overflow:hidden}  /* v414：赚钱效应页一屏展示，禁止上下拖动 */
 #view-effect iframe{flex:1 1 auto;display:block;width:100%;min-height:0;height:auto;
-  border:0;background:var(--bg)}
+  border:0;background:var(--bg);overflow:hidden}
 @supports not (height: 1dvh) {
   #view-effect.on{height:calc(100vh - var(--topH,86px) - var(--tabHReal,64px))}
 }
@@ -553,6 +554,7 @@ button.sg:active{transform:scale(.94)}
   background:var(--nest-bg);border:1px solid var(--nest-bd);
   color:var(--tx1);font-size:16px;line-height:1.4;
   -webkit-appearance:none;appearance:none;
+  min-height:72px;resize:vertical;font-family:inherit;
 }
 .fix-rsn::placeholder{color:var(--tx3);font-size:12px}
 .fix-rsn:focus{outline:none;border-color:var(--accent)}

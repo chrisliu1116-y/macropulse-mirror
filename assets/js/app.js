@@ -194,9 +194,9 @@
       <p class="fix-t">${esc(plain(n.title))}</p>
       <div class="fix-opts">${['S', 'A', 'B', 'C'].map(g =>
         `<button data-fix="${g}" class="${g === cur ? 'on' : ''}">${g}</button>`).join('')}</div>
-      <div class="fix-lab">为什么改（选填，一句话，比如「行业集体回购算资金面信号」）</div>
-      <input class="fix-rsn" type="text" maxlength="80" enterkeyhint="done"
-        placeholder="写一句原因，以后能直接变成规则条款">
+      <div class="fix-lab">为什么改（选填，可写多句；写清业务口径，以后能直接变成规则条款）</div>
+      <textarea class="fix-rsn" rows="3" maxlength="500"
+        placeholder="例：不是带关税两个字就是关税战，这条说的是泰国取消对美关税，非对华、小国，影响有限，构不上 S"></textarea>
       <div class="fix-row">
         <button class="fix-cancel">取消</button>
         <button class="fix-ok">确认改判</button>
