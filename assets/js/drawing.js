@@ -491,25 +491,39 @@
       return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     },
 
+    /* v419【统一端点X换算】留白区端点绝不能用绝对逻辑索引定位：
+     * 缩放看更多历史/切周期/退全屏重载都会让 series 数据变化，同一绝对 li
+     * 就指向更早的 K 线 → 线漂移。统一改为「相对当前末尾的偏移」换算。
+     *   · 新端点：用 liOff（= 画时 li - 当时末尾）；
+     *   · 旧端点（v416 只有绝对 li）：一次性迁移成相对末尾的偏移并回写，
+     *     这样用户之前画的旧线也一起修好，不再继续用绝对 li 漂移。 */
+    _xOfPt: function (pt) {
+      var ts = (this.chart && this.chart.timeScale) ? this.chart.timeScale() : null;
+      if (!ts) return this._xOf(pt.t);
+      var n = (this.series && this.series.data) ? this.series.data().length : 0;
+      if (n <= 0) return this._xOf(pt.t);
+      var off = null;
+      if (pt.liOff != null && isFinite(pt.liOff)) {
+        off = pt.liOff;                                   // 新端点：直接用相对偏移
+      } else if (pt.li != null && isFinite(pt.li)) {
+        /* 旧端点：li 是绝对索引，画它时数据末尾≈li（拖在最右留白，通常末尾+几根）。
+         * 迁移成相对偏移 = li - 当前末尾的自然近似：把 li 视为「末尾右侧第 (li - 原末尾) 根」，
+         * 原末尾无法精确反推，稳妥取 0 —— 即锚定到最后一根 K 线，绝不再横漂上千像素。 */
+        off = 0;
+        try { pt.liOff = 0; } catch (e) {}   // 就地迁移，后续所有绘制都走相对定位
+      }
+      if (off != null) {
+        try { var x = ts.logicalToCoordinate((n - 1) + off); if (x != null && isFinite(x)) return x; } catch (e) {}
+      }
+      return this._xOf(pt.t);
+    },
+
     /* 一条线的像素点（不含射线远方端点） */
     _px: function (d) {
       var self = this, out = [];
       for (var i = 0; i < d.pts.length; i++) {
-        var pt = d.pts[i], x = null;
-        /* v418：留白区端点优先用相对偏移 liOff 按【当前】数据末尾换算，
-         * 这样前插历史/切周期/退全屏重载后端点仍贴最右侧，不漂移。 */
-        if (pt.liOff != null && this.chart && this.chart.timeScale) {
-          try {
-            var n = (self.series && self.series.data) ? self.series.data().length : 0;
-            if (n > 0) x = this.chart.timeScale().logicalToCoordinate((n - 1) + pt.liOff);
-          } catch (e) {}
-        }
-        /* v416 兼容：老数据只有绝对 li，继续按原样定位（不丢旧线） */
-        if (x == null && pt.li != null && this.chart && this.chart.timeScale) {
-          try { x = this.chart.timeScale().logicalToCoordinate(pt.li); } catch (e) {}
-        }
-        if (x == null || !isFinite(x)) x = self._xOf(pt.t);
-        out.push({ x: x, y: self._yOf(pt.p), p: pt.p });
+        var pt = d.pts[i];
+        out.push({ x: self._xOfPt(pt), y: self._yOf(pt.p), p: pt.p });
       }
       return out;
     },
@@ -1341,18 +1355,9 @@
       this._loupeRect = { x: lx, y: ly, w: W, h: H, side: rightSide ? 'left' : 'right' };
       var light = document.body.classList.contains('light');
       var cx = lx + W / 2, cy = ly + H / 2;
-      var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
-      /* v416：拖到右侧留白区的端点带 li，其真实 x 要用逻辑索引换算，
-       * 否则放大镜中心会退回最后一根 K 线、与端点错位。 */
-      /* v418：放大镜中心与绘制端点用同一套 liOff 换算，避免留白区端点缩放后错位 */
-      if (pt.liOff != null && this.chart && this.chart.timeScale) {
-        try {
-          var _n = (this.series && this.series.data) ? this.series.data().length : 0;
-          if (_n > 0) { var _lxo = this.chart.timeScale().logicalToCoordinate((_n - 1) + pt.liOff); if (_lxo != null && isFinite(_lxo)) x0 = _lxo; }
-        } catch (e) {}
-      } else if (pt.li != null && this.chart && this.chart.timeScale) {
-        try { var _lx = this.chart.timeScale().logicalToCoordinate(pt.li); if (_lx != null && isFinite(_lx)) x0 = _lx; } catch (e) {}
-      }
+      /* v419：放大镜中心与绘制端点共用 _xOfPt（统一相对偏移换算），
+       * 旧绝对 li 也在那里迁移，放大镜不再与端点错位。 */
+      var y0 = this._yOf(pt.p), x0 = this._xOfPt(pt);
       if (y0 == null) y0 = xy.y;
       if (x0 == null) x0 = xy.x;
       /* v404【根因修复②】放大镜的源中心必须是【端点的真实坐标】(x0,y0)，不能用触点 xy。
