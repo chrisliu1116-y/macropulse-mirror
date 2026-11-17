@@ -608,10 +608,10 @@
       /* v190：按住期间显示取点放大镜 */
       this._press = true;
       this._hoverXY = xy;
-      /* v400/v401：按下这一刻就冻结图层几何 + 预合成背景（一次性开销放在按下时，
+      /* v400/v401：按下这一刻冻结图层几何 + 预合成背景（一次性开销放在按下时，
        * 拖动过程中不再有任何布局读取和 GPU 回读）。
-       * v402：**不再无条件重建** —— _freezeLoupe 内部对 3 秒内的快照直接复用，
-       * 连续画线/拖线时省掉重复的 GPU 回读（用户：刚进工具画第一根线特别卡）。 */
+       * v408：复用由「图表状态签名」决定（见 _freezeLoupe）——图表没动就复用
+       * （按下零开销），平移/缩放/新数据后自动重建（保准确）。 */
       try { this._freezeLoupe(); } catch (e) {}
 
       /* ① 已经在画（落了点、还没收尾）：这一下**永远是下一个点**。
@@ -829,8 +829,8 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
-      /* v402：保留 K 线区间缓存 3 秒供下一笔复用（_freezeLoupe 按 _loupeBgAt 判断），
-       * 换品种/周期/尺寸会强制清空。 */
+      /* v408：快照不清空 —— 复用由「图表状态签名」判断（_freezeLoupe）：
+       * 松手后没动图表就复用（下次按下零开销），平移/缩放后签名变化自动重建。 */
       /* v187：短按（长按计时未到就抬手）→ 只保留选中，不拖线也不落点 */
       if (this._hold) {
         clearTimeout(this._hold.timer);
@@ -880,7 +880,7 @@
       this._press = false;
       this._hoverXY = null;
       this._dragPt = null;
-      /* v402：同 _up，保留快照供下一笔复用（3 秒内） */
+      /* v408：快照不清空，复用由签名判断（同 _up） */
       if (this._hold) { clearTimeout(this._hold.timer); this._hold = null; }
       if (this._lp) { clearTimeout(this._lp.timer); this._lp = null; this.pending = []; this.hover = null; }
       if (this.drag) { this.save(this.drag.arr || this.list()); this.drag = null; this.redraw(); }
@@ -1167,13 +1167,25 @@
      * 离屏普通 canvas，之后每帧只读这张（CPU），回读次数从 N 降到 0。 */
     _freezeLoupe: function (force) {
       var now = Date.now();
-      /* v402【一开始卡、过一会才好】缓存 K 线区间与数据引用 3 秒：连续画线/拖线时
-       * 不必每次按下都重新 series.data() + 遍历可视范围。
-       * 图表切换/尺寸变化/超时由 attach/setTool/resize 把 _loupeBgAt 归零强制重算。 */
-      /* v402b：不再有像素快照，缓存判据改为「K 线区间是否已就绪 + 时间戳」。 */
-      if (!force && this._loupeBg && this._loupeBgAt && now - this._loupeBgAt < 3000) {
+      /* v408【签名缓存】快照是否可复用不由时间决定，由「图表状态签名」决定：
+       * 可视范围 / 最后一根K线的时间与收盘 / 画布尺寸 —— 任一变化（平移、缩放、
+       * 实时数据推新、轴宽变化）都意味着旧快照与当前坐标错位，必须重建；
+       * 签名相同（纯拖端点/画线）→ 复用，按下零开销。
+       * v406 的 3 秒时间缓存在「拖→松手→平移→再拖」场景复用了错位旧快照，
+       * 正是用户看到的「K 线不在红点周围、跑到角落」（错位 30~40px）。 */
+      var sig = 'err';
+      try {
+        var vrS = this.chart.timeScale().getVisibleLogicalRange();
+        var ddS = (this.series && this.series.data) ? this.series.data() : null;
+        sig = (vrS ? Math.round(vrS.from) + '-' + Math.round(vrS.to) : 'nv') +
+          '|' + (ddS && ddS.length ? ddS[ddS.length - 1].time : 0) +
+          '|' + (ddS && ddS.length ? ddS[ddS.length - 1].close : 0) +
+          '|' + this._w + 'x' + this._h;
+      } catch (e) {}
+      if (!force && this._loupeBg && (this._loupeSig === sig || sig === 'err')) {
         return this._loupeLayers || [];
       }
+      this._loupeSig = sig;
       var out = [];
       var host = this._host;
       this._loupeBg = null;
