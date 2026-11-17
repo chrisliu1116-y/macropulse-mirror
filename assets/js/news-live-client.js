@@ -6757,7 +6757,7 @@
     return todo.length;
   }
 
-  async function collect(force, ttl, soft, onProgress) {
+  async function collect(force, ttl, soft, onProgress, onLate) {
     ttl = (ttl == null) ? 25000 : ttl;
     if (!force && !soft && cache.items && Date.now() - cache.t < ttl) {
       return { items: cache.items, stats: cache.stats };
@@ -6855,14 +6855,42 @@
         return r;
       }
     });
-    const results = soft
-      ? await Promise.all(allResults.map((p, i) => Promise.race([
-          p,
-          new Promise(res => setTimeout(() => res({
-            name: SOURCES[i][0], ok: false, got: [], err: '本次拉取超时（6s），后台会自动补上'
-          }), SOFT_CAP)),
-        ])))
-      : await Promise.all(allResults);
+    /* v412b【慢源迟到补入】6s 超时只让主流程不再等它，但底层请求仍在跑。
+     * 这里给每个源挂后台.then：若它在 6s 之后才成功返回，就把它单独富化后
+     * 经 onLate 交给上层增量合并（重点页只关心新到的 A+S，B 级静默入池），
+     * 不再像 v412 那样把迟到结果直接丢弃。上层不阻塞、不重绘整屏。 */
+    let results;
+    if (soft) {
+      const timers = [];
+      results = await Promise.all(allResults.map((p, i) => {
+        let timedOut = false;
+        const cap = new Promise(res => {
+          timers.push(setTimeout(() => {
+            timedOut = true;
+            res({ name: SOURCES[i][0], ok: false, got: [], err: '本次拉取超时（6s），后台补入中' });
+          }, SOFT_CAP));
+        });
+        p.then(r => {
+          if (!timedOut) return;                 // 6s 内返回：主流程已包含，不重复补
+          if (!r || !r.ok || !r.got || !r.got.length) return;
+          // 迟到成功：单独走一遍富化（zhPass→enrich→filter C），再交给上层
+          try {
+            const lateRaw = r.got.slice();
+            zhPass(lateRaw).then(() => {
+              const lateKept = [];
+              lateRaw.forEach(x => { const y = enrich(x); if (y && y.level !== 'C') lateKept.push(y); });
+              if (lateKept.length && typeof onLate === 'function') {
+                try { onLate(SOURCES[i][0], lateKept); } catch (e) {}
+              }
+            }).catch(() => {});
+          } catch (e) {}
+        }).catch(() => {});
+        return Promise.race([p, cap]);
+      }));
+      timers.forEach(t => { /* 主流程完成后清掉未触发的 cap 定时器，避免内存滞留 */ clearTimeout(t); });
+    } else {
+      results = await Promise.all(allResults);
+    }
 
     let raw = [];
     const okSrc = [], err = {};

@@ -4816,10 +4816,11 @@
    * 与 news() 的区别：不重载页面、不重建 9 个源的连接，只跳过 25 秒 TTL
    * 立刻跑一次正常轮询；LiveNews.collect(soft) 会顺带对上一轮失败的源
    * 清掉代理失败缓存强制重试，已连通的源保持原状态。 */
-  async function newsSoft(onProgress) {
+  async function newsSoft(onProgress, onLate) {
     if (!w.LiveNews || typeof w.LiveNews.collect !== 'function') return null;
     try {
-      const res = await w.LiveNews.collect(false, 0, true, onProgress);
+      /* v412b：onLate = 慢源超时后迟到补入的回调（增量合并，不阻塞首屏） */
+      const res = await w.LiveNews.collect(false, 0, true, onProgress, onLate);
       if (res && res.stats) {
         return {
           items: res.items || [], stats: res.stats,

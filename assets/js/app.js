@@ -6755,8 +6755,42 @@
     };
     /* soft = 应用内下拉刷新：跳过 25 秒 TTL 立刻拿最新，
      * 但绝不重载页面，也不重建任何已连通的源。 */
+    /* v412b【档位聚焦 + 慢源迟到补入】onLate 在慢源超过 6s 才返回时触发：
+     *  · 新消息一律并入池子（切档时都在，不丢数据）；
+     *  · 但只有「当前档位可见」的消息才触发重绘/横幅——重点页(=S+A)收到纯 B 级
+     *    迟到消息时静默入池、不重绘、不弹提醒，不打扰阅读；B 级在后台自动补齐。
+     * 这正是用户口径：「重点页只刷 A+S，B 级后台轮询；哪个源快先出、慢的后台补」。 */
+    const onLate = soft ? (srcName, items) => {
+      if (!Array.isArray(items) || !items.length) return;
+      const LN = w.LiveNews;
+      let changed = 0, visibleHere = 0;
+      items.forEach(it => {
+        if (!it || !it.id || !it.title) return;
+        if (S.news.some(n => n.id === it.id) || liveIds.has(it.id)) return;
+        const norm = normItem(it);
+        if (!norm) return;
+        if (LN && LN.findDup) {
+          const dup = LN.findDup(S.news, norm, 6 * 3600 * 1000);
+          if (dup) {
+            LN.mergeNews(dup, norm); fixApply(dup); liveIds.add(it.id); changed++;
+            if (passGrade(dup)) visibleHere++;
+            return;
+          }
+        }
+        liveIds.add(it.id);
+        S.news.push(norm);
+        changed++;
+        if (passGrade(norm)) visibleHere++;
+      });
+      if (!changed) return;
+      S.news.sort((a, b) => b.ts - a.ts);
+      poolSync();
+      if (!visibleHere) return;              // 全是别的档位 → 静默入池，不重绘/不提醒
+      renderFeed();                          // 当前档位有新内容才重绘
+      if (!S.modalOn) showSoftSBanner();     // 软横幅兜底（不弹全屏，避免打断）
+    } : null;
     const res = soft && w.API && typeof w.API.newsSoft === 'function'
-      ? await w.API.newsSoft(showStatus ? onProg : null)
+      ? await w.API.newsSoft(showStatus ? onProg : null, onLate)
       : await w.API.news(false, showStatus ? onProg : null);
     if (!res) {
       /* 下拉抓取失败：保持现有「全部已连接」，别把顶栏打成「未接入」 */
