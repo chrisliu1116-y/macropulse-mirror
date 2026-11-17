@@ -314,8 +314,7 @@
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].id !== id || !arr[k].pts || !arr[k].pts[i]) continue;
         arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p),
-          li: (arr[k].pts[i].li != null ? arr[k].pts[i].li : undefined),      /* v416：兼容旧绝对 li */
-          liOff: (arr[k].pts[i].liOff != null ? arr[k].pts[i].liOff : undefined) }; /* v418：保留相对偏移 */
+          dx: (arr[k].pts[i].dx != null ? arr[k].pts[i].dx : undefined) };  /* v421：保留留白区固定像素偏移 */
         hit = true; break;
       }
       if (!hit) return false;
@@ -468,33 +467,23 @@
        * v415 注：外推到"未来 time"不可行 —— timeToCoordinate 对 series 里不存在的
        * time 返回 null，端点数据改了也画不出来（实测），所以留白区只能停最后一根。 */
       var t = this._timeOf(x);
-      /* v416【端点拖不到最右】最后一根 K 线右侧的留白区（rightOffset/setVisibleLogicalRange
-       * 留白）里 coordinateToTime(x) 返回 null。原来直接塌缩到 lastTime，于是端点
-       * 卡在最后一根、拖不到十字所在的更右位置。
-       * LWC 实测：logicalToCoordinate(li) 在留白区仍返回正确 x（2999→704 / 3016→805），
-       * 所以端点额外存一个逻辑索引 li，绘制时优先用它；t 仍保留（旧数据/平移/放大镜兜底）。 */
-      var li = null, liOff = null;
-      if (t == null && this.chart && this.chart.timeScale) {
-        try {
-          var _l = this.chart.timeScale().coordinateToLogical(x);
-          if (_l != null && isFinite(_l)) {
-            li = _l;
-            /* v418【漂移根治】绝对 li 会随数据数组变化失效：缩放看更多历史/切周期/
-             * 退出全屏重载都会让 series 前插数据，同一绝对 li 就指向更早的 K 线，
-             * 端点瞬间横移上千像素（实测前插300根→漂移1776px）。
-             * 改存「相对最后一根的偏移」liOff = li - 末尾逻辑索引；绘制时按当前
-             * 末尾重新换算，端点永远贴在最右侧同一位置。 */
-            var n = (this.series && this.series.data) ? this.series.data().length : 0;
-            if (n > 0) liOff = _l - (n - 1);
-          }
-        } catch (e) {}
+      /* v421【漂移根治·回归绝对时间】横轴一律锚定绝对时间 t，绝不存任何逻辑索引。
+       * 逻辑索引(li/liOff)是相对「数据数组末尾/可见范围」的，缩放看更多历史、切周期、
+       * 退全屏重载都会让数据末尾变化→同一索引指向不同K线→端点横漂（用户实测）。
+       * 留白区(最后一根右侧)没有K线时间,coordinateToTime返回null：此时 t 取最后一根的
+       * 绝对时间,额外存 dx = 手指x - 最后一根的x(固定像素偏移)。t 和 dx 都是绝对值,
+       * 不随数据增减/窗口缩放变化；绘制时 x = timeToCoordinate(t) + dx,端点永远钉在原位。 */
+      var dx = null;
+      if (t == null) {
+        t = this.lastTime;
+        if (t != null) {
+          try { var lastX = this._xOf(t); if (lastX != null && isFinite(lastX)) dx = x - lastX; } catch (e) {}
+        }
       }
-      if (t == null) t = this.lastTime;
       var p = this._priceOf(y);
       if (t == null || p == null) return null;
       var out = { t: t, p: p };
-      if (li != null) out.li = li;          /* 兼容：老数据已有的绝对 li 保留 */
-      if (liOff != null) out.liOff = liOff;  /* v418：新存相对偏移，抗数据变化 */
+      if (dx != null && Math.abs(dx) > 0.5) out.dx = dx;   /* 留白区的固定像素偏移 */
       return out;
     },
     /* v225：getBoundingClientRect 会强制同步布局，pointermove 每帧调一次
@@ -514,31 +503,16 @@
       return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     },
 
-    /* v419【统一端点X换算】留白区端点绝不能用绝对逻辑索引定位：
-     * 缩放看更多历史/切周期/退全屏重载都会让 series 数据变化，同一绝对 li
-     * 就指向更早的 K 线 → 线漂移。统一改为「相对当前末尾的偏移」换算。
-     *   · 新端点：用 liOff（= 画时 li - 当时末尾）；
-     *   · 旧端点（v416 只有绝对 li）：一次性迁移成相对末尾的偏移并回写，
-     *     这样用户之前画的旧线也一起修好，不再继续用绝对 li 漂移。 */
+    /* v421【漂移根治·回归绝对时间】横轴 = timeToCoordinate(绝对t) + 固定像素dx。
+     * t、dx 都是画点那一刻确定的绝对值,不随数据数组末尾/可见范围变化,
+     * 缩放/切周期/退全屏重载后,端点必然还钉在原来那根K线的同一相对位置。
+     * 对旧数据(只有 li/liOff 没有 dx)：li/liOff 一律忽略,直接用 t 锚定
+     * （留白区旧端点 t=当时lastTime,会贴到最后一根K线,牺牲几像素但绝不横漂）。 */
     _xOfPt: function (pt) {
-      var ts = (this.chart && this.chart.timeScale) ? this.chart.timeScale() : null;
-      if (!ts) return this._xOf(pt.t);
-      var n = (this.series && this.series.data) ? this.series.data().length : 0;
-      if (n <= 0) return this._xOf(pt.t);
-      var off = null;
-      if (pt.liOff != null && isFinite(pt.liOff)) {
-        off = pt.liOff;                                   // 新端点：直接用相对偏移
-      } else if (pt.li != null && isFinite(pt.li)) {
-        /* 旧端点：li 是绝对索引，画它时数据末尾≈li（拖在最右留白，通常末尾+几根）。
-         * 迁移成相对偏移 = li - 当前末尾的自然近似：把 li 视为「末尾右侧第 (li - 原末尾) 根」，
-         * 原末尾无法精确反推，稳妥取 0 —— 即锚定到最后一根 K 线，绝不再横漂上千像素。 */
-        off = 0;
-        try { pt.liOff = 0; } catch (e) {}   // 就地迁移，后续所有绘制都走相对定位
-      }
-      if (off != null) {
-        try { var x = ts.logicalToCoordinate((n - 1) + off); if (x != null && isFinite(x)) return x; } catch (e) {}
-      }
-      return this._xOf(pt.t);
+      var x = this._xOf(pt.t);
+      if (x == null || !isFinite(x)) return x;
+      if (pt.dx != null && isFinite(pt.dx)) x += pt.dx;
+      return x;
     },
 
     /* 一条线的像素点（不含射线远方端点） */
