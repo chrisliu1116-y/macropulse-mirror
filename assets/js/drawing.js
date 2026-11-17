@@ -291,7 +291,8 @@
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].id !== id || !arr[k].pts || !arr[k].pts[i]) continue;
         arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p),
-          li: (arr[k].pts[i].li != null ? arr[k].pts[i].li : undefined) };  /* v416：保留留白区端点 li */
+          li: (arr[k].pts[i].li != null ? arr[k].pts[i].li : undefined),      /* v416：兼容旧绝对 li */
+          liOff: (arr[k].pts[i].liOff != null ? arr[k].pts[i].liOff : undefined) }; /* v418：保留相对偏移 */
         hit = true; break;
       }
       if (!hit) return false;
@@ -449,18 +450,28 @@
        * 卡在最后一根、拖不到十字所在的更右位置。
        * LWC 实测：logicalToCoordinate(li) 在留白区仍返回正确 x（2999→704 / 3016→805），
        * 所以端点额外存一个逻辑索引 li，绘制时优先用它；t 仍保留（旧数据/平移/放大镜兜底）。 */
-      var li = null;
+      var li = null, liOff = null;
       if (t == null && this.chart && this.chart.timeScale) {
         try {
           var _l = this.chart.timeScale().coordinateToLogical(x);
-          if (_l != null && isFinite(_l)) li = _l;
+          if (_l != null && isFinite(_l)) {
+            li = _l;
+            /* v418【漂移根治】绝对 li 会随数据数组变化失效：缩放看更多历史/切周期/
+             * 退出全屏重载都会让 series 前插数据，同一绝对 li 就指向更早的 K 线，
+             * 端点瞬间横移上千像素（实测前插300根→漂移1776px）。
+             * 改存「相对最后一根的偏移」liOff = li - 末尾逻辑索引；绘制时按当前
+             * 末尾重新换算，端点永远贴在最右侧同一位置。 */
+            var n = (this.series && this.series.data) ? this.series.data().length : 0;
+            if (n > 0) liOff = _l - (n - 1);
+          }
         } catch (e) {}
       }
       if (t == null) t = this.lastTime;
       var p = this._priceOf(y);
       if (t == null || p == null) return null;
       var out = { t: t, p: p };
-      if (li != null) out.li = li;
+      if (li != null) out.li = li;          /* 兼容：老数据已有的绝对 li 保留 */
+      if (liOff != null) out.liOff = liOff;  /* v418：新存相对偏移，抗数据变化 */
       return out;
     },
     /* v225：getBoundingClientRect 会强制同步布局，pointermove 每帧调一次
@@ -485,9 +496,16 @@
       var self = this, out = [];
       for (var i = 0; i < d.pts.length; i++) {
         var pt = d.pts[i], x = null;
-        /* v416：端点带 li（逻辑索引，可落在最后一根右侧留白区）时优先用它定位，
-         * 因为留白区没有对应 K 线时间，_xOf(t) 只会画到最后一根。 */
-        if (pt.li != null && this.chart && this.chart.timeScale) {
+        /* v418：留白区端点优先用相对偏移 liOff 按【当前】数据末尾换算，
+         * 这样前插历史/切周期/退全屏重载后端点仍贴最右侧，不漂移。 */
+        if (pt.liOff != null && this.chart && this.chart.timeScale) {
+          try {
+            var n = (self.series && self.series.data) ? self.series.data().length : 0;
+            if (n > 0) x = this.chart.timeScale().logicalToCoordinate((n - 1) + pt.liOff);
+          } catch (e) {}
+        }
+        /* v416 兼容：老数据只有绝对 li，继续按原样定位（不丢旧线） */
+        if (x == null && pt.li != null && this.chart && this.chart.timeScale) {
           try { x = this.chart.timeScale().logicalToCoordinate(pt.li); } catch (e) {}
         }
         if (x == null || !isFinite(x)) x = self._xOf(pt.t);
@@ -664,6 +682,15 @@
       var ln = hit ? null : this._hitLine(xy);
       if (hit || ln) {
         var p0h = this._ptOf(ev);
+        /* v418【端点吸附】按在端点上 = 一定拖端点，不走延迟判定。
+         * v187 当初引入延迟判定，是为了「在一条线段的中间起笔画新线」不被误判成拖线；
+         * 但用户实际从不「从端点起新线」，只要一碰端点就是想调端点。
+         * 所以：命中端点(hit) → 直接 _beginDrag 拖端点；
+         *      只有命中线身(ln) → 才保留「长按起笔 / 短按选中」的延迟判定。 */
+        if (hit) {
+          this._beginDrag(hit, null, ev, p0h);
+          return;
+        }
         if (this.tool && p0h) {
           var self = this;
           this.selectedId = hit ? hit.d.id : ln.id;
@@ -1317,7 +1344,13 @@
       var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
       /* v416：拖到右侧留白区的端点带 li，其真实 x 要用逻辑索引换算，
        * 否则放大镜中心会退回最后一根 K 线、与端点错位。 */
-      if (pt.li != null && this.chart && this.chart.timeScale) {
+      /* v418：放大镜中心与绘制端点用同一套 liOff 换算，避免留白区端点缩放后错位 */
+      if (pt.liOff != null && this.chart && this.chart.timeScale) {
+        try {
+          var _n = (this.series && this.series.data) ? this.series.data().length : 0;
+          if (_n > 0) { var _lxo = this.chart.timeScale().logicalToCoordinate((_n - 1) + pt.liOff); if (_lxo != null && isFinite(_lxo)) x0 = _lxo; }
+        } catch (e) {}
+      } else if (pt.li != null && this.chart && this.chart.timeScale) {
         try { var _lx = this.chart.timeScale().logicalToCoordinate(pt.li); if (_lx != null && isFinite(_lx)) x0 = _lx; } catch (e) {}
       }
       if (y0 == null) y0 = xy.y;
