@@ -4691,16 +4691,11 @@
         <div class="ns-scroll">${bodyHTML}</div>
       </div>`;
 
-    box.innerHTML = shell(`<div class="ns-loading">正在拉取这条消息之后的真实走势…</div>`);
-
-    let r = null;
-    // 演示条目没有真实发布时间，不去做「消息后 5 分钟」行情归因，
-    // 否则会给一条编造的新闻安上一条看似真实但毫无根据的因果链
-    if (n.live === true) {
-      try { r = await w.NewsVerify.check(probe); } catch (e) {}
-    }
-    if (box.className !== 'nsheet on') return;
-    if (S.news.indexOf(n) < 0) return;
+    /* v411【秒开】正文立即渲染，不再 await 走势拉取（原来这里 await NewsVerify.check
+     * 要 2~5 秒，整条新闻卡在「正在拉取真实走势…」）。走势改为正文渲染后异步补，
+     * 且只在该消息确实打出明显波动（verdict=clear/violent）时才插进详情；
+     * flat（几乎没动）一律不显示，不再占版面。 */
+    const needVerify = (n.live === true);   // 演示条目没有真实发布时间，不做行情归因
 
     // 正文：源里的 brief 已经是「去掉标题后的全文段」，直接整段给
     const body = (n.brief || '').trim();
@@ -4747,35 +4742,14 @@
           <div class="ns-chain">${n.chain.map((x, i) => `<span class="ns-ch ${i === 0 ? 'first' : ''}">${esc(x)}</span>`).join('')}</div>
         </div>` : '';
 
-    // 真实影响
-    let impHTML = '';
-    if (r && r.items.length) {
-      const rows = r.items.map(it => {
-        const f = w.NewsVerify.fmt(it);
-        const pre = (it.pre != null && Math.abs(it.pre) >= w.NewsVerify.scaleOf(it.k).clear
-          && Math.sign(it.pre) === Math.sign(it.chg))
-          ? '<i class="ns-pre">抢跑</i>' : '';
-        return `<div class="ns-imp-r">
-          <div class="ns-imp-h">
-            <span class="ns-imp-n">${esc(f.name)}${pre}</span>
-            <b class="${f.up ? 'up' : 'down'}">${f.text}</b>
-            <em>${it.moved ? '有效波动' : '几乎没动'}</em>
-          </div>
-          ${sparkBig(it.spark, f.up)}
-        </div>`;
-      }).join('');
-      impHTML = `<div class="ns-sec">
-        <div class="ns-sec-h">消息后 5 分钟的真实走势${n.noAsset ? '（风险偏好四探针）' : ''}
-          <u>${r.partial ? '数据还在积累' : r.label + ' · 最大 ' + (r.maxTxt || '')}</u></div>
-        <div class="ns-imps">${rows}</div>
-        <p class="ns-note">虚线是消息发布的那一刻。曲线在虚线之前就已经同向跑，说明资金抢跑；虚线之后才拉，才是这条消息打的。</p>
-      </div>`;
-    } else if (n.noAsset) {
-      impHTML = `<div class="ns-sec">
-        <div class="ns-sec-h">影响面</div>
-        <p class="ns-note">这条消息没有落到单一品种，也没有可以直接对照的分钟线。它改变的是整体风险偏好 —— 通常体现为美股承压、美债收益率下行、黄金走强、美元走弱这类「组合式」反应。</p>
-      </div>`;
-    }
+    /* v411：走势区改为占位锚点——正文先秒开，异步结果回来后再决定插不插。
+     * noAsset 的「影响面」是纯静态文案、不依赖行情，直接渲染。 */
+    const impHTML = n.noAsset
+      ? `<div class="ns-sec">
+          <div class="ns-sec-h">影响面</div>
+          <p class="ns-note">这条消息没有落到单一品种，也没有可以直接对照的分钟线。它改变的是整体风险偏好 —— 通常体现为美股承压、美债收益率下行、黄金走强、美元走弱这类「组合式」反应。</p>
+        </div>`
+      : (needVerify ? '<div id="nsVerifySlot"></div>' : '');
 
     // 相关快讯：同类别 + 共享标的，各取最近几条
     const keySet = new Set(keys);
@@ -4810,6 +4784,47 @@
       + impHTML + relHTML
       + `<div class="ns-foot">${esc(n.src)} · ${hhmm(n.ts)} 发布 · 共 ${S.news.length} 条在库</div>`
     );
+
+    /* v411【走势异步补插】正文已秒开，这里才慢慢拉走势。
+     * 用户口径：只有「触发该品种异动」（violent/clear，即 hit>0）才显示走势区；
+     * flat / 几乎没动 → 整块不显示，不再占版面。 */
+    if (needVerify) {
+      w.NewsVerify.check(probe).then(rr => {
+        // 窗口已关 / 已切到别的新闻 → 丢弃结果，防止串场
+        if (box.className !== 'nsheet on' || S.curNews !== n || S.news.indexOf(n) < 0) return;
+        const slot = box.querySelector('#nsVerifySlot');
+        if (!slot) return;
+        if (!rr || !rr.items || !rr.items.length || !rr.hit || rr.verdict === 'flat') {
+          slot.remove();
+          return;
+        }
+        // 只渲染真正触发异动的品种（moved），"几乎没动"的不再占用版面
+        const moved = rr.items.filter(it => it.moved);
+        const rows = moved.map(it => {
+          const f = w.NewsVerify.fmt(it);
+          const pre = (it.pre != null && Math.abs(it.pre) >= w.NewsVerify.scaleOf(it.k).clear
+            && Math.sign(it.pre) === Math.sign(it.chg))
+            ? '<i class="ns-pre">抢跑</i>' : '';
+          return `<div class="ns-imp-r">
+            <div class="ns-imp-h">
+              <span class="ns-imp-n">${esc(f.name)}${pre}</span>
+              <b class="${f.up ? 'up' : 'down'}">${f.text}</b>
+              <em>${it.violent ? '剧烈异动' : '有效波动'}</em>
+            </div>
+            ${sparkBig(it.spark, f.up)}
+          </div>`;
+        }).join('');
+        slot.innerHTML = `<div class="ns-sec">
+          <div class="ns-sec-h">消息后 5 分钟的真实走势${n.noAsset ? '（风险偏好四探针）' : ''}
+            <u>${rr.partial ? '数据还在积累' : rr.label + ' · 最大 ' + (rr.maxTxt || '')}</u></div>
+          <div class="ns-imps">${rows}</div>
+          <p class="ns-note">虚线是消息发布的那一刻。曲线在虚线之前就已经同向跑，说明资金抢跑；虚线之后才拉，才是这条消息打的。</p>
+        </div>`;
+      }).catch(() => {
+        const slot = box.querySelector('#nsVerifySlot');
+        if (slot) slot.remove();
+      });
+    }
 
     // 全文异步填充：不阻塞首屏，取到就贴进「全文」区
     const fullEl = box.querySelector('.ns-full');
