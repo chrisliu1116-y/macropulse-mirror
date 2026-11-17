@@ -1333,19 +1333,22 @@
        * getBoundingClientRect 强制 reflow → 卡顿）。drawImage 仍读实时像素。 */
       var layers = this._loupeLayers || this._freezeLoupe();
       var dpr = this._dpr || 1;
-      /* ① 背景（K线/网格/指标）：优先用按下时预合成的离屏 CPU 快照（避免每帧 GPU 回读），
-       *    源区域 = 触点周围 sw×sh，放大 Z 倍到窗口。 */
-      if (this._loupeBg) {
-        try { ctx.drawImage(this._loupeBg, sx * dpr, sy * dpr, sw * dpr, sh * dpr, lx, ly, W, H); } catch (e) {}
-      } else {
-        /* 兜底：预合成失败则逐层直抓（源区域按各层物理偏移 ox/oy 与比例 k 修正） */
-        for (var c = 0; c < layers.length; c++) {
-          var L = layers[c];
-          try { ctx.drawImage(L.cv, sx * L.k + L.ox, sy * L.k + L.oy, sw * L.k, sh * L.k, lx, ly, W, H); } catch (e) {}
-        }
+      /* ① 背景（K线/网格/指标）：**逐层实时直抓**（v409）。
+       * v406~v408 的「预合成离屏快照」在真机 DPR=3 时彻底错位：
+       * drawing 的 dpr 被 Math.min(2,..) 限到 2，而 LWC 层是 3 倍物理像素，
+       * 预合成 drawImage(cv,-ox,-oy) 按 3 倍画进 2 倍快照、读取又按 2 倍 →
+       * K 线被放大 1.5 倍并偏移（诊断 CSS 坐标全对、视觉全错，正是用户现象）。
+       * 逐层直抓用「每层自己的 k」换算源矩形，任何 DPR 都自洽；主图只有 2 层，
+       * 且只在按住期间执行，性能可接受（本地实测 <3ms）。 */
+      /* 【坐标基准】ctx 已 setTransform(dpr=dprClamped,..)，目标矩形 lx/ly/W/H 是 CSS 坐标。
+       * 每一层的源矩形必须换算到「该层自己的物理像素」：源 = CSS坐标 × L.k + 物理偏移。
+       * L.k 是该层 canvas.width / cssWidth（LWC 在真机 DPR=3 时为 3，而 drawing 的 dpr
+       * 被 clamp 到 2），各层独立换算后，drawImage 会把任意比例的源正确缩放进同一目标。 */
+      for (var c = 0; c < layers.length; c++) {
+        var L = layers[c];
+        try { ctx.drawImage(L.cv, sx * L.k + L.ox, sy * L.k + L.oy, sw * L.k, sh * L.k, lx, ly, W, H); } catch (e) {}
       }
-      /* ② 画线层（自己的 canvas）：实时叠加，保证放大镜里「正在画的线」跟手。
-       * 这是唯一一次 canvas 读取（本层已 willReadFrequently，落在 CPU 内存）。 */
+      /* ② 画线层（自己的 canvas）：本层 k = dpr（canvas 按 this._dpr 建立），实时叠加。 */
       if (this.cv) {
         try {
           ctx.drawImage(this.cv, sx * dpr, sy * dpr, sw * dpr, sh * dpr, lx, ly, W, H);
