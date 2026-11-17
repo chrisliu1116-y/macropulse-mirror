@@ -290,7 +290,8 @@
       var arr = this.list(), hit = false;
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].id !== id || !arr[k].pts || !arr[k].pts[i]) continue;
-        arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p) };
+        arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p),
+          li: (arr[k].pts[i].li != null ? arr[k].pts[i].li : undefined) };  /* v416：保留留白区端点 li */
         hit = true; break;
       }
       if (!hit) return false;
@@ -439,12 +440,28 @@
       var x = ev.clientX - r.left, y = ev.clientY - r.top;
       /* 【为什么要有 lastTime 兜底】手指点在最后一根右边的留白区（rightOffset=8）时
        * coordinateToTime 返回 null，原来的实现直接 return null → 第一个点放不下去、
-       * 用户以为「点了没反应」。这里退到最后一根的时间，至少能落点、能拖。 */
+       * 用户以为「点了没反应」。这里退到最后一根的时间，至少能落点、能拖。
+       * v415 注：外推到"未来 time"不可行 —— timeToCoordinate 对 series 里不存在的
+       * time 返回 null，端点数据改了也画不出来（实测），所以留白区只能停最后一根。 */
       var t = this._timeOf(x);
+      /* v416【端点拖不到最右】最后一根 K 线右侧的留白区（rightOffset/setVisibleLogicalRange
+       * 留白）里 coordinateToTime(x) 返回 null。原来直接塌缩到 lastTime，于是端点
+       * 卡在最后一根、拖不到十字所在的更右位置。
+       * LWC 实测：logicalToCoordinate(li) 在留白区仍返回正确 x（2999→704 / 3016→805），
+       * 所以端点额外存一个逻辑索引 li，绘制时优先用它；t 仍保留（旧数据/平移/放大镜兜底）。 */
+      var li = null;
+      if (t == null && this.chart && this.chart.timeScale) {
+        try {
+          var _l = this.chart.timeScale().coordinateToLogical(x);
+          if (_l != null && isFinite(_l)) li = _l;
+        } catch (e) {}
+      }
       if (t == null) t = this.lastTime;
       var p = this._priceOf(y);
       if (t == null || p == null) return null;
-      return { t: t, p: p };
+      var out = { t: t, p: p };
+      if (li != null) out.li = li;
+      return out;
     },
     /* v225：getBoundingClientRect 会强制同步布局，pointermove 每帧调一次
      * 就是典型的「拖起来一卡一卡」。按下时取一次、松手/离开时失效；
@@ -467,7 +484,14 @@
     _px: function (d) {
       var self = this, out = [];
       for (var i = 0; i < d.pts.length; i++) {
-        out.push({ x: self._xOf(d.pts[i].t), y: self._yOf(d.pts[i].p), p: d.pts[i].p });
+        var pt = d.pts[i], x = null;
+        /* v416：端点带 li（逻辑索引，可落在最后一根右侧留白区）时优先用它定位，
+         * 因为留白区没有对应 K 线时间，_xOf(t) 只会画到最后一根。 */
+        if (pt.li != null && this.chart && this.chart.timeScale) {
+          try { x = this.chart.timeScale().logicalToCoordinate(pt.li); } catch (e) {}
+        }
+        if (x == null || !isFinite(x)) x = self._xOf(pt.t);
+        out.push({ x: x, y: self._yOf(pt.p), p: pt.p });
       }
       return out;
     },
@@ -1291,6 +1315,11 @@
       var light = document.body.classList.contains('light');
       var cx = lx + W / 2, cy = ly + H / 2;
       var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
+      /* v416：拖到右侧留白区的端点带 li，其真实 x 要用逻辑索引换算，
+       * 否则放大镜中心会退回最后一根 K 线、与端点错位。 */
+      if (pt.li != null && this.chart && this.chart.timeScale) {
+        try { var _lx = this.chart.timeScale().logicalToCoordinate(pt.li); if (_lx != null && isFinite(_lx)) x0 = _lx; } catch (e) {}
+      }
       if (y0 == null) y0 = xy.y;
       if (x0 == null) x0 = xy.x;
       /* v404【根因修复②】放大镜的源中心必须是【端点的真实坐标】(x0,y0)，不能用触点 xy。
