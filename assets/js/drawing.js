@@ -313,8 +313,7 @@
       var arr = this.list(), hit = false;
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].id !== id || !arr[k].pts || !arr[k].pts[i]) continue;
-        arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p),
-          dx: (arr[k].pts[i].dx != null ? arr[k].pts[i].dx : undefined) };  /* v421：保留留白区固定像素偏移 */
+        arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p) };  /* v422：回归 v410 纯 {t,p} */
         hit = true; break;
       }
       if (!hit) return false;
@@ -464,27 +463,17 @@
       /* 【为什么要有 lastTime 兜底】手指点在最后一根右边的留白区（rightOffset=8）时
        * coordinateToTime 返回 null，原来的实现直接 return null → 第一个点放不下去、
        * 用户以为「点了没反应」。这里退到最后一根的时间，至少能落点、能拖。
-       * v415 注：外推到"未来 time"不可行 —— timeToCoordinate 对 series 里不存在的
-       * time 返回 null，端点数据改了也画不出来（实测），所以留白区只能停最后一根。 */
+       * v422【回归 v410 原始逻辑】用户确认：画线功能刚做好时（v232~v410，纯 t 锚定）
+       * 缩放不漂移，v416 引入逻辑索引 li 之后才开始漂。历史 git 证明 v410 的坐标
+       * 就是 {t,p}+_xOf(t)，autoscale 配置与现在完全一致（6处）。所以彻底回退到
+       * 那个"曾经正常"的版本：端点只存绝对 t，留白区退 lastTime，不存任何 dx/li。
+       * 代价：留白区端点贴最后一根 K 线（v410 行为），不再能拖到最右留白——
+       * 这是用户明确认可的取舍（"宁可不漂"）。 */
       var t = this._timeOf(x);
-      /* v421【漂移根治·回归绝对时间】横轴一律锚定绝对时间 t，绝不存任何逻辑索引。
-       * 逻辑索引(li/liOff)是相对「数据数组末尾/可见范围」的，缩放看更多历史、切周期、
-       * 退全屏重载都会让数据末尾变化→同一索引指向不同K线→端点横漂（用户实测）。
-       * 留白区(最后一根右侧)没有K线时间,coordinateToTime返回null：此时 t 取最后一根的
-       * 绝对时间,额外存 dx = 手指x - 最后一根的x(固定像素偏移)。t 和 dx 都是绝对值,
-       * 不随数据增减/窗口缩放变化；绘制时 x = timeToCoordinate(t) + dx,端点永远钉在原位。 */
-      var dx = null;
-      if (t == null) {
-        t = this.lastTime;
-        if (t != null) {
-          try { var lastX = this._xOf(t); if (lastX != null && isFinite(lastX)) dx = x - lastX; } catch (e) {}
-        }
-      }
+      if (t == null) t = this.lastTime;
       var p = this._priceOf(y);
       if (t == null || p == null) return null;
-      var out = { t: t, p: p };
-      if (dx != null && Math.abs(dx) > 0.5) out.dx = dx;   /* 留白区的固定像素偏移 */
-      return out;
+      return { t: t, p: p };
     },
     /* v225：getBoundingClientRect 会强制同步布局，pointermove 每帧调一次
      * 就是典型的「拖起来一卡一卡」。按下时取一次、松手/离开时失效；
@@ -503,24 +492,13 @@
       return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     },
 
-    /* v421【漂移根治·回归绝对时间】横轴 = timeToCoordinate(绝对t) + 固定像素dx。
-     * t、dx 都是画点那一刻确定的绝对值,不随数据数组末尾/可见范围变化,
-     * 缩放/切周期/退全屏重载后,端点必然还钉在原来那根K线的同一相对位置。
-     * 对旧数据(只有 li/liOff 没有 dx)：li/liOff 一律忽略,直接用 t 锚定
-     * （留白区旧端点 t=当时lastTime,会贴到最后一根K线,牺牲几像素但绝不横漂）。 */
-    _xOfPt: function (pt) {
-      var x = this._xOf(pt.t);
-      if (x == null || !isFinite(x)) return x;
-      if (pt.dx != null && isFinite(pt.dx)) x += pt.dx;
-      return x;
-    },
-
-    /* 一条线的像素点（不含射线远方端点） */
+    /* 一条线的像素点（不含射线远方端点）
+     * v422：回归 v410 原始逻辑——x 一律 _xOf(t)（纯 timeToCoordinate），
+     * 不叠加 dx/li/liOff 任何相对量。用户确认这个版本缩放不漂移。 */
     _px: function (d) {
       var self = this, out = [];
       for (var i = 0; i < d.pts.length; i++) {
-        var pt = d.pts[i];
-        out.push({ x: self._xOfPt(pt), y: self._yOf(pt.p), p: pt.p });
+        out.push({ x: self._xOf(d.pts[i].t), y: self._yOf(d.pts[i].p), p: d.pts[i].p });
       }
       return out;
     },
@@ -1352,9 +1330,8 @@
       this._loupeRect = { x: lx, y: ly, w: W, h: H, side: rightSide ? 'left' : 'right' };
       var light = document.body.classList.contains('light');
       var cx = lx + W / 2, cy = ly + H / 2;
-      /* v419：放大镜中心与绘制端点共用 _xOfPt（统一相对偏移换算），
-       * 旧绝对 li 也在那里迁移，放大镜不再与端点错位。 */
-      var y0 = this._yOf(pt.p), x0 = this._xOfPt(pt);
+      /* v422：回归 v410——放大镜中心 = 端点真实坐标 _xOf(pt.t)，与绘制一致 */
+      var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
       if (y0 == null) y0 = xy.y;
       if (x0 == null) x0 = xy.x;
       /* v404【根因修复②】放大镜的源中心必须是【端点的真实坐标】(x0,y0)，不能用触点 xy。
