@@ -1199,31 +1199,33 @@
         ctx.restore();
       }
 
-      /* ④ 目标位横线 + 价签（屏幕外也给签，标 ↑ / ↓） */
+      /* ④ 目标位横线 + 价签
+       * v427【用户口径】目标位价格(=100%/200%的数学价位)不在当前可视区内时，
+       * 完全不画线、不标价签 —— 标签跟着真实价格位置走，画面没到那个价就不显示，
+       * 避免屏幕外的目标位被钉在顶/底、两个标签叠在一起挡住 K 线。
+       * 只有价格真实落在可视区内才画横线+价签；两个都在区内且挨太近时才错开。 */
       var x0 = Math.max(Cp.x, 2);
       var TOP = 34, BOT = this._h - 12;   // 顶部留出图例/工具条的位置，别压住按钮
       var lastY = null;
       for (var j = 0; j < lv.length; j++) {
         var y = lv[j].y;
-        if (y == null) continue;
-        var on = (y > 1 && y < this._h - 1);
-        if (on) {
-          ctx.setLineDash(preview ? [4, 4] : []);
-          ctx.lineWidth = preview ? 1.2 : 1.8;
-          ctx.strokeStyle = color;
-          ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(right, y); ctx.stroke();
-          ctx.setLineDash([]);
-          /* 起算点的短竖标：让「从 C 出发」更直观 */
-          ctx.globalAlpha = 0.5;
-          ctx.beginPath(); ctx.moveTo(x0, y - 4); ctx.lineTo(x0, y + 4); ctx.stroke();
-          ctx.globalAlpha = 1;
-        }
-        var label = Math.round(lv[j].pct * 100) + '%  ' + this._fmt(lv[j].price);
-        var cy = on ? y : (y < 0 ? TOP : BOT);
-        if (!on) label = (y < 0 ? '↑ ' : '↓ ') + label;
+        /* 只在目标价位真实落在可视绘图区内时显示（含少量边缘余量，避免刚出界就闪没） */
+        if (y == null || y <= TOP - 6 || y >= BOT + 6) continue;
+        var cy = Math.max(TOP, Math.min(BOT, y));
+        ctx.setLineDash(preview ? [4, 4] : []);
+        ctx.lineWidth = preview ? 1.2 : 1.8;
+        ctx.strokeStyle = color;
+        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(right, y); ctx.stroke();
+        ctx.setLineDash([]);
+        /* 起算点的短竖标：让「从 C 出发」更直观 */
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath(); ctx.moveTo(x0, y - 4); ctx.lineTo(x0, y + 4); ctx.stroke();
+        ctx.globalAlpha = 1;
+        /* 两个目标位都在区内、但价签挨太近时上下错开，避免重叠 */
         if (lastY != null && Math.abs(cy - lastY) < 15) cy = lastY + (cy < this._h / 2 ? 15 : -15);
         cy = Math.max(TOP, Math.min(BOT, cy));
         lastY = cy;
+        var label = Math.round(lv[j].pct * 100) + '%  ' + this._fmt(lv[j].price);
         this._chip(ctx, right, cy, label, color);
       }
       /* v190：用户口径 —— C 点只是「回调锚点」，不用单独标价；
