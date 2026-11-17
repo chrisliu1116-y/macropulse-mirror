@@ -7815,7 +7815,23 @@
   function bind() {
     $('#tabs').onclick = (e) => {
       const b = e.target.closest('button');
-      if (b) switchTab(b.dataset.tab);
+      if (!b) return;
+      /* v412【快讯按钮两段式】用户口径：
+       *   · 已在快讯页且滑到下面 → 第 1 点回到最顶，第 2 点才刷新；
+       *   · 已在快讯页且已在最顶 → 点一下直接刷新。
+       * 其他 tab 或首次进快讯仍走正常 switchTab。 */
+      if (b.dataset.tab === 'feed' && S.tab === 'feed') {
+        const y = window.scrollY || document.documentElement.scrollTop || 0;
+        if (y > 2) {
+          // 滑在下面：先回顶部，不刷新
+          try { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+          catch (err) { try { window.scrollTo(0, 0); } catch (e2) {} }
+          return;
+        }
+        // 已在顶部：直接刷新（复用已绑定的下拉刷新逻辑）
+        if (typeof pullRefresh === 'function') { pullRefresh(); return; }
+      }
+      switchTab(b.dataset.tab);
     };
     $('#gradeFilters').onclick = (e) => {
       const b = e.target.closest('button');

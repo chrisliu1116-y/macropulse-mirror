@@ -6778,7 +6778,13 @@
      *  · 走代理且仍在一分钟 TTL 内的成功源沿用缓存，不重复握手。 */
     const prevDetail = (cache.stats && cache.stats.srcDetail) || [];
     const failed = new Set(prevDetail.filter(d => !d.ok).map(d => d.name));
-    const results = await Promise.all(SOURCES.map(async ([name, fn]) => {
+    /* v412【下拉秒回】soft 刷新时给每个源加一道短硬超时（6s）：原来 Promise.all
+     * 要等最慢的源（代理源 18s + stagger、川普源 22s），用户下拉常卡 10 秒。
+     * 现在哪个源 6s 内没返回就先放弃它、用已抓到的源立即出结果，不让单个慢源拖整轮。
+     * 只 race 不等（abort 会伤到后台 25s 轮询的源状态），底层请求自然结束即可。
+     * 6s 足够覆盖绝大多数直连快源；慢源下一轮后台轮询会补上，不丢数据。 */
+    const SOFT_CAP = 6000;
+    const allResults = SOURCES.map(async ([name, fn]) => {
       const via = SOURCE_VIA[name] || '';
       const isProxy = /jina|代理/.test(via);
 
@@ -6848,7 +6854,15 @@
         // 失败的源不写 srcOk —— 下一轮（软刷新或后台轮询）仍会重试去接入
         return r;
       }
-    }));
+    });
+    const results = soft
+      ? await Promise.all(allResults.map((p, i) => Promise.race([
+          p,
+          new Promise(res => setTimeout(() => res({
+            name: SOURCES[i][0], ok: false, got: [], err: '本次拉取超时（6s），后台会自动补上'
+          }), SOFT_CAP)),
+        ])))
+      : await Promise.all(allResults);
 
     let raw = [];
     const okSrc = [], err = {};

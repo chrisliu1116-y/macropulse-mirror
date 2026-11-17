@@ -3158,7 +3158,10 @@ html{overscroll-behavior:none}
 body.light .pull-hint{background:rgba(16,24,40,.05);color:var(--tx2)}
 body.light .pull-hint.ready{background:rgba(16,24,40,.08);color:#0b62d6}
 .pull-toast{
-  position:fixed;left:50%;bottom:calc(24px + max(env(safe-area-inset-bottom,0px),var(--safe-bottom,0px)));
+  /* v412：原来 bottom 只算安全区（24px+safe），没算底部菜单栏高度，
+   * 提示条落在 tabbar 后面被挡住。--tabHReal 是 JS 量出的真实底栏高（含安全区），
+   * 这里加 12px 间隙，让提示稳定浮在菜单栏正上方。 */
+  position:fixed;left:50%;bottom:calc(var(--tabHReal,64px) + 12px);
   transform:translate(-50%,12px);z-index:120;max-width:88vw;
   padding:9px 16px;border-radius:20px;font-size:12px;line-height:1.4;
   color:var(--tx);background:rgba(30,38,52,.94);
