@@ -8585,6 +8585,19 @@
    * 完全没法判断自己装的是不是新包 —— 这种「凭记忆同步两处」的约定一定会漂。
    * 现在 index.html 的字面量由 tools/bump_version.py 统一写，页面再读 sw.js 校验；
    * 两边对不上（说明走到了旧缓存）就清一次 CacheStorage 重载，自己爬出新版。 */
+  /* v415【免手动清缓存】带版本 buster 的强制重载：换一个新 URL 击穿
+   * WebView 的 HTTP 缓存（APP 壳 LOAD_DEFAULT 那层 SW 清不到）。
+   * buster 用版本号：同版本只换一次，配合 sessionStorage 防死循环。 */
+  function hardReloadWithBuster(ver) {
+    try {
+      const u = new URL(location.href);
+      u.searchParams.set('_hv', ver || ('r' + Date.now()));
+      location.replace(u.toString());
+    } catch (e) {
+      try { location.reload(true); } catch (e2) {}
+    }
+  }
+
   function syncVerPill() {
     const el = $('#verPill');
     if (!el || !w.fetch) return;
@@ -8611,13 +8624,24 @@
           try { done = sessionStorage.getItem('mm_ver_fix') === remote; } catch (e) {}
           if (!done) {
             try { sessionStorage.setItem('mm_ver_fix', remote); } catch (e) {}
+            /* v415【免手动清缓存】原来只清 SW 的 CacheStorage 再 location.reload()，
+             * 但 APK WebView 还有一层独立的 HTTP 缓存（LOAD_DEFAULT）清不到 ——
+             * 偶尔 reload 回来的还是缓存里的旧 index.html，用户只能去系统应用详情
+             * 点「清除缓存」（点「清除数据」又会把自选全清掉）。
+             * 修法：清 SW 缓存 + 给 URL 加版本 buster（_hv=vNNN）换一个全新 URL，
+             * WebView 对没见过的新 URL 必然走网络，三层缓存一起击穿。
+             * buster 用版本号而非时间戳：同一版本只 replace 一次，配合 sessionStorage
+             * 防死循环；版本再变时 buster 又不同，能再次触发。 */
+            const hardReload = () => hardReloadWithBuster(remote);
             if (w.caches && caches.keys) {
               caches.keys()
                 .then(ks => Promise.all(ks.map(k => caches.delete(k))))
-                .then(() => location.reload())
-                .catch(() => { el.textContent = remote; });
+                .then(hardReload)
+                .catch(() => { hardReload(); el.textContent = remote; });
               return;
             }
+            hardReload();
+            return;
           }
         }
         el.textContent = remote;
@@ -8892,7 +8916,11 @@
         const hadController = !!navigator.serviceWorker.controller;
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!hadController) return;
-          location.reload();
+          /* v415：同样带 buster 换 URL，避免 WebView HTTP 缓存回吐旧 index。
+           * 优先用 syncVerPill 已写入的目标版本，取不到就用时间戳兜底。 */
+          let v = '';
+          try { v = sessionStorage.getItem('mm_ver_fix') || ''; } catch (e) {}
+          hardReloadWithBuster(v);
         });
       } catch (e) {}
     }
