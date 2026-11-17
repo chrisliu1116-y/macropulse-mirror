@@ -497,9 +497,22 @@
       return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     },
 
-    /* v423：端点 X = timeToCoordinate(绝对t) + 固定像素dx（留白区能拖最右且不漂） */
+    /* v425【漂移根治·改用逻辑索引】用户诊断证实：缩放后 timeToCoordinate(t) 对
+     * 稀疏历史数据(32年/8062根,大量休市缺口)在可见范围远超数据末尾时返回错误 x
+     * （锚点 idx=7994 本应在 x≈250,实际返回 30），而 K 线用另一套坐标渲染 → 线漂移。
+     * 改用 logicalToCoordinate(idx)：idx 是每次绘制时用绝对 t 在当前数据里二分查出的
+     * 真实索引，logicalToCoordinate 基于它换算，与 K 线渲染用的是同一套逻辑坐标。
+     * t 绝对不变 → idx 稳定；logicalToCoordinate 随缩放同步 → 线始终贴对应 K 线。 */
     _xOfPt: function (pt) {
-      var x = this._xOf(pt.t);
+      var ts = (this.chart && this.chart.timeScale) ? this.chart.timeScale() : null;
+      var x = null;
+      if (ts) {
+        try {
+          var idx = this._idxOfTime(pt.t, this._dataTimes());
+          if (idx != null) x = ts.logicalToCoordinate(idx);
+        } catch (e) {}
+      }
+      if (x == null || !isFinite(x)) x = this._xOf(pt.t);   // 兜底：老办法
       if (x != null && isFinite(x) && pt.dx != null && isFinite(pt.dx)) x += pt.dx;
       return x;
     },
