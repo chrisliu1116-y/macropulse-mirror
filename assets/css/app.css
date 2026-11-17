@@ -4,6 +4,22 @@
  * 所有颜色走语义变量，body.light 只换变量值，不改结构。
  * ============================================================ */
 
+/* v417【全局禁文字选中】用户实测：横屏划线时手指点到顶部 OHLC 那串
+ * 「开 9818.76 高…」文字，长按被系统识别成「选择文字」，弹出
+ * 复制/分享/全选/AI写作/朗读菜单，既误触又打断画线。
+ * 这是 App 内嵌 WebView，任何文字都不该被选中/长按复制 —— 全局关掉。
+ * -webkit-touch-callout:none 专治 iOS 长按菜单；user-select:none 关掉选区。
+ * 白名单：input/textarea/[contenteditable] 必须保留，否则纠错原因、搜索框
+ * 这些要打字的地方没法选中/编辑。 */
+html,body{
+  -webkit-user-select:none;user-select:none;
+  -webkit-touch-callout:none;
+}
+input,textarea,[contenteditable="true"],[contenteditable=""]{
+  -webkit-user-select:text;user-select:text;
+  -webkit-touch-callout:default;
+}
+
 :root{
   /* 底色与面板 */
   --bg:#070a0f;

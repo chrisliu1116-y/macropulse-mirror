@@ -1,5 +1,6 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%}
+/* v417：嵌入页同样禁止长按选中/复制，避免划线时误触系统菜单 */
+html,body{margin:0;height:100%;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 body{
   background:#070a0f;color:#e6edf7;
   font:14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
