@@ -1475,6 +1475,14 @@ input[type=range]::-webkit-slider-thumb{
 .draw-panel .dp-acts button.pri{color:#fff;background:var(--a);border-color:var(--a)}
 .draw-panel .dp-acts button[disabled]{opacity:.45}
 .draw-panel .dp-tip{font-size:9.5px;line-height:1.5;color:var(--tx3);margin:7px 2px 0}
+/* v423：画线诊断输出（点「诊断画线数据」后显示，便于截图回传精确定位缩放漂移） */
+.draw-panel .dp-diag{
+  margin:7px 0 2px;padding:7px 8px;max-height:220px;overflow:auto;
+  font-family:var(--mono);font-size:9px;line-height:1.45;white-space:pre-wrap;word-break:break-all;
+  color:var(--tx2);background:var(--nest-bg);border:1px solid var(--nest-bd);border-radius:8px;
+  -webkit-user-select:text;user-select:text;
+}
+.draw-panel .dp-diag[hidden]{display:none}
 /* v182：选中线后，逐个锚点直接输入精确价格（波段延伸 3 个点都能改） */
 .dp-pts{margin:2px 0 8px;padding-top:7px;border-top:1px solid var(--hair)}
 .dp-pts[hidden]{display:none}

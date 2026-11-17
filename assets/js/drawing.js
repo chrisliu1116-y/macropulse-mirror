@@ -313,7 +313,8 @@
       var arr = this.list(), hit = false;
       for (var k = 0; k < arr.length; k++) {
         if (arr[k].id !== id || !arr[k].pts || !arr[k].pts[i]) continue;
-        arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p) };  /* v422：回归 v410 纯 {t,p} */
+        arr[k].pts[i] = { t: arr[k].pts[i].t, p: Number(p),
+          dx: (arr[k].pts[i].dx != null ? arr[k].pts[i].dx : undefined) };  /* v423：保留留白像素偏移 */
         hit = true; break;
       }
       if (!hit) return false;
@@ -461,19 +462,23 @@
       var r = this._rectOf();
       var x = ev.clientX - r.left, y = ev.clientY - r.top;
       /* 【为什么要有 lastTime 兜底】手指点在最后一根右边的留白区（rightOffset=8）时
-       * coordinateToTime 返回 null，原来的实现直接 return null → 第一个点放不下去、
-       * 用户以为「点了没反应」。这里退到最后一根的时间，至少能落点、能拖。
-       * v422【回归 v410 原始逻辑】用户确认：画线功能刚做好时（v232~v410，纯 t 锚定）
-       * 缩放不漂移，v416 引入逻辑索引 li 之后才开始漂。历史 git 证明 v410 的坐标
-       * 就是 {t,p}+_xOf(t)，autoscale 配置与现在完全一致（6处）。所以彻底回退到
-       * 那个"曾经正常"的版本：端点只存绝对 t，留白区退 lastTime，不存任何 dx/li。
-       * 代价：留白区端点贴最后一根 K 线（v410 行为），不再能拖到最右留白——
-       * 这是用户明确认可的取舍（"宁可不漂"）。 */
+       * coordinateToTime 返回 null，原来的实现直接 return null → 第一个点放不下去。
+       * v423【恢复拖到最右 + 不漂】留白区端点存 t=最后一根的绝对时间 + dx=固定像素偏移。
+       * dx 是画点那一刻的像素差（绝对值），不随数据重载/缩放变化；绘制 x=_xOf(t)+dx，
+       * 既能拖到最右留白，又因 t、dx 都是绝对量而永不横漂。不用任何相对逻辑索引。 */
       var t = this._timeOf(x);
-      if (t == null) t = this.lastTime;
+      var dx = null;
+      if (t == null) {
+        t = this.lastTime;
+        if (t != null) {
+          try { var lx = this._xOf(t); if (lx != null && isFinite(lx)) dx = x - lx; } catch (e) {}
+        }
+      }
       var p = this._priceOf(y);
       if (t == null || p == null) return null;
-      return { t: t, p: p };
+      var out = { t: t, p: p };
+      if (dx != null && Math.abs(dx) > 0.5) out.dx = dx;
+      return out;
     },
     /* v225：getBoundingClientRect 会强制同步布局，pointermove 每帧调一次
      * 就是典型的「拖起来一卡一卡」。按下时取一次、松手/离开时失效；
@@ -492,13 +497,17 @@
       return { x: ev.clientX - r.left, y: ev.clientY - r.top };
     },
 
-    /* 一条线的像素点（不含射线远方端点）
-     * v422：回归 v410 原始逻辑——x 一律 _xOf(t)（纯 timeToCoordinate），
-     * 不叠加 dx/li/liOff 任何相对量。用户确认这个版本缩放不漂移。 */
+    /* v423：端点 X = timeToCoordinate(绝对t) + 固定像素dx（留白区能拖最右且不漂） */
+    _xOfPt: function (pt) {
+      var x = this._xOf(pt.t);
+      if (x != null && isFinite(x) && pt.dx != null && isFinite(pt.dx)) x += pt.dx;
+      return x;
+    },
+    /* 一条线的像素点（不含射线远方端点） */
     _px: function (d) {
       var self = this, out = [];
       for (var i = 0; i < d.pts.length; i++) {
-        out.push({ x: self._xOf(d.pts[i].t), y: self._yOf(d.pts[i].p), p: d.pts[i].p });
+        out.push({ x: self._xOfPt(d.pts[i]), y: self._yOf(d.pts[i].p), p: d.pts[i].p });
       }
       return out;
     },
@@ -1330,8 +1339,8 @@
       this._loupeRect = { x: lx, y: ly, w: W, h: H, side: rightSide ? 'left' : 'right' };
       var light = document.body.classList.contains('light');
       var cx = lx + W / 2, cy = ly + H / 2;
-      /* v422：回归 v410——放大镜中心 = 端点真实坐标 _xOf(pt.t)，与绘制一致 */
-      var y0 = this._yOf(pt.p), x0 = this._xOf(pt.t);
+      /* v423：放大镜中心与绘制端点共用 _xOfPt（含留白 dx），保持对齐 */
+      var y0 = this._yOf(pt.p), x0 = this._xOfPt(pt);
       if (y0 == null) y0 = xy.y;
       if (x0 == null) x0 = xy.x;
       /* v404【根因修复②】放大镜的源中心必须是【端点的真实坐标】(x0,y0)，不能用触点 xy。

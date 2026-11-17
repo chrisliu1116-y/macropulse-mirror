@@ -5732,6 +5732,8 @@
       + '<div class="dp-pts" id="dpPts" hidden></div>'
       + '<div class="dp-acts"><button id="dpDel" disabled>删除选中</button></div>'
       + '<div class="dp-acts"><button id="dpClear" disabled>清空</button><button id="dpDone" class="pri">完成</button></div>'
+      + '<div class="dp-acts"><button id="dpDiag">诊断画线数据</button></div>'
+      + '<div class="dp-diag" id="dpDiagOut" hidden></div>'
       + '<div class="dp-tip">' + drawTipFor(null) + '</div>';
     d.body.appendChild(div);
 
@@ -5786,6 +5788,49 @@
     };
     const done = div.querySelector('#dpDone');
     if (done) done.onclick = () => closeDrawPanel();
+    /* v423【画线诊断】把画线锚点与当前数据/坐标系的原始值显示出来，便于精确定位缩放漂移。
+     * 用户点一下即可截图发回，无需控制台/导文件。 */
+    const diag = div.querySelector('#dpDiag');
+    if (diag) diag.onclick = () => {
+      const out = div.querySelector('#dpDiagOut');
+      if (!out) return;
+      out.hidden = false;
+      try {
+        const dl = chart && chart.drawLayer;
+        const fmtDay = (t) => {
+          try { const z = new Date(+t * 1000), p = n => String(n).padStart(2, '0');
+            return z.getUTCFullYear() + '-' + p(z.getUTCMonth() + 1) + '-' + p(z.getUTCDate()); }
+          catch (e) { return '?'; }
+        };
+        const lines = [];
+        lines.push('品种=' + (S.sheetKey || '?') + ' 周期=' + (S.sheetMode || '?'));
+        if (dl && dl.series && dl.series.data) {
+          const d = dl.series.data() || [];
+          lines.push('数据根数=' + d.length);
+          if (d.length) lines.push('数据首日=' + fmtDay(d[0].time) + ' 末日=' + fmtDay(d[d.length - 1].time));
+        }
+        if (dl && dl.chart && dl.chart.timeScale) {
+          try { const r = dl.chart.timeScale().getVisibleLogicalRange();
+            lines.push('可见范围=' + (r ? (r.from.toFixed(0) + '~' + r.to.toFixed(0)) : 'null')); } catch (e) {}
+        }
+        const arr = dl ? dl.list() : [];
+        lines.push('线的条数=' + arr.length);
+        arr.forEach((ln, k) => {
+          lines.push('--- 线' + (k + 1) + ' [' + ln.tool + '] ---');
+          (ln.pts || []).forEach((pt, i) => {
+            let cx = 'null';
+            try { const v = dl._xOfPt ? dl._xOfPt(pt) : dl._xOf(pt.t); cx = v == null ? 'null' : v.toFixed(1); } catch (e) {}
+            lines.push(' 点' + i + ' 日期=' + fmtDay(pt.t) + ' t=' + pt.t
+              + ' p=' + (pt.p == null ? '?' : pt.p.toFixed(2))
+              + ' dx=' + (pt.dx == null ? '-' : pt.dx.toFixed(1))
+              + ' li=' + (pt.li == null ? '-' : pt.li)
+              + ' liOff=' + (pt.liOff == null ? '-' : pt.liOff)
+              + ' x=' + cx);
+          });
+        });
+        out.textContent = lines.join('\n');
+      } catch (e) { out.textContent = '诊断失败：' + String(e && e.message || e); }
+    };
   }
 
   /* 选中线时锁住图表平移/缩放（v176） */
