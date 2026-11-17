@@ -442,8 +442,27 @@
       if (!axisW || !isFinite(axisW)) axisW = 56;
       return Math.max(20, this._w - axisW - 2);
     },
+    /* v426【漂移终极根治·paneL 偏移】用户诊断数据严格验证：LWC 的
+     * timeToCoordinate / logicalToCoordinate / coordinateToTime 返回的 x 是
+     * 相对「绘图区」（扣除左侧价格轴之后）的坐标，而画线 canvas 的 x=0 在
+     * 画布左缘 —— 两者相差 paneL≈左价格轴宽度(实测~53px)。线因此整体左偏
+     * 一个轴宽；缩放后线变短，偏移让它「跑到 K 线外」。
+     * 历史佐证：早期左价格轴不显示(paneL=0)所以「刚做好不漂」；v205 打开
+     * 左价格轴后线才开始漂。放大镜当年同样的 53~56px 偏移 bug（v401 修的
+     * 就是它），修了放大镜漏了画线。
+     * 修法：LWC→canvas 的坐标一律 +paneL；canvas→LWC（落点）一律 -paneL。 */
+    _paneL: function () {
+      try {
+        var ps = this.chart.priceScale('left');
+        if (ps && typeof ps.width === 'function') {
+          var w = ps.width();
+          if (isFinite(w) && w > 0) return w;
+        }
+      } catch (e) {}
+      return 0;
+    },
     _xOf: function (t) {
-      try { var x = this.chart.timeScale().timeToCoordinate(t); return (x == null) ? null : x; } catch (e) { return null; }
+      try { var x = this.chart.timeScale().timeToCoordinate(t); return (x == null) ? null : x + this._paneL(); } catch (e) { return null; }
     },
     _yOf: function (p) {
       try { var y = this.series.priceToCoordinate(p); return (y == null || !isFinite(y)) ? null : y; } catch (e) { return null; }
@@ -455,7 +474,7 @@
       } catch (e) { return null; }
     },
     _timeOf: function (x) {
-      try { return this.chart.timeScale().coordinateToTime(x); } catch (e) { return null; }
+      try { return this.chart.timeScale().coordinateToTime(x - this._paneL()); } catch (e) { return null; }
     },
     _ptOf: function (ev) {
       if (!this.cv || !this.chart || !this.series) return null;
@@ -509,10 +528,10 @@
       if (ts) {
         try {
           var idx = this._idxOfTime(pt.t, this._dataTimes());
-          if (idx != null) x = ts.logicalToCoordinate(idx);
+          if (idx != null) x = ts.logicalToCoordinate(idx) + this._paneL();  /* v426：+paneL 对齐画布 */
         } catch (e) {}
       }
-      if (x == null || !isFinite(x)) x = this._xOf(pt.t);   // 兜底：老办法
+      if (x == null || !isFinite(x)) x = this._xOf(pt.t);   // 兜底（_xOf 已含 paneL）
       if (x != null && isFinite(x) && pt.dx != null && isFinite(pt.dx)) x += pt.dx;
       return x;
     },

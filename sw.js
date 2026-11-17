@@ -9,7 +9,7 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v425';
+const CACHE = 'macro-pulse-v426';
 /* VER 从 CACHE 名推导，升版只改上面一行即可；
  * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
 const VER = CACHE.replace('macro-pulse-v', '');

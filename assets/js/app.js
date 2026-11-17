@@ -5825,9 +5825,10 @@
               const d = dl.series.data(), li = dl._idxOfTime(pt.t, dl._dataTimes());
               idx = li == null ? '-' : li;
               barDay = (li != null && d[li]) ? fmtDay(d[li].time) : '越界';
-              /* 关键：x 处对应的逻辑索引/日期（线实际画在了哪根K线上） */
+              /* 关键：x 处对应的逻辑索引/日期（线实际画在了哪根K线上）。
+               * v426：cx 是画布坐标，需先减 paneL 才是 LWC 绘图区坐标 */
               const ts = dl.chart.timeScale();
-              const atLi = ts.coordinateToLogical(parseFloat(cx));
+              const atLi = ts.coordinateToLogical(parseFloat(cx) - (dl._paneL ? dl._paneL() : 0));
               if (atLi != null && d[Math.round(atLi)]) barDay = 'x落在=' + fmtDay(d[Math.round(atLi)].time);
             } catch (e) {}
             lines.push(' 点' + i + ' 锚日=' + fmtDay(pt.t) + ' p=' + (pt.p == null ? '?' : pt.p.toFixed(2))
