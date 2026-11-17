@@ -5812,20 +5812,27 @@
         if (dl && dl.chart && dl.chart.timeScale) {
           try { const r = dl.chart.timeScale().getVisibleLogicalRange();
             lines.push('可见范围=' + (r ? (r.from.toFixed(0) + '~' + r.to.toFixed(0)) : 'null')); } catch (e) {}
+          try { lines.push('画布宽=' + dl._w + ' 绘图右界=' + dl._plotRight().toFixed(0)); } catch (e) {}
         }
         const arr = dl ? dl.list() : [];
         lines.push('线的条数=' + arr.length);
         arr.forEach((ln, k) => {
           lines.push('--- 线' + (k + 1) + ' [' + ln.tool + '] ---');
           (ln.pts || []).forEach((pt, i) => {
-            let cx = 'null';
+            let cx = 'null', idx = '-', barDay = '-';
             try { const v = dl._xOfPt ? dl._xOfPt(pt) : dl._xOf(pt.t); cx = v == null ? 'null' : v.toFixed(1); } catch (e) {}
-            lines.push(' 点' + i + ' 日期=' + fmtDay(pt.t) + ' t=' + pt.t
-              + ' p=' + (pt.p == null ? '?' : pt.p.toFixed(2))
-              + ' dx=' + (pt.dx == null ? '-' : pt.dx.toFixed(1))
-              + ' li=' + (pt.li == null ? '-' : pt.li)
-              + ' liOff=' + (pt.liOff == null ? '-' : pt.liOff)
-              + ' x=' + cx);
+            try {
+              const d = dl.series.data(), li = dl._idxOfTime(pt.t, dl._dataTimes());
+              idx = li == null ? '-' : li;
+              barDay = (li != null && d[li]) ? fmtDay(d[li].time) : '越界';
+              /* 关键：x 处对应的逻辑索引/日期（线实际画在了哪根K线上） */
+              const ts = dl.chart.timeScale();
+              const atLi = ts.coordinateToLogical(parseFloat(cx));
+              if (atLi != null && d[Math.round(atLi)]) barDay = 'x落在=' + fmtDay(d[Math.round(atLi)].time);
+            } catch (e) {}
+            lines.push(' 点' + i + ' 锚日=' + fmtDay(pt.t) + ' p=' + (pt.p == null ? '?' : pt.p.toFixed(2))
+              + ' idx=' + idx + ' x=' + cx + ' ' + barDay
+              + ' dx=' + (pt.dx == null ? '-' : pt.dx.toFixed(1)));
           });
         });
         out.textContent = lines.join('\n');
