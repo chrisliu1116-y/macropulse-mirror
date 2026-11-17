@@ -199,7 +199,18 @@
       if (chart && this._subscribed !== chart) {
         this._subscribed = chart;
         try {
-          chart.timeScale().subscribeVisibleLogicalRangeChange(function () { self.redraw(); });
+          chart.timeScale().subscribeVisibleLogicalRangeChange(function () {
+            self.redraw();   /* 立即画一次（跟手） */
+            /* v420【缩放漂移根治】LWC 可见范围/timeScale 是异步生效的：回调触发这一刻，
+             * timeToCoordinate/priceToCoordinate 往往还是旧坐标系，这一笔画下去线就停在旧位置；
+             * 等坐标系真正更新后没有第二笔，线就相对 K 线错位（用户缩放后线漂移）。
+             * 用两级 rAF + 一次短延迟补画，覆盖坐标系稳定后的重绘，确保端点重新贴回 K 线。 */
+            var kick = function () { try { self.redraw(); } catch (e) {} };
+            var raf = window.requestAnimationFrame || function (f) { return setTimeout(f, 16); };
+            try { raf(function () { raf(kick); }); } catch (e) {}
+            if (self._rangeKick) clearTimeout(self._rangeKick);
+            self._rangeKick = setTimeout(kick, 120);
+          });
         } catch (e) {}
       }
       if (!this.visible) {
@@ -219,9 +230,21 @@
           var d = self.series.data();
           if (!d || !d.length) return;
           var y = self._yOf(d[d.length - 1].close);
+          /* v420：X 漂移用「可视逻辑范围」探测，而不是最后一根的 x ——
+           * 最后一根在缩放看更多历史时会被挤出可视区（x 变 null/极右），
+           * 平移时它又一直变，都会误触发。range 变才是缩放/平移的真正信号。 */
+          var r = null;
+          try { r = chart.timeScale().getVisibleLogicalRange(); } catch (e) {}
+          var rx = r ? r.from : null, ry = r ? r.to : null;
           if (y == null) return;
-          if (self._probeY == null) { self._probeY = y; return; }
-          if (Math.abs(y - self._probeY) > 0.6) { self._probeY = y; self.redraw(); }
+          if (self._probeY == null) { self._probeY = y; self._probeFrom = rx; self._probeTo = ry; return; }
+          /* Y 变(autoscale) 或 可视范围变(缩放/平移) → 重绘。
+           * Y 阈值 0.6px 忽略亚像素抖动；range 用 0.05 根容差。 */
+          if (Math.abs(y - self._probeY) > 0.6 ||
+              (rx != null && self._probeFrom != null && Math.abs(rx - self._probeFrom) > 0.05) ||
+              (ry != null && self._probeTo != null && Math.abs(ry - self._probeTo) > 0.05)) {
+            self._probeY = y; self._probeFrom = rx; self._probeTo = ry; self.redraw();
+          }
         } catch (e) {}
       }, 300);
     },
