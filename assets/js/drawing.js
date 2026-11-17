@@ -1145,14 +1145,25 @@
      *   A→B 实线（基准波段本体）／B→C 细虚线（回调段）／C 处竖向投射虚线／
      *   目标位水平实线 + 右端价签。目标落在屏幕外时也给价签并标 ↑↓，
      *   否则用户会以为「画完什么都没出来」。 */
+    /* v428【对数坐标波段测算】用户口径：对数坐标下 K 线是「同样百分比占同样高度」，
+     * 波段延伸也必须按涨跌幅比例投射，而不是按绝对价差。
+     *   · 等差：100% = C + (B − A)，200% = C + 2(B − A)         —— 差几个价格点
+     *   · 对数：100% = C × (B/A)，200% = C × (B/A)²              —— 跌同样的百分比
+     *     验证：A=14000→B=11000 = −21.4%；C=9600 则对数100%≈7543、
+     *     而等差100%=9600−3000=6600，两者不同——对数下必须用比例。
+     * 价格必须 >0 才能取对数/做比值；A≤0 或 B≤0 时退化为等差（A 股/商品不会负价）。 */
     _extLevels: function (d) {
       if (!d || d.tool !== 'ext' || !d.pts || d.pts.length < 3) return [];
-      var ab = d.pts[1].p - d.pts[0].p, C = d.pts[2];
+      var A = d.pts[0].p, B = d.pts[1].p, C = d.pts[2].p;
+      var ab = B - A;
+      var isLog = (w.DRAW_SCALE && w.DRAW_SCALE.get) && w.DRAW_SCALE.get(this.key) === 'log';
+      var ratio = (isLog && A > 0 && B > 0 && C > 0) ? (B / A) : null;
       var pcts = [1];
       if (this.ext200On()) pcts.push(2);
       var out = [];
       for (var i = 0; i < pcts.length; i++) {
-        var price = C.p + ab * pcts[i];
+        /* ratio 分支：等比价格；否则等差价差（原逻辑） */
+        var price = ratio != null ? C * Math.pow(ratio, pcts[i]) : C + ab * pcts[i];
         out.push({ pct: pcts[i], price: price, y: this._yOf(price) });
       }
       return out;

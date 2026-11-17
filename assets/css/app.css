@@ -3204,8 +3204,12 @@ body.light .pull-toast{background:#fff;color:#1a2433;box-shadow:0 6px 24px rgba(
 }
 .cb-bell.on{color:#fff;background:var(--a);border-color:var(--a)}
 .cb-badge{
-  position:absolute;top:-6px;right:-6px;font-style:normal;font-weight:600;
+  /* v428：原 top:-6px 让角标上半截落到相邻按钮的高亮/层叠区被盖住（只露出半个数字）。
+   * 下移到按钮内、抬高层级，保证整枚角标和数字完整可见，仍贴右上角。 */
+  position:absolute;top:-2px;right:-2px;z-index:3;font-style:normal;font-weight:600;
   font-size:9px;line-height:1;padding:2px 4px;border-radius:8px;background:var(--s);color:#fff;
+  box-shadow:0 0 0 2px var(--panel);
+  pointer-events:none;
 }
 .cb-badge[hidden]{display:none}
 .al-sheet{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;overscroll-behavior:contain}
