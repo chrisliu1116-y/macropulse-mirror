@@ -189,22 +189,42 @@
    * 更新的 breadth.json；只原地换数据、保留视口，绝不整页重载。
    * 远程全失败时静默回退本地，页面照常可用（收盘窗口每 3 分钟再查一次）。 */
   var REMOTE_B = [
-    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
-    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/breadth.json'
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
+    /* v430：原 github.io/insum-cloud 源实测 404（Pages 未启用该仓库），换成可用的 mirror 源 */
+    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json'
   ];
   /* v276：上证 K 线也进云端跑批，与 breadth.json 同批成对提交。
    * 用户实测出现过「insum 新 / 上证旧」，所以 SSE 也必须竞速远端。 */
   var REMOTE_S = [
-    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/sse.json',
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/sse.json',
-    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/sse.json'
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/sse.json',
+    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/sse.json'
   ];
-  function loadRemoteS() {
+  /* v430【竞速：谁先到用谁】用户口径：前面的源加载出来就用前面的，慢的源不阻塞前台。
+   * 所有源并发发出，第一个返回「有效数据」的立即 resolve；其余不等待（后台自然结束）。
+   * sse.json 需过点位自检；breadth 需有 dates。 */
+  function raceRemote(urls, validate, ms) {
     if (typeof fetch !== 'function') return Promise.reject(new Error('offline'));
-    return REMOTE_S.reduce(function (p, url) {
-      return p.catch(function () { return loadJSONTimeout(url, 6000); });
-    }, Promise.reject(new Error('start')));
+    return new Promise(function (resolve, reject) {
+      var settled = false, tried = 0;
+      var timer = setTimeout(function () {
+        if (!settled) { settled = true; reject(new Error('all-timeout')); }
+      }, ms || 5000);
+      urls.forEach(function (u) {
+        var full = u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
+        loadJSONTimeout(full, ms || 5000).then(function (d) {
+          if (settled) return;
+          if (validate && !validate(d)) { if (++tried >= urls.length) { settled=true; clearTimeout(timer); reject(new Error('all-invalid')); } return; }
+          settled = true; clearTimeout(timer); resolve(d);   // 第一个有效结果立即采用
+        }).catch(function () {
+          if (!settled && ++tried >= urls.length) { settled = true; clearTimeout(timer); reject(new Error('all-fail')); }
+        });
+      });
+    });
+  }
+  function loadRemoteS() {
+    return raceRemote(REMOTE_S, sseOK, 4000);
   }
   /* v278：上证标的自检 —— 线上曾出现 sse.json 实为平安银行（末收盘 11.71）却标成
    * 「上证指数」，整条 K 线画错。按点位量级拒收：宁可显示缺失，也不画错数据。 */
@@ -233,19 +253,8 @@
     });
   }
   function remoteBreadth() {
-    var t = Date.now();
-    return Promise.all(REMOTE_B.map(function (u) {
-      return loadJSONTimeout(u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + t)
-        .then(function (d) { if (!d || !d.dates || !d.dates.length) throw new Error('empty'); return d; })
-        .catch(function () { return null; });
-    })).then(function (arr) {
-      var best = null;
-      for (var i = 0; i < arr.length; i++) {
-        var d = arr[i]; if (!d) continue;
-        if (!best || d.dates[d.dates.length - 1] > best.dates[best.dates.length - 1]) best = d;
-      }
-      return best;
-    });
+    /* v430：竞速，第一个有效 breadth 立即采用，慢源不阻塞 */
+    return raceRemote(REMOTE_B, function (d) { return !!(d && d.dates && d.dates.length); }, 4000);
   }
   function applyNewBreadth(b) {
     if (!S.B || !S.axis) return false;
@@ -1244,20 +1253,19 @@
                      function () { if (!done) { done = true; clearTimeout(t); resolve(fallback); } });
       });
     }
+    /* v430【首屏不等远端】用户 2026-11-18 指出：远端 GitHub Pages 兜底源会拖慢首屏。
+     * 旧实现 Promise.all([localPair, remotePair]) 让首屏干等远端 3.5s（即使本地已是最新）。
+     * 改为：首屏只用本地快照秒渲染；远端交给 startRemoteRefresh 后台静默竞速，
+     * 谁先拿到更新数据就 applyNewBreadth/applyNewSse 原地替换（只换数据、保留视口）。
+     * 这样远端慢/404/被墙都不影响首屏速度，且新数据照样能静默追上。 */
     var localPair = Promise.all([
       loadJSON('data/breadth.json').catch(function () { return null; }),
       loadJSON('data/sse.json').catch(function () { return null; })
     ]);
-    var remotePair = Promise.all([
-      timeoutVal(remoteBreadth(), 3500, null),
-      timeoutVal(loadRemoteS(), 3500, null)
-    ]);
-    Promise.all([localPair, remotePair]).then(function (a) {
-      var lb = a[0][0], lk = a[0][1], rb = a[1][0], rk = a[1][1];
-      var b = rb && lb
-        ? (rb.dates[rb.dates.length - 1] >= lb.dates[lb.dates.length - 1] ? rb : lb)
-        : (rb || lb);
-      var k = rk || lk;
+    localPair.then(function (a) {
+      var lb = a[0], lk = a[1];
+      var b = lb;
+      var k = lk;
       if (k && !sseOK(k)) k = null;
       if (!b) throw new Error('no breadth');
       S.B = b; S.K = k;
@@ -1277,7 +1285,7 @@
       if (k && /compare=1/.test(location.search)) setCompare(true);
       try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
       postStatus();
-      startRemoteRefresh(true);   /* 首轮已在上面取过，不再重复打远端 */
+      startRemoteRefresh(false);  /* v430：首屏只用本地，远端从后台竞速首轮开始追新 */
     }).catch(function () {
       $('gen').textContent = '数据加载失败';
       $('upd').textContent = '全A股 · 数据未更新，请检查跑批';
