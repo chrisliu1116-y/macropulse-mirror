@@ -191,15 +191,18 @@
   var REMOTE_B = [
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
     'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
-    /* v430：原 github.io/insum-cloud 源实测 404（Pages 未启用该仓库），换成可用的 mirror 源 */
-    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json'
+    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json',
+    /* v431：github.io/insum-cloud 当前 404（Pages 未启用），但源本身有效、404 可能暂时，
+     * 按用户要求保留为备用。竞速模式下失败源不阻塞前台，无副作用。 */
+    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/breadth.json'
   ];
   /* v276：上证 K 线也进云端跑批，与 breadth.json 同批成对提交。
    * 用户实测出现过「insum 新 / 上证旧」，所以 SSE 也必须竞速远端。 */
   var REMOTE_S = [
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/sse.json',
     'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/sse.json',
-    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/sse.json'
+    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/sse.json',
+    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/sse.json'   /* v431 备用，同上 */
   ];
   /* v430【竞速：谁先到用谁】用户口径：前面的源加载出来就用前面的，慢的源不阻塞前台。
    * 所有源并发发出，第一个返回「有效数据」的立即 resolve；其余不等待（后台自然结束）。
