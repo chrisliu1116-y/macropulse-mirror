@@ -5,6 +5,7 @@
     d: null,
     from: 0,
     to: 0,
+    userMoved: false,    /* v290：用户手动拖/捏过就不再自动对齐最右 */
     cursor: -1,          /* 十字游标所在索引，-1 = 不在游标模式 */
     cursorMode: false,
     ptrs: new Map(),
@@ -107,9 +108,11 @@
    * 若让同源抢跑，明天起主站宽度页会一直显示发版那天的旧数据。
    * 所以：三个远端全并发（数据一定是新的），同源延后 700ms 只做全挂兜底。
    * 加速来自「并发 + jsDelivr 跑批后 purge」，不靠牺牲数据新鲜度。 */
+  /* v290-rev：jsDelivr 提到首位（跑批完成后 workflow 主动 purge，国内可达）；
+   * raw 在国内手机常年取不到，放第二；镜像与本地副本只做全挂兜底。 */
   var DATA_SOURCES = [
-    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
     'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json',
     'data/breadth.json'
   ];
@@ -125,46 +128,83 @@
     });
   }
 
-  /* 收盘窗口内静默追新：数据一落库，已经打开的页面也能在 3 分钟内看到，
-   * 不需要用户手动刷新、更不整页 reload（整页重载会把用户的放大/拖动状态清空，
-   * 正是之前反馈过的那个问题）。只原地替换 S.d 并重绘，保留当前 from/to 视野。 */
-  function intradayWindow() {
-    var n = new Date();
-    var wd = n.getDay();
-    if (wd === 0 || wd === 6) return false;
-    var hm = n.getHours() * 100 + n.getMinutes();
-    return hm >= 1500 && hm <= 1800;
+  /* v414【缓存优先的静默追新】用户口径：
+   *  · 交易日当天数据已出 → 用缓存，当天不再刷新；
+   *  · 甚至下个交易日 15:00 前 → 仍用缓存（不必因为跨天就重抓）；
+   *  · 只有两种情形才反复刷新：① 已过 15:00 且当天数据没出；
+   *    ② 已是下个交易日、上一个交易日数据没出。
+   * 只有真需要刷新时才发 fetch（no-store）；否则保持 S.d 不动 = 用缓存。
+   * 仍不整页 reload，只原地替换 S.d 并重绘，保留用户 from/to 视野。 */
+  function _bjDate(d) {                       // 取 YYYY-MM-DD（本地时区，手机=北京）
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function _isTradeDay(d) { return d.getDay() !== 0 && d.getDay() !== 6; }
+  function needRefresh(lastDay) {
+    if (!lastDay) return true;                                 // 还没数据 → 必须抓
+    var n = new Date(), hm = n.getHours() * 100 + n.getMinutes();
+    var today = _bjDate(n);
+    if (lastDay >= today) return false;                        // 今天数据已在 → 缓存
+    // 数据末日 < 今天：判断"应有交易日"是哪天
+    if (_isTradeDay(n)) {
+      // 交易日：15:00 前用上一交易日数据就够，15:00 后必须有今天
+      if (hm < 1500) {
+        // 找上一交易日（往前推，跳过周末；法定节假日无法离线精确，容忍多缓存一天）
+        var prev = new Date(n.getTime() - 86400e3);
+        while (!_isTradeDay(prev)) prev = new Date(prev.getTime() - 86400e3);
+        return lastDay < _bjDate(prev);                        // 上一交易日数据缺 → 刷
+      }
+      return true;                                             // 过 15:00 今天数据缺 → 反复刷
+    }
+    // 非交易日（周末）：用最近交易日数据即可，只要不是陈旧到上上周就缓存
+    return lastDay < _bjDate(new Date(n.getTime() - 3 * 86400e3));
   }
   function startIntradayRefresh() {
+    /* 3 分钟一轮：原来 setInterval 未传间隔（浏览器按最小间隔狂发 no-store
+     * 请求，正是"每次进那页都刷新/请求不断"的根因）。现在低频 + 缓存优先。 */
     setInterval(function () {
-      if (!intradayWindow() || !S.d || S.pinch || S.drag || S.ptrs.size) return;
-      var u = DATA_SOURCES[0] + '?t=' + Date.now();
-      fetch(u, { cache: 'no-store' })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function (d) {
-          if (!validData(d) || !isFresh(d)) return;
-          var oldLast = S.d.dates[S.d.dates.length - 1];
-          var newLast = d.dates[d.dates.length - 1];
-          if (newLast <= oldLast) return;                 // 没有新交易日
-          if (S.pinch || S.drag || S.ptrs.size) return;   // 用户正在操作，下一轮再说
-          /* 按日期重新定位视野：新数据只在尾部追加，历史索引有偏移时按日期找回来 */
-          var oldFromDate = S.d.dates[S.from], oldToDate = S.d.dates[S.to];
-          var wasAtEnd = S.to >= S.d.dates.length - 1;
-          S.d = d;
-          var fi = d.dates.indexOf(oldFromDate), ti = d.dates.indexOf(oldToDate);
-          S.from = fi >= 0 ? fi : 0;
-          S.to = wasAtEnd ? d.dates.length - 1 : (ti >= 0 ? ti : d.dates.length - 1);
-          if (S.to < S.from) S.to = S.from;
-          $('upd').textContent = '全A股 · ' + updText(d);
-          $('dot').classList.remove('old');
-          $('ft').textContent = '全部A股 ' + d.meta.universe + ' 只 · 有效 ' +
-            d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · ' + updText(d);
-          if (S.cursor >= 0 && S.cursor < d.dates.length) updateCards(S.cursor);
-          else updateCards(d.dates.length - 1);
-          paintLegend();
-          draw();
-        })
-        .catch(function () { /* 单个源失败不影响页面，下一轮再试 */ });
+      if (!needRefresh(S.d.dates[S.d.dates.length - 1]) || S.pinch || S.drag || S.ptrs.size) return;
+      /* v480【新数据自动更新·多源竞速】原来只刷 jsdelivr 单源，CDN 未 purge 时新数据上线也拿不到。
+       * 改为与 loadData 同款多源竞速：任一源出现更新交易日数据即替换，且取日期最大者，
+       * 杜绝滞后镜像(如 pages 镜像落后2天)把新数据回滚成旧数据。 */
+      var oldLast = S.d.dates[S.d.dates.length - 1];
+      var srcs = dataSources(), best = null, bestDay = oldLast, settled = false;
+      function finish() {
+        if (settled) return; settled = true;
+        if (!best || bestDay <= oldLast) return;          // 没有任何源给出更新数据
+        if (S.pinch || S.d.drag || S.ptrs.size) return;   // 用户正在操作，下一轮再说
+        var d = best;
+        var oldFromDate = S.d.dates[S.from], oldToDate = S.d.dates[S.to];
+        var wasAtEnd = S.to >= S.d.dates.length - 1;
+        S.d = d;
+        var fi = d.dates.indexOf(oldFromDate), ti = d.dates.indexOf(oldToDate);
+        S.from = fi >= 0 ? fi : 0;
+        S.to = wasAtEnd ? d.dates.length - 1 : (ti >= 0 ? ti : d.dates.length - 1);
+        if (S.to < S.from) S.to = S.from;
+        /* 同步更新本地缓存，保证下次重开 App 仍用最新数据 */
+        try { if (JSON.stringify(d).length < 4 * 1024 * 1024) localStorage.setItem(BREADTH_CACHE_KEY, JSON.stringify(d)); } catch (e) {}
+        $('upd').textContent = '全A股 · ' + updText(d);
+        $('dot').classList.remove('old');
+        $('ft').textContent = footText(d);
+        if (S.cursor >= 0 && S.cursor < d.dates.length) updateCards(S.cursor);
+        else updateCards(d.dates.length - 1);
+        paintLegend();
+        draw();
+      }
+      var hard = setTimeout(finish, 9000), doneCnt = 0;
+      srcs.forEach(function (u, i) {
+        var go = function () {
+          fetch(u, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (d) {
+              if (settled || !validData(d) || !isFresh(d)) return;
+              var day = d.dates[d.dates.length - 1];
+              if (day > bestDay) { best = d; bestDay = day; }
+            })
+            .catch(function () {})
+            .then(function () { if (!settled && ++doneCnt >= srcs.length) finish(); });
+        };
+        if (i === srcs.length - 1) setTimeout(go, 700); else go();
+      });
     }, 3 * 60 * 1000);
   }
   function validData(d) { return !!(d && d.dates && d.dates.length > 100 && d.meta); }
@@ -177,35 +217,60 @@
       return isFinite(t) && (Date.now() - t) < 5 * 86400e3 && (Date.now() - t) > -86400e3;
     } catch (e) { return false; }
   }
+  var BREADTH_CACHE_KEY = 'mm_breadth_cache_v1';
   function loadData() {
     return new Promise(function (resolve, reject) {
-      var srcs = dataSources(), done = false, pending = srcs.length;
-      var stale = null, staleDay = '';
-      var hard = setTimeout(function () {
-        if (done) return;
-        done = true;
-        if (stale) resolve(stale); else reject(new Error('全部数据源超时'));
-      }, 9000);
+      /* v414【缓存优先】当天数据已出 / 未到下个交易日 15:00 → 直接用本地缓存，
+       * 一发网络请求都不发（用户口径：缓存用到「过 15 点当天数据没出」才刷新）。
+       * 缓存只存数据体，体积可控（~1MB），写入失败也不影响主流程。 */
+      try {
+        var raw = localStorage.getItem(BREADTH_CACHE_KEY);
+        if (raw) {
+          var cached = JSON.parse(raw);
+          var cLast = cached && cached.dates && cached.dates[cached.dates.length - 1];
+          if (validData(cached) && !needRefresh(cLast)) {
+            resolve(cached);
+            return;
+          }
+        }
+      } catch (e) {}
+      var srcs = dataSources(), remoteDone = 0, done = false;
+      var best = null, bestDay = '', fresh = null, freshDay = '';
+      function consider(d) {
+        if (!validData(d)) return;
+        var day = d.dates[d.dates.length - 1];
+        if (!best || day > bestDay) { best = d; bestDay = day; }
+        if (isFresh(d) && (!fresh || day > freshDay)) { fresh = d; freshDay = day; }
+      }
+      function finish() {
+        if (done) return; done = true; clearTimeout(hard); clearTimeout(grace);
+        var pick = fresh || best;
+        if (pick) {
+          /* v414：网络拿到的数据写入本地缓存，供下次（含重开 App）零请求复用 */
+          try {
+            if (JSON.stringify(pick).length < 4 * 1024 * 1024) {
+              localStorage.setItem(BREADTH_CACHE_KEY, JSON.stringify(pick));
+            }
+          } catch (e) {}
+          resolve(pick);
+        } else reject(new Error('全部数据源失败'));
+      }
+      var hard = setTimeout(finish, 9000);
+      /* v340：三个远端全返回、或最多 2.5s 宽限期即结算；按「最后交易日最大」
+       * 选数据，本地 dist 快照延后 700ms 只作全挂兜底，杜绝旧数据先上屏再跳。 */
+      var grace = setTimeout(finish, 2500);
       srcs.forEach(function (u, i) {
         var go = function () {
-        fetch(u, { cache: 'no-store' })
-          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-          .then(function (d) {
-            if (done || !validData(d)) return;
-            var day = d.dates[d.dates.length - 1];
-            if (!isFresh(d)) {
-              if (!stale || day > staleDay) { stale = d; staleDay = day; }
-              return;
-            }
-            done = true; clearTimeout(hard); resolve(d);
-          })
-          .catch(function () { /* 单个源失败不影响其余 */ })
-          .then(function () {
-            if (--pending === 0 && !done) {
-              done = true; clearTimeout(hard);
-              if (stale) resolve(stale); else reject(new Error('全部数据源失败'));
-            }
-          });
+          fetch(u, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (d) { if (!done) consider(d); })
+            .catch(function () {})
+            .then(function () {
+              if (!done && i < srcs.length - 1) {
+                remoteDone++;
+                if (remoteDone >= srcs.length - 1) finish();
+              }
+            });
         };
         if (i === srcs.length - 1) setTimeout(go, 700); else go();
       });
@@ -221,7 +286,32 @@
     var g = String(m.generated || '');
     if (!g) return '数据截至 ' + day + '（无跑批时间）';
     var short = g.replace(/^\d{4}-/, '').slice(0, 11);
+    /* v288 方案1：跑批上游失败时保留上一份成功数据，明确标注停留日期，不假装今天 */
+    if (m.stale) return '数据停留在 ' + day + '（跑批未更新' + (m.stale_reason ? ' · ' + m.stale_reason : '') + '）';
     return '数据 ' + day + ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '');
+  }
+
+  /* v347：底部显示数据源，一眼看出当前跑的是东财还是腾讯。
+   * 优先 meta.source（跑批写入）；缺失时按历史长度反推：东财 1990 起 8000+ 日、
+   * 腾讯 2013 起 3000+ 日，差异极大，反推可靠。 */
+  function srcLabel(m, d) {
+    var s = String((m && m.source) || '').toLowerCase();
+    if (s.indexOf('tencent') >= 0) return '腾讯';
+    if (s.indexOf('eastmoney') >= 0) return '东财';
+    var n = (d && d.dates) ? d.dates.length : 0;
+    if (n >= 6000) return '东财';
+    if (n > 0) return '腾讯';
+    return '未知';
+  }
+
+  function footText(d) {
+    var m = d.meta || {}, g = String(m.generated || '');
+    var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
+    var day = m.trade_date || d.dates[d.dates.length - 1] || '';
+    return 'A股 ' + m.universe + '/' + m.valid + ' · ' + m.days + '日 · 源 '
+      + srcLabel(m, d) + ' · ' + day
+      + (short ? ' · ' + short + (m.generated_tz ? ' 北京' : '') : '')
+      + (m.stale ? ' · 未更新' : '');
   }
 
   /* 全屏：优先 Fullscreen API；WebView 会走 WebChromeClient.onShowCustomView。
@@ -280,6 +370,17 @@
     if (S.d) draw();      // 图表是 canvas，换了主题要重画
   }
 
+  /* 只读调试句柄：无头浏览器验证「进入时视窗是否在最右最新」用 */
+  window.__breadthView = function () {
+    return {
+      from: S.from, to: S.to, n: S.d ? S.d.dates.length : 0,
+      lastDate: S.d ? S.d.dates[S.d.dates.length - 1] : null,
+      userMoved: S.userMoved,
+      docScrollH: document.documentElement.scrollHeight,
+      docClientH: document.documentElement.clientHeight
+    };
+  };
+
   function boot() {
     bindFullscreen();
     /* 并进 APP 后由宿主 iframe 通过 postMessage 写主题；同源 localStorage 的
@@ -290,6 +391,23 @@
       if (e.data && typeof e.data.mm_theme === 'string') applyTheme(e.data.mm_theme);
       /* v1.5.10：原生返回键 → 父页面 postMessage 通知退出全屏。
        * 赚钱效应是在 iframe 里全屏的，父页面无法替它调 exitFullscreen。 */
+      if (e.data && e.data.mm_effect_show) {
+        /* v290：主站每次切到本页都发。重绘一次（隐藏加载后 draw 曾因宽 0 早退）；
+         * 只要用户没手动拖/捏过，就把窗口对齐回最右最新
+         * （30日/60日/120日/全部按当前激活按钮）。 */
+        setTimeout(function () {
+          try {
+            if (!S.d) return;
+            if (!S.userMoved) {
+              var on = document.querySelector('#ranges button.on');
+              setRange(on ? (parseInt(on.dataset.n, 10) || 0) : 30);
+              S.cursor = -1; S.cursorMode = false;
+              updateCards(S.d.dates.length - 1);
+            }
+            draw();
+          } catch (err) {}
+        }, 120);
+      }
       if (e.data && e.data.mm_exit_fs) {
         var cur = document.fullscreenElement || document.webkitFullscreenElement;
         if (cur) {
@@ -309,8 +427,9 @@
         updateCards(d.dates.length - 1);
         $('dot').classList.remove('old');
         paintLegend();
-        $('ft').textContent = '全部A股 ' + d.meta.universe + ' 只 · 有效 ' +
-          d.meta.valid + ' 只 · ' + d.meta.days + ' 个交易日 · ' + updText(d);
+        /* v347：这里原来还有一处独立的长格式赋值，会覆盖 footText(d) 的结果，
+         * 导致「源 东财/腾讯」根本显示不出来（页面走的是这条渲染路径）。 */
+        $('ft').textContent = footText(d);
         draw();
       })
       .catch(function (e) {
@@ -736,6 +855,7 @@
         var ratio = span0 > 0 ? (S.pinch.mid - S.pinch.from) / span0 : 0.5;
         S.from = S.pinch.mid - span * ratio;
         S.to = S.pinch.mid + span * (1 - ratio);
+        S.userMoved = true;
         clampView();
         clearRangeBtns();
         draw();
@@ -754,6 +874,7 @@
         var dy = e.clientY - S.drag.y;
         if (!S.drag.moved && Math.hypot(dx, dy) > 6) {
           S.drag.moved = true;
+          S.userMoved = true;
           cancelLP();
         }
         if (!S.drag.moved) return;

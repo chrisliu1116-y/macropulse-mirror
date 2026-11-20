@@ -163,32 +163,48 @@
      * 请求，正是"每次进那页都刷新/请求不断"的根因）。现在低频 + 缓存优先。 */
     setInterval(function () {
       if (!needRefresh(S.d.dates[S.d.dates.length - 1]) || S.pinch || S.drag || S.ptrs.size) return;
-      var u = DATA_SOURCES[0] + '?t=' + Date.now();
-      fetch(u, { cache: 'no-store' })
-        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function (d) {
-          if (!validData(d) || !isFresh(d)) return;
-          var oldLast = S.d.dates[S.d.dates.length - 1];
-          var newLast = d.dates[d.dates.length - 1];
-          if (newLast <= oldLast) return;                 // 没有新交易日
-          if (S.pinch || S.drag || S.ptrs.size) return;   // 用户正在操作，下一轮再说
-          /* 按日期重新定位视野：新数据只在尾部追加，历史索引有偏移时按日期找回来 */
-          var oldFromDate = S.d.dates[S.from], oldToDate = S.d.dates[S.to];
-          var wasAtEnd = S.to >= S.d.dates.length - 1;
-          S.d = d;
-          var fi = d.dates.indexOf(oldFromDate), ti = d.dates.indexOf(oldToDate);
-          S.from = fi >= 0 ? fi : 0;
-          S.to = wasAtEnd ? d.dates.length - 1 : (ti >= 0 ? ti : d.dates.length - 1);
-          if (S.to < S.from) S.to = S.from;
-          $('upd').textContent = '全A股 · ' + updText(d);
-          $('dot').classList.remove('old');
-          $('ft').textContent = footText(d);
-          if (S.cursor >= 0 && S.cursor < d.dates.length) updateCards(S.cursor);
-          else updateCards(d.dates.length - 1);
-          paintLegend();
-          draw();
-        })
-        .catch(function () { /* 单个源失败不影响页面，下一轮再试 */ });
+      /* v480【新数据自动更新·多源竞速】原来只刷 jsdelivr 单源，CDN 未 purge 时新数据上线也拿不到。
+       * 改为与 loadData 同款多源竞速：任一源出现更新交易日数据即替换，且取日期最大者，
+       * 杜绝滞后镜像(如 pages 镜像落后2天)把新数据回滚成旧数据。 */
+      var oldLast = S.d.dates[S.d.dates.length - 1];
+      var srcs = dataSources(), best = null, bestDay = oldLast, settled = false;
+      function finish() {
+        if (settled) return; settled = true;
+        if (!best || bestDay <= oldLast) return;          // 没有任何源给出更新数据
+        if (S.pinch || S.d.drag || S.ptrs.size) return;   // 用户正在操作，下一轮再说
+        var d = best;
+        var oldFromDate = S.d.dates[S.from], oldToDate = S.d.dates[S.to];
+        var wasAtEnd = S.to >= S.d.dates.length - 1;
+        S.d = d;
+        var fi = d.dates.indexOf(oldFromDate), ti = d.dates.indexOf(oldToDate);
+        S.from = fi >= 0 ? fi : 0;
+        S.to = wasAtEnd ? d.dates.length - 1 : (ti >= 0 ? ti : d.dates.length - 1);
+        if (S.to < S.from) S.to = S.from;
+        /* 同步更新本地缓存，保证下次重开 App 仍用最新数据 */
+        try { if (JSON.stringify(d).length < 4 * 1024 * 1024) localStorage.setItem(BREADTH_CACHE_KEY, JSON.stringify(d)); } catch (e) {}
+        $('upd').textContent = '全A股 · ' + updText(d);
+        $('dot').classList.remove('old');
+        $('ft').textContent = footText(d);
+        if (S.cursor >= 0 && S.cursor < d.dates.length) updateCards(S.cursor);
+        else updateCards(d.dates.length - 1);
+        paintLegend();
+        draw();
+      }
+      var hard = setTimeout(finish, 9000), doneCnt = 0;
+      srcs.forEach(function (u, i) {
+        var go = function () {
+          fetch(u, { cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (d) {
+              if (settled || !validData(d) || !isFresh(d)) return;
+              var day = d.dates[d.dates.length - 1];
+              if (day > bestDay) { best = d; bestDay = day; }
+            })
+            .catch(function () {})
+            .then(function () { if (!settled && ++doneCnt >= srcs.length) finish(); });
+        };
+        if (i === srcs.length - 1) setTimeout(go, 700); else go();
+      });
     }, 3 * 60 * 1000);
   }
   function validData(d) { return !!(d && d.dates && d.dates.length > 100 && d.meta); }

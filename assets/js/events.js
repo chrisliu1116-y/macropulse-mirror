@@ -186,20 +186,23 @@
        * 覆盖会把概率位换成文字；只推进 status/statusCls。 */
       autoWindowH: 96,
       autoProgress: [
-        /* P1 决定性：利率决议公布（「预期加息/概率」类前瞻稿被 neg 挡住） */
-        { re: '美联储宣布|FOMC宣布|宣布加息|宣布降息|上调联邦基金利率|下调联邦基金利率|维持利率不变|利率决议公布|决议公布|利率决定|利率不变',
+        /* P1 决定性：利率决议公布（「预期加息/概率」类前瞻稿被 neg 挡住）。
+         * v513【主体限定】实测误判:南非储备银行「维持利率不变」把本卡推成「决议公布」
+         * ——「维持利率不变/利率决定」是全球央行通用词,必须用lookahead要求
+         * 美联储/FOMC/联邦基金利率主体同现,他国央行动作一律不命中。 */
+        { re: '(?=.*(?:美联储|FOMC|联邦基金利率))(美联储宣布|FOMC宣布|宣布加息|宣布降息|上调联邦基金利率|下调联邦基金利率|维持利率不变|利率决议公布|决议公布|利率决定|利率不变)',
           neg: '预期|概率|预计|料|或将|若|传闻|押注',
           status: '决议公布', statusCls: 'live' },
         /* P2 阶段：会议纪要 / 点阵图发布 */
         { re: '会议纪要|点阵图|纪要显示|经济预测摘要|纪要公布',
           neg: '将公布|即将|预期',
           status: '纪要发布', statusCls: 'live' },
-        /* P3 阶段：议息临近（会前一周 / 下次会议日期确定） */
-        { re: '议息会议|下次会议|FOMC会议|美联储会议|利率决议|决议前|会前|静默期',
+        /* P3 阶段：议息临近（v513 同加主体限定:他国央行「利率决议」不命中） */
+        { re: '(?=.*(?:美联储|FOMC))(议息会议|下次会议|FOMC会议|美联储会议|利率决议|决议前|会前|静默期)',
           neg: '尚有时日|取消|推迟',
           status: '议息临近', statusCls: 'watch' },
-        /* P4 中性：官员表态（点名的主席/理事/票委讲话） */
-        { re: '鲍威尔|沃什|哈马克|威廉姆斯|古尔斯比|穆萨勒姆|票委|理事|主席称|主席表示|官员称|官员表示',
+        /* P4 中性：官员表态（v513:「理事|主席称|官员称」为通用词,加美联储主体限定） */
+        { re: '(?=.*(?:美联储|FOMC|联储))(鲍威尔|沃什|哈马克|威廉姆斯|古尔斯比|穆萨勒姆|票委|理事|主席称|主席表示|官员称|官员表示)',
           neg: '前任|此前曾任',
           status: '官员表态', statusCls: 'watch' },
         /* v291【删基线规则】基线由本卡静态 status 决定，规则只做阶段推进 */
@@ -229,6 +232,7 @@
       id: 'ukraine',
       icon: '🕊️',
       title: '俄乌会谈',
+      phase: '会谈进行中',   /* 大字只显示稳定阶段短语，详细态势放简介小字 */
       cat: '地缘 · 外交',
       status: '会谈进行中',
       statusCls: 'live',
@@ -341,6 +345,74 @@
       ],
       assets: ['BRENT', 'GOLD', 'EURUSD'],
       src: '央视新闻 / 新华社 / 中国经济网 / 澎湃新闻 / 卫星通讯社（11-10 ~ 11-11）'
+    },
+    {
+      id: 'apec',
+      icon: '🌐',
+      title: 'APEC 领导人会议',
+      phase: '会议进行中',   /* 大字只显示稳定阶段短语，详细态势放简介小字 */
+      cat: '国际 · 亚太',
+      status: '进行中',
+      statusCls: 'live',
+      hot: 3,
+      updated: '2026-11-18 16:53',
+      summary: '第33次APEC领导人非正式会议11-18至19在深圳举行，中国时隔12年第三次主办；19日中俄美元首将历史首次三边会晤。',
+      headline: { label: '会议态势', value: '会议进行中', sub: 'LLM 态势演进' },
+      metrics: [
+        { name: '中国年经贸成果', value: 50, unit: '项', note: '近50项务实成果 · 数智领域占半壁', color: '#8ce99a' },
+        { name: 'ABAC 成果文件', value: 14, unit: '项', note: '历年新高 · 工商咨询理事会', color: '#8ce99a' }
+      ],
+      timeline: [
+        { t: '11-14~16', k: 'fact', txt: 'APEC工商咨询理事会第四次会议在深圳举行' },
+        { t: '11-17', k: 'fact', txt: '习近平在深圳会见越南苏林、巴新总理马拉佩' },
+        { t: '11-18~19', k: 'fact', txt: '第33次领导人非正式会议在深圳举行' },
+        { t: '11-19', k: 'forecast', txt: '中俄美元首历史首次三边面对面会晤' }
+      ],
+      newsKeys: ['APEC', '亚太经合', '领导人会议', '深圳', '普京', '特朗普', '自贸区'],
+      newsMust: ['APEC', '亚太经合', '领导人会议', '中俄美', '自贸区', '深圳'],
+      newsExcl: ['APEC历史', '文旅', '安保管制'],
+      assets: ['HS300', 'HSI', 'USDCNH'],
+      src: '新华社 / 央视新闻 / 外交部 / 中国经济网（11-16 ~ 11-18）'
+    },
+    {
+      id: 'huang',
+      icon: '🧑‍💼',
+      title: '黄仁勋事件',
+      phase: '跟踪中',
+      cat: '公司 · 科技',
+      status: '跟踪中',
+      statusCls: 'watch',
+      hot: 2,
+      updated: '2026-11-20 19:50',
+      summary: '跟踪黄仁勋相关调查后续、本人动向与英伟达CEO接任安排，等待权威媒体与官方声明确认实质进展。',
+      headline: { label: '英伟达 NVDA', value: '', sub: '关联走势 · 实时', asset: 'NVDA' },
+      metrics: [
+        { name: '英伟达股价（NVDA）', note: '关联标的 · 实时报价', color: '#63e6be', asset: 'NVDA' },
+        { name: '费城半导体指数（SOX）', note: '关联板块 · 实时报价', color: '#8ce99a', asset: 'SOX' },
+        { name: '年底前官宣新CEO', value: 14.5, unit: '%',
+          note: 'Polymarket：New NVIDIA CEO named by Dec 31, 2026', color: '#ffd43b',
+          pred: { q: 'New NVIDIA CEO named by December 31 2026',
+                  event: 'New NVIDIA CEO named by December 31, 2026',
+                  market: 'New NVIDIA CEO named', outcome: 'Yes' } },
+        { name: '下任CEO为外部人选', value: 59.5, unit: '%',
+          note: 'Polymarket：Next NVIDIA CEO - external candidate', color: '#ffd43b',
+          pred: { q: 'Next NVIDIA CEO internal or external',
+                  event: 'Next NVIDIA CEO: internal or external',
+                  market: 'external candidate', outcome: 'Yes' } },
+        { name: '年底前回归英伟达', value: 5.6, unit: '%',
+          note: 'Polymarket：Will he rejoin NVIDIA by Dec 31, 2026', color: '#ffd43b',
+          pred: { q: 'rejoins NVIDIA by December 31 2026',
+                  event: 'rejoins NVIDIA by',
+                  market: 'December 31, 2026', outcome: 'Yes' } }
+      ],
+      timeline: [
+        { t: '11-20', k: 'fact', txt: '英伟达管理层动向与CEO接任安排受市场关注' }
+      ],
+      newsKeys: ['黄仁勋', '英伟达', 'NVIDIA', 'Jensen', 'CEO接任'],
+      newsMust: ['黄仁勋', '英伟达', 'NVIDIA', 'CEO接任'],
+      newsExcl: ['GPU发布', '显卡', '财报'],
+      assets: ['NVDA', 'SOX'],
+      src: '权威媒体 / 公司公告（持续跟踪）'
     }
   ];
 

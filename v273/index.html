@@ -39,10 +39,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>【v273 对照版·仅实测用】异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=273">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=273">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=273">
-<link rel="stylesheet" href="assets/css/app.css?v=273">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=514">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=514">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=514">
+<link rel="stylesheet" href="assets/css/app.css?v=514">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -68,6 +68,8 @@
 })();
 </script>
 
+<div id="aiAlert" class="ai-alert" hidden>⚠ AI 接口全部失效，已回退本地规则 —— 事件卡片无法智能更新，请检查 API Key</div>
+<div id="autoCardAsk" class="aca-mask" hidden><div class="aca-box"><div class="aca-h">发现新事件</div><div class="aca-body"><div class="aca-ic" id="acaIcon">📌</div><div><b id="acaTitle">—</b><p id="acaSum">—</p></div></div><div class="aca-tip">LLM 聚合到这个新事件，是否加入事件卡片？拒绝后同类事件不再提示。</div><div class="aca-btns"><button id="acaNo" class="aca-no">不加入</button><button id="acaYes" class="aca-yes">加入卡片</button></div></div></div>
 <div class="topbar">
   <header class="hdr">
     <div class="brand">
@@ -239,32 +241,32 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=273">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=273">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=273">
-  <link rel="preload" as="script" href="assets/js/app.js?v=273">
-  <link rel="preload" as="script" href="assets/js/api.js?v=273">
-<script src="vendor/lightweight-charts.standalone.production.js?v=273"></script>
-<script src="assets/js/cn-stocks.js?v=273"></script>
-<script src="assets/js/universe.js?v=273"></script>
-<script src="assets/js/session.js?v=273"></script>
-<script src="assets/js/topics.js?v=273"></script>
-<script src="assets/js/news-crypto.js?v=273"></script>
-<script src="assets/js/news-zh.js?v=273"></script>
-<script src="assets/js/pool.js?v=273"></script>
-<script src="assets/js/news-live-client.js?v=273"></script>
-<script src="assets/js/api.js?v=273"></script>
-<script src="assets/js/alert.js?v=273"></script>
-<script src="assets/js/indicator.js?v=273"></script>
-<script src="assets/js/drawing.js?v=273"></script>
-<script src="assets/js/charts.js?v=273"></script>
-<script src="assets/js/news-spike.js?v=273"></script>
-<script src="assets/js/anomaly.js?v=273"></script>
-<script src="assets/js/volprofile.js?v=273"></script>
-<script src="assets/js/verify.js?v=273"></script>
-<script src="assets/js/predict.js?v=273"></script>
-<script src="assets/js/hot-events.js?v=273"></script>
-<script src="assets/js/events.js?v=273"></script>
-<script src="assets/js/app.js?v=273"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=514">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=514">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=514">
+  <link rel="preload" as="script" href="assets/js/app.js?v=514">
+  <link rel="preload" as="script" href="assets/js/api.js?v=514">
+<script src="vendor/lightweight-charts.standalone.production.js?v=514"></script>
+<script src="assets/js/cn-stocks.js?v=514"></script>
+<script src="assets/js/universe.js?v=514"></script>
+<script src="assets/js/session.js?v=514"></script>
+<script src="assets/js/topics.js?v=514"></script>
+<script src="assets/js/news-crypto.js?v=514"></script>
+<script src="assets/js/news-zh.js?v=514"></script>
+<script src="assets/js/pool.js?v=514"></script>
+<script src="assets/js/news-live-client.js?v=514"></script>
+<script src="assets/js/api.js?v=514"></script>
+<script src="assets/js/alert.js?v=514"></script>
+<script src="assets/js/indicator.js?v=514"></script>
+<script src="assets/js/drawing.js?v=514"></script>
+<script src="assets/js/charts.js?v=514"></script>
+<script src="assets/js/news-spike.js?v=514"></script>
+<script src="assets/js/anomaly.js?v=514"></script>
+<script src="assets/js/volprofile.js?v=514"></script>
+<script src="assets/js/verify.js?v=514"></script>
+<script src="assets/js/predict.js?v=514"></script>
+<script src="assets/js/hot-events.js?v=514"></script>
+<script src="assets/js/events.js?v=514"></script>
+<script src="assets/js/app.js?v=514"></script>
 </body>
 </html>

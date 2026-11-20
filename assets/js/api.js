@@ -2995,29 +2995,45 @@
              name: (res.meta && (res.meta.shortName || res.meta.longName)) || '' };
   }
 
-  /* v364【东财海外日K前复权校准】东财对海外市场（日股/台股/韩股）不支持
+  /* v364【东财海外日K前复权校准】东财对海外市场（日/台/韩 + v515 美股）不支持
    * fqt 复权 —— emKline(…, fqt=1) 拿到的仍是未复权价，拆股/配股日出现大跳空
-   * （铠侠 285A 实测 4.6万 → 2万断崖，用户截图）。Yahoo 日线 close（v364 起
-   * 已按 adjclose 缩放）与东财同日收盘之比就是逐日复权因子：按「日期」对齐
-   * 后把东财 OHLC 乘上该因子即完成前复权。Yahoo 拿不到时维持东财原样
-   * （有图优先于精确）。因子表缓存 10 分钟，避免每次切周期都重拉。 */
+   * （铠侠 285A 实测 4.6万 → 2万断崖；英伟达 NVDA 10:1 拆股 1251 → 135）。
+   * Yahoo 日线 close（v364 起已按 adjclose 缩放，**本身即「最新价为基准」的前复权价**）
+   * 与东财同日收盘之比就是逐日复权因子：按「日期」对齐后把东财 OHLC 乘上该因子
+   * 即完成前复权 —— 只缩放价格，点数/成交量/成交额仍用东财（不换主源）。
+   * Yahoo 拿不到时维持东财原样（有图优先于精确）。因子表缓存 10 分钟。
+   * v515：range 改为可配 —— 日韩沿用 1y（响应小、代理稳）；美股必须 5y
+   * （拆股常在数年前，1y 只覆盖近一年会漏因子、断崖照旧；不用 epoch 是
+   *   v331 教训：period1=0 全历史走代理会超时/截断，5y≈1255 根足够覆盖）。 */
   const _emFqCache = new Map();
-  async function emOverseasFqFactor(ysd) {
-    const hit = _emFqCache.get(ysd);
+  async function emOverseasFqFactor(ysd, range) {
+    const rg = range || '1y';
+    const ck = ysd + '|' + rg;                    // 日韩 1y 与美股 5y 因子表隔离，避免串味
+    const hit = _emFqCache.get(ck);
     if (hit && Date.now() - hit.t < 600000) return hit.f;
     const f = {};
     try {
-      /* 1y：响应更小、jina 代理成功率更高；覆盖近一年除权（铠侠拆股在内）。
-       * 更早的除权场景下 Yahoo epoch 主链通常已成功（自身平滑），不依赖本校准。 */
-      const y = await yahooBars(ysd, '1d', '1y');
+      const y = await yahooBars(ysd, '1d', rg);
       for (const p of (y && y.points) || []) {
         if (!(p.close > 0)) continue;
         f[new Date(p.time * 1000).toISOString().slice(0, 10)] = p.close;
       }
     } catch (e) { return null; }
     if (!Object.keys(f).length) return null;
-    _emFqCache.set(ysd, { t: Date.now(), f: f });
+    _emFqCache.set(ck, { t: Date.now(), f: f });
     return f;
+  }
+  /* v515：日K精确命中；周/月K的 time 可能落在非交易日，向前回溯最多 10 天取
+   * 最近交易日因子（正常日K 100% 精确命中，不触发回溯，零回归风险）。 */
+  function fqFactorAt(f, day) {
+    if (f[day] > 0) return f[day];
+    const t0 = Date.parse(day + 'T00:00:00Z');
+    if (!isFinite(t0)) return 0;
+    for (let d = 1; d <= 10; d++) {
+      const k = new Date(t0 - d * 86400000).toISOString().slice(0, 10);
+      if (f[k] > 0) return f[k];
+    }
+    return 0;
   }
 
   /* ---------------- v372 同花顺兜底（仅 A股 / ETF，最后一道） ----------------
@@ -3542,18 +3558,20 @@
             if (y && y.points.length > pts.length) pts = y.points;
           } catch (e) { /* 拿不到就维持现有那段 */ }
         }
-        /* v364【海外个股东财兜底 → Yahoo 因子前复权】日/台/韩股东财 fqt 无效，
-         * 上面的 emKline 结果是未复权价（拆股断崖）。Yahoo 主链失败的场合
-         * 才会走到这里，用 Yahoo 复权价/东财收盘的逐日比值把 OHLC 缩放平掉。
-         * 校准失败（Yahoo 也挂）就维持原样 —— 有图优先于精确。 */
-        if (a && (a.grp === 'jpstock' || a.grp === 'twstock' || a.grp === 'krstock') && pts.length) {
+        /* v364/v515【海外个股东财 → Yahoo 因子前复权】日/台/韩 + v515 美股
+         * 的东财 fqt 无效，emKline 结果是未复权价（拆股断崖）。用 Yahoo 复权价/
+         * 东财同日收盘的逐日比值把 OHLC 缩放平掉 —— 东财仍是主源，只借 Yahoo
+         * 提供复权因子。美股拆股（NVDA 2024/6 10:1）在数年前，必须传 5y 才覆盖
+         * （日韩沿用 1y）。校准失败维持原样 —— 有图优先于精确。 */
+        if (a && (a.grp === 'jpstock' || a.grp === 'twstock' || a.grp === 'krstock' || a.grp === 'usstock') && pts.length) {
           try {
+            const isUS = a.grp === 'usstock';
             const ysd2 = yahooSymbolFor(key, a);
-            const fq = ysd2 ? await emOverseasFqFactor(ysd2) : null;
+            const fq = ysd2 ? await emOverseasFqFactor(ysd2, isUS ? '5y' : '1y') : null;
             if (fq) {
               for (const p of pts) {
                 const day = new Date(p.time * 1000).toISOString().slice(0, 10);
-                const yc = fq[day];
+                const yc = fqFactorAt(fq, day);
                 if (yc > 0 && p.close > 0) {
                   const k = yc / p.close;
                   if (isFinite(k) && k > 0) { p.open *= k; p.high *= k; p.low *= k; p.close *= k; }
@@ -4784,7 +4802,11 @@
   }
 
   /* ---------------- 真实快讯接入 ---------------- */
-  async function news(force, onProgress) {
+  /* v453：恢复 H5 原本的 10 源直连抓源（用户正常访问就是要实时抓源）。
+   * v452 误把前端改成"纯读KV不抓源"，且把云端组合src当成独立源导致源状态显示18 —— 已撤回。
+   * 云端 KV 池继续在 Worker 侧无人值守抓取+LLM分级，前端仍通过 news-live-client 的
+   * overlay 并发拉取 /__news 给抓到的快讯贴 AI 角标（两条链路并存，互不干扰）。 */
+  async function news(force, onProgress, onLate) {
     // ① 优先走后端聚合（金十 / 东财 / 新浪，服务端抓取，覆盖最全）
     if (location.protocol !== 'file:' && HAS_BACKEND) {
       try {
@@ -4797,17 +4819,17 @@
         }
       } catch (e) { /* 后端不可达，走 ② */ }
     }
-    // ② 浏览器直连聚合（11 源）：见闻 / 金十 / 财联社 / 财联社深度 / 格隆汇 / 同花顺 / 东财 / 新浪 / RSS / KZG / 川普
+    // ② 浏览器直连聚合（10 源）：见闻 / 金十 / 财联社 / 财联社深度 / 格隆汇 / 同花顺 / 东财 / 新浪 / KZG / 川普
     //    即使一条都没抓到，也要把 stats.srcDetail 带回去，好让 UI 逐源显示「谁通了、谁挂了」
     if (w.LiveNews) {
       try {
-        const res = await w.LiveNews.collect(force, null, false, onProgress);
+        const res = await w.LiveNews.collect(force, null, false, onProgress, onLate);
         if (res && res.stats) {
           res.stats.direct = true;
           if (res.items && res.items.length) return res;
           return { items: [], stats: res.stats, empty: true };
         }
-      } catch (e) { /* 聚合层整体抛错，交给 ③ */ }
+      } catch (e) { /* 聚合层整体抛错 */ }
     }
     return null;
   }

@@ -131,14 +131,61 @@
     n.fixed = true;
     return true;
   }
+  /* v448【本机去重映射】被用户判定为重复的新闻 → 页面上合并隐藏。
+   * 存 id → 主条 anchorId；每轮抓取入库/渲染时按此过滤，纠错映射升级也不丢。 */
+  const DUP_KEY = 'mm_dup_map';
+  const dupMap = (function () {
+    try { const r = store.get(DUP_KEY, {}); return (r && typeof r === 'object') ? r : {}; }
+    catch (e) { return {}; }
+  })();
+  function dupVisible(n) { return !(n && n.id && dupMap[n.id]); }
+  function applyDupMerge(anchor, dups) {
+    if (!anchor) return 0;
+    let k = 0;
+    dups.forEach(x => {
+      if (!x || !x.id || x.id === anchor.id) return;
+      dupMap[x.id] = anchor.id; k++;
+    });
+    if (k) store.set(DUP_KEY, dupMap);
+    return k;
+  }
+
+  /** v448【去重纠错】把一组被判为重复的新闻送进纠错单。
+   * 代表条目(anchor) + 被勾选的疑似重复条目一起记录；AI 据此判断"应去重/不应去重"。 */
+  function fixDupRecord(anchor, dups, reason) {
+    if (!anchor || !anchor.id) return false;
+    const row = {
+      id: 'dup-' + anchor.id + '-' + Date.now(),
+      kind: 'dup',
+      anchorId: anchor.id,
+      anchorTitle: String(anchor.title || '').slice(0, 120),
+      anchorSrc: anchor.src || '', anchorTs: anchor.ts || Date.now(), anchorCat: anchor.cat || '',
+      dups: (dups || []).map(x => ({ id: x.id, title: String(x.title || '').slice(0, 120),
+        src: x.src || '', ts: x.ts || Date.now(), cat: x.cat || '' })),
+      from: '未去重', to: 'DUP',
+      reason: String(reason || ''), at: Date.now(),
+      gv: (w.LiveNews && w.LiveNews.GRADE_VER) || 0,
+    };
+    fixStore.list.unshift(row);
+    if (fixStore.list.length > 200) fixStore.list.length = 200;
+    store.set(FIX_KEY, fixStore.list);
+    applyDupMerge(anchor, dups || []);   // 页面上立即合并隐藏
+    return true;
+  }
   /** 纠错单纯文本：粘给 AI 就能直接改规则 */
   function fixText() {
     if (!fixStore.list.length) return '';
     const t = (x) => { try { return new Date(x).toLocaleString('zh-CN', { hour12: false }); } catch (e) { return ''; } };
     return `【标级纠错单】${fixStore.list.length} 条 · 规则 v${(w.LiveNews && w.LiveNews.GRADE_VER) || '?'} · 导出 ${t(Date.now())}\n`
       + '格式：新级←原级 | 原因 | 标题 | 来源 | 时间 | 原分类 | 命中规则(ruleId@stage)\n'
-      + fixStore.list.map(x => `${x.to}←${x.from} | ${x.reason || '未填'} | ${x.title} | ${x.src} | ${t(x.ts)} | ${x.cat || ''}`
-          + ` | ${x.ruleId ? x.ruleId + '@' + (x.stage || '?') : '未追溯'}`).join('\n');
+      + fixStore.list.map(x => {
+        if (x.kind === 'dup') {
+          return `DUP←未去重 | ${x.reason || '未填'} | 主条:${x.anchorTitle} | ${x.anchorSrc} | ${t(x.anchorTs)} | 重复${(x.dups || []).length}条:`
+            + (x.dups || []).map(y => `[${y.title}|${y.src}|${t(y.ts)}]`).join('');
+        }
+        return `${x.to}←${x.from} | ${x.reason || '未填'} | ${x.title} | ${x.src} | ${t(x.ts)} | ${x.cat || ''}`
+          + ` | ${x.ruleId ? x.ruleId + '@' + (x.stage || '?') : '未追溯'}`;
+      }).join('\n');
   }
   /** 结构化 JSON 导出：AI 可直接按 ruleId 定位病根，不用解析文本 */
   function fixJson() {
@@ -151,7 +198,11 @@
       count: fixStore.list.length,
       buckets: ['A.词表缺漏→ENTITIES', 'B.数值语境误读→提取器',
         'C.支柱守门边界→croVeto/croPillar/aCap', 'D.纯个例→仅本机映射，不改规则'],
-      items: fixStore.list.map(x => ({
+      items: fixStore.list.map(x => x.kind === 'dup' ? {
+        id: x.id, kind: 'dup', anchorId: x.anchorId, anchorTitle: x.anchorTitle,
+        anchorSrc: x.anchorSrc, anchorTs: x.anchorTs, dups: x.dups,
+        from: '未去重', to: 'DUP', gv: x.gv || 0, reason: x.reason || '', at: x.at
+      } : ({
         id: x.id, from: x.from || '', to: x.to, cat: x.cat || '',
         ruleId: x.ruleId || '', stage: x.stage || '', gv: x.gv || 0,
         reason: x.reason || '', title: x.title, src: x.src || '', ts: x.ts, at: x.at
@@ -189,14 +240,18 @@
     const cur = String(n.level || 'B').toUpperCase();
     const el = d.createElement('div');
     el.className = 'fixmask';
+    /* v414(2026-11-21)【纠错面板回归纯改判·用户口径】多选去重已在列表操作栏执行
+     * （长按多选 → 去重），本面板不再内嵌候选勾选列表与「去重」按钮——
+     * 长按改判进来就是改判；且旧「去重」按钮存在误触弹层问题（实测点它弹出
+     * 模拟异动样式弹层）。候选区/勾选逻辑/fix-dupok 全部移除。 */
     el.innerHTML = `<div class="fixpanel">
-      <div class="fix-h"><b>改判分级</b><span>当前 ${esc(cur)} 级 · ${esc(n.cat || '')} · ${esc(n.src || '')}</span></div>
+      <div class="fix-h"><b>纠错</b><span>当前 ${esc(cur)} 级 · ${esc(n.cat || '')} · ${esc(n.src || '')}</span></div>
       <p class="fix-t">${esc(plain(n.title))}</p>
       <div class="fix-opts">${['S', 'A', 'B', 'C'].map(g =>
         `<button data-fix="${g}" class="${g === cur ? 'on' : ''}">${g}</button>`).join('')}</div>
-      <div class="fix-lab">为什么改（选填，可写多句；写清业务口径，以后能直接变成规则条款）</div>
-      <textarea class="fix-rsn" rows="3" maxlength="500"
-        placeholder="例：不是带关税两个字就是关税战，这条说的是泰国取消对美关税，非对华、小国，影响有限，构不上 S"></textarea>
+      <div class="fix-lab">理由（选填，写清业务口径，可直接变成规则条款）</div>
+      <textarea class="fix-rsn" rows="2" maxlength="500"
+        placeholder="例：不是带关税两个字就是关税战，这条说的是泰国取消对美关税，非对华、小国"></textarea>
       <div class="fix-row">
         <button class="fix-cancel">取消</button>
         <button class="fix-ok">确认改判</button>
@@ -205,11 +260,11 @@
     d.body.appendChild(el);
     let pick = cur;
     const rsnEl = el.querySelector('.fix-rsn');
+    const okBtn = el.querySelector('.fix-ok');
     const sync = () => {
       el.querySelectorAll('[data-fix]').forEach(b => b.classList.toggle('on', b.dataset.fix === pick));
-      const ok = el.querySelector('.fix-ok');
-      ok.textContent = pick === cur ? '确认改判' : '改成 ' + pick;
-      ok.classList.toggle('dim', pick === cur);
+      okBtn.textContent = pick === cur ? '确认改判' : '改成 ' + pick;
+      okBtn.classList.toggle('dim', pick === cur);
     };
     el.addEventListener('click', (e) => {
       if (e.target === el || e.target.closest('.fix-cancel')) { closeFixPanel(); return; }
@@ -222,8 +277,6 @@
         if (!ok) return;
         if (typeof renderGradeFilters === 'function') renderGradeFilters();
         if (typeof renderFeed === 'function') renderFeed();
-        /* 立刻回写本地池子：这样即使哪天纠错映射丢了 / 换了浏览器存储，
-         * 池子里的 level 也是改判后的值。 */
         try { if (typeof poolSync === 'function') poolSync(); } catch (e) {}
         if (S.tab === 'set' && typeof renderSettings === 'function') renderSettings();
       }
@@ -372,6 +425,8 @@
 
   const S = {
     news: [],
+    /* v431：LLM 提纯通道指示（读 events_daily.json 的 model_channel，供顶栏一眼核对） */
+    llmChannel: '',
     /* C 档按钮已经撤掉了（用户口径 11-05：「C 不是让你去掉了吗 怎么还有标签」）。
      * 但 mm_grade 是持久化的 —— 老用户如果上次停在 C 档，刷新后会卡在一个
      * 根本没有按钮可切的空列表里。这里做一次兜底：存档是 C 就回到「重点」。 */
@@ -716,9 +771,213 @@
   function newsFor(key, withinMin, kinds) {
     const from = Date.now() - (withinMin || 25) * 60000;
     // 只用真实抓取的快讯做归因：演示/示例条目不能把一次真实异动「归因」到编造新闻上
-    return S.news.filter(n => n.live === true && n.ts >= from
-      && [...(n.direct || []), ...(n.us || []), ...(n.cn || [])].some(x => x.k === key)
+    return S.news.filter(n => n.live === true && n.ts >= from && dupVisible(n)
+      && [...(n.direct || []), ...(n.us || []), ...(n.cn || []), ...(n.hk || [])].some(x => x.k === key)
       && (!kinds || kinds.indexOf(newsKind(n)) >= 0));
+  }
+
+  /* ================= v495【异动按需AI归因·无状态】 =================
+   * 彻底独立于已下线的全量AI贴标：只在真实异动(alarm && !stale)触发时，
+   * 异步捞最近25分钟原始快讯→调无状态Worker端点→命中则原地升级归因卡片。
+   * 本地 newsCause() 仍0ms占位，AI是"稍后追一行字"，不影响报警实时性。 */
+  var AI_EXPLAIN_URL = 'https://macropulse-api.pages.dev/__anomaly/explain';
+  var aiCoolMap = {};              // key → {t, matched, dir}
+  var aiNotified = {};   // v500: 已发过AI归因通知的品种 → {key: ts}，避免重复
+  var AI_STORE_KEY = 'mm_ai_cause_v497';  // v501: 改localStorage,APP杀进程后归因仍可复用
+  var AI_TTL = 2 * 3600 * 1000;             // v501: 归因复用窗口2小时(同一事件半天内归因不变)
+  /* v497: 归因结果+冷却同步sessionStorage(30分钟有效),刷新页面后回填,避免误刷丢失 */
+  function aiPersist() {
+    try {
+      /* v501: 先读回已有缓存,避免某品种暂不在activeAlerts时(如APP刚重启)被清掉 */
+      var merged = {};
+      try {
+        var prev = JSON.parse(localStorage.getItem(AI_STORE_KEY) || '{}');
+        Object.keys(prev.causes || {}).forEach(k => {
+          var c = prev.causes[k];
+          if (c && Date.now() - (c.at || 0) <= AI_TTL) merged[k] = c;
+        });
+      } catch (e) {}
+      Object.keys(S.activeAlerts || {}).forEach(k => {
+        var a = S.activeAlerts[k];
+        if (a && (a.aiFrom === 'ai' || a.aiChecked)) {
+          merged[k] = { aiFrom: a.aiFrom, aiChecked: a.aiChecked, aiCause: a.aiCause,
+            cause: a.cause, status: a.status, dir: (a.chg >= 0 ? 'up' : 'down'),
+            at: a.aiAt || Date.now() };
+        }
+      });
+      var out = { t: Date.now(), cool: aiCoolMap, causes: merged };
+      localStorage.setItem(AI_STORE_KEY, JSON.stringify(out));
+    } catch (e) {}
+  }
+  function aiRestore() {
+    try {
+      var raw = localStorage.getItem(AI_STORE_KEY); if (!raw) return;
+      var d = JSON.parse(raw);
+      if (!d || Date.now() - (d.t || 0) > AI_TTL) { localStorage.removeItem(AI_STORE_KEY); return; }
+      aiCoolMap = d.cool || {};
+      Object.keys(d.causes || {}).forEach(k => {
+        var a = S.activeAlerts && S.activeAlerts[k]; if (!a) return;
+        var c = d.causes[k];
+        if (Date.now() - (c.at || 0) > AI_TTL) return;
+        a.aiFrom = c.aiFrom; a.aiChecked = c.aiChecked; a.aiCause = c.aiCause;
+        a.cause = c.cause; a.status = c.status; a.aiAt = c.at;
+      });
+    } catch (e) {}
+  }
+  /* v501【持续异动归因复用】APP被杀期间异动已发生、重启后只看到"跌幅扩大"时:
+   * 若localStorage里同品种+同方向+2h内有归因 → 直接复用(挂回r),不重复调AI;
+   * 否则 → 触发一次AI归因(force),完成后补发带归因通知。
+   * 用户口径:同一事件的归因半天内不变,只有归因变化才需重新分析。 */
+  function aiReuseOrFetch(r) {
+    if (!r || r.kind === 'news' || r.status === 'quiet') return;
+    var key = r.key, dir = r.chg >= 0 ? 'up' : 'down';
+    // 已有归因(内存里)→不重复
+    if (r.aiPending || r.aiFrom === 'ai' || (r.cause && r.aiCause)) return;
+    var cached = null;
+    try {
+      var raw = localStorage.getItem(AI_STORE_KEY);
+      if (raw) {
+        var d = JSON.parse(raw);
+        var c = d.causes && d.causes[key];
+        if (c && Date.now() - (c.at || 0) <= AI_TTL && c.dir === dir && c.aiFrom === 'ai' && c.cause) {
+          cached = c;
+        }
+      }
+    } catch (e) {}
+    if (cached) {
+      // 复用缓存归因,不调AI
+      r.cause = cached.cause; r.aiCause = cached.aiCause;
+      r.aiFrom = 'ai'; r.aiChecked = true; r.aiAt = cached.at;
+      r._aiReused = true;
+      try { aiPersist(); } catch (e) {}
+      return;
+    }
+    // 无缓存/方向变了/过期 → 触发一次归因(force跳过冷却,非首次→会补发通知)
+    try { requestAnomalyAI(r, true, false); } catch (e) {}
+  }
+
+  var aiQueue = [];                // 轻量排队(长度4)
+  var aiRunning = 0;               // 当前并发数(上限2)
+  var AI_MAX_CONC = 2, AI_QUEUE_MAX = 4;
+
+  /** 分层捞取25条:①品种直接命中的cause ②全市场S/A非echo ③B级非echo补齐 */
+  function collectRawNews(key, withinMin, limit) {
+    limit = limit || 25;
+    var from = Date.now() - (withinMin || 25) * 60000;
+    var pool = S.news.filter(n => n.live === true && n.ts >= from && dupVisible(n)
+      && newsKind(n) !== 'echo');
+    pool.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    var picked = [], used = {};
+    function take(n) { if (n && !used[n.id || n.ts]) { used[n.id || n.ts] = 1; picked.push(n); } }
+    // ① 品种直接命中的cause(用newsFor口径,含hk)
+    newsFor(key, withinMin, ['cause']).forEach(take);
+    // ② 全市场 S/A 级非echo
+    pool.filter(n => n.level === 'S' || n.level === 'A').forEach(take);
+    // ③ B级及其它非echo补齐
+    pool.forEach(take);
+    return picked.slice(0, limit).map((n, i) => ({
+      idx: i, id: n.id || '', time: new Date(n.ts).toTimeString().slice(0, 5),
+      title: String(n.title || '').slice(0, 120)
+    }));
+  }
+
+  /** 归因调度:冷却+并发+队列 */
+  function requestAnomalyAI(r, force, fromAlert) {
+    if (!r || r.kind === 'news' || r.status === 'quiet') return null;
+    var key = r.key;
+    var dir = r.chg >= 0 ? 'up' : 'down';
+    var now = Date.now();
+    var c = aiCoolMap[key];
+    if (c) {
+      var coolMs = c.matched ? 20 * 60000 : 5 * 60000;
+      // matched:true 且方向反转 → 破冷却(新方向的新异动应重新归因)
+      var reversed = c.matched && c.dir !== dir;
+      if (!reversed && now - c.t < coolMs && !force) return;
+    }
+    var news = collectRawNews(key, 25, 25);
+    if (!news.length) return null;   // 25分钟内无可用快讯→不调LLM(省调用)
+    var job = { key: key, name: r.name || U.name(key), direction: dir, chg: r.chg, news: news, fromAlert: !!fromAlert };
+    // 同品种去重:队列/运行中已有则跳过
+    if (aiQueue.some(x => x.key === key)) return null;
+    if (aiRunning >= AI_MAX_CONC) {
+      if (aiQueue.length < AI_QUEUE_MAX) aiQueue.push(job);
+      return null;
+    }
+    return runAnomalyAI(job);
+  }
+  function _aiNext() {
+    if (aiRunning < AI_MAX_CONC && aiQueue.length) {
+      var j = aiQueue.shift(); if (j) runAnomalyAI(j);
+    }
+  }
+  function runAnomalyAI(job) {
+    aiRunning++;
+    // v496: 标记"AI归因中",让渲染层显示复核状态(仅前端内存,不写KV)
+    try {
+      var _act0 = S.activeAlerts && S.activeAlerts[job.key];
+      if (_act0) { _act0.aiPending = true; applyAnomalyCause(_act0); }
+    } catch (e) {}
+    var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var tm = setTimeout(() => ctl && ctl.abort(), 15000);
+    return fetch(AI_EXPLAIN_URL, { method: 'POST', signal: ctl ? ctl.signal : undefined,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: job.name, direction: job.direction, chg: job.chg,
+        news: job.news }) })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
+        if (!d) return;
+        var matched = !!d.matched;
+        aiCoolMap[job.key] = { t: Date.now(), matched: matched, dir: job.direction };
+        var act0 = S.activeAlerts && S.activeAlerts[job.key];
+        if (act0) {
+          act0.aiPending = false;
+          act0.aiChecked = true;   // AI正常返回(区分于超时)
+          if (!matched) { applyAnomalyCause(act0); aiPersist(); return d; }  // 未命中:显示"AI已排查",供通知合并
+        }
+        if (!matched) return d;   // matched:false 保留本地兜底,不改卡片;返回d供通知合并
+        // idx → 真实newsId/news title 映射,原地升级归因
+        var src = job.news[Number(d.idx)];
+        if (!src) return;
+        var act = S.activeAlerts && S.activeAlerts[job.key];
+        if (!act) return;
+        var aiSum = String(d.summary || '').slice(0, 28);
+        act.aiFrom = 'ai';       // v496: 标记AI来源,渲染AI微标
+        // 按钮文字用LLM的精准摘要,点开仍指向真实新闻(newsTitle保留原文)
+        act.cause = { id: src.id, title: aiSum || src.title, newsTitle: src.title };
+        act.status = 'attributed';
+        act.aiCause = aiSum;
+        act.aiAt = Date.now();
+        applyAnomalyCause(act); aiPersist();
+        /* v500【持续异动补发AI通知】onAlert那条通知在AI返回前已发(本地文案);
+         * 这里AI命中后补发一条带归因的通知。2.5s合并只覆盖首次触发,
+         * 持续异动(syncAlerts路径)靠这里让用户看到AI归因进了通知栏。
+         * 节流: 同品种20分钟内只补发一次(与aiCoolMap匹配冷却一致)。 */
+        try {
+          var _lastN = aiNotified[job.key] || 0;
+          if (!job.fromAlert && Date.now() - _lastN > 20 * 60000) {
+            aiNotified[job.key] = Date.now();
+            sysNotify('AI归因 · ' + job.name,
+              alarmWords(act) + ' · AI归因：' + aiSum,
+              'mm-anom-ai-' + job.key, 'anom');
+          }
+        } catch (e) {}
+        return d;   // v497: 供通知栏2.5s合并消费
+      })
+      .catch(() => {
+        // 超时/失败静默:清pending但不设aiChecked(区别于正常未命中)
+        try { var a = S.activeAlerts && S.activeAlerts[job.key]; if (a) { a.aiPending = false; applyAnomalyCause(a); } } catch (e) {}
+        aiCoolMap[job.key] = { t: Date.now(), matched: false, dir: job.direction };
+        aiPersist();
+        return null;
+      })
+      .finally(() => { clearTimeout(tm); aiRunning--; _aiNext(); });
+  }
+  /** 原地升级归因区:找到该品种卡片,替换归因文案,不整页重绘 */
+  function applyAnomalyCause(act) {
+    try {
+      if (S.tab === 'radar' && typeof renderRadar === 'function') renderRadar(radar ? Object.values(radar.state) : [], radar);
+      else if (typeof syncAlerts === 'function') syncAlerts(radar);
+    } catch (e) {}
   }
 
   /** 这条异动有没有「只是行情播报」的快讯（用于 UI 解释为什么没归因） */
@@ -1383,7 +1642,7 @@
         }
       } catch (e) {}
     }
-    const items = S.news.filter(matchFilter);
+    const items = S.news.filter(n => dupVisible(n) && matchFilter(n));
     /* C 级兜底区已停用（09:39 用户口径：「C 还是不要上了，太多太乱」）。
      * 老池子里可能还残留极少量 C（合并重算 / 历史数据），这里不再渲染，
      * 免得「C 不上」只做了一半。想查的走「C」档筛选，那一档仍然读池子。
@@ -1417,8 +1676,10 @@
       const usC = (n.us || []).map(x => chip(x.k)).join('');
       const hkC = (n.hk || []).map(x => chip(x.k)).join('');
       return `<article class="card is-${n.level.toLowerCase()}${n.noAsset ? ' is-macro' : ''}${n.demo ? ' is-demo' : ''}" data-id="${esc(n.id)}">
+        <label class="c-sel" data-sel="${esc(n.id)}" hidden><input type="checkbox"></label>
         <div class="c-top">
           <span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>
+          ${n.aiGraded ? '<span class="c-ai" title="这条分级经过 CF 边缘 LLM 微批判定（未标=本机规则）">AI</span>' : ''}
           ${n.fixed ? '<span class="c-fixed" title="你手工改判过这条（原级见设置 → 标级纠错）">已改判</span>' : ''}
           <span class="c-cat">${esc(n.cat)}</span>
           ${n.noAsset ? '<span class="c-macro" title="这条消息不打单一品种，但它定义了当天的市场基调">全局</span>' : ''}
@@ -1736,10 +1997,17 @@
    * TTL 30 分钟：超过就不要了，避免长时间没打开时展示过期的"全通"假象。 */
   const SRC_STATE_KEY = 'mm_srcdetail_v1';
   const SRC_STATE_TTL = 30 * 60 * 1000;
+  /* v453：源状态白名单 = 固定 10 源，绝不显示组合 src（如"金十/同花顺/..."）。
+   * v452 曾把云端池子的组合 src 当独立源写进缓存 → 显示 18/18，已作废。 */
+  const SRC_WHITELIST = ['金十数据', '华尔街见闻', '财联社', '财联社深度', '格隆汇',
+    '同花顺', '东方财富', '口罩哥KZG', '川普言论', '新浪财经'];
 
   function saveSrcState(st) {
     try {
       if (!st || !Array.isArray(st.srcDetail) || !st.srcDetail.length) return;
+      // 只存10源白名单内的，丢弃任何组合/历史残留 src
+      st.srcDetail = st.srcDetail.filter(d => d && SRC_WHITELIST.indexOf(d.name) >= 0);
+      if (!st.srcDetail.length) return;
       store.set(SRC_STATE_KEY, {
         t: Date.now(),
         srcDetail: st.srcDetail.map(d => ({
@@ -1758,9 +2026,15 @@
     try { v = store.get(SRC_STATE_KEY, null); } catch (e) { return false; }
     if (!v || !v.t || Date.now() - v.t > SRC_STATE_TTL) return false;
     if (!Array.isArray(v.srcDetail) || !v.srcDetail.length) return false;
-    const okList = v.srcDetail.filter(d => d.ok);
+    // v453：检测 v452 污染缓存——只要有一条非10源白名单的 src（组合src），
+    // 就判定整份缓存被污染，直接删除并放弃恢复（让实时抓取重建正确的10源状态）。
+    const polluted = v.srcDetail.some(d => !d || SRC_WHITELIST.indexOf(d.name) < 0);
+    if (polluted) { try { localStorage.removeItem(SRC_STATE_KEY); } catch (e) {} return false; }
+    const cleanDetail = v.srcDetail.filter(d => d && SRC_WHITELIST.indexOf(d.name) >= 0);
+    if (!cleanDetail.length) return false;
+    const okList = cleanDetail.filter(d => d.ok);
     S.liveStats = {
-      srcDetail: v.srcDetail,
+      srcDetail: cleanDetail,
       sources: okList.map(d => d.name + ':' + d.count),
       fetched: v.fetched, kept: v.kept, filtered: v.filtered,
       s: v.s, a: v.a, b: v.b, snr: v.snr || 0,
@@ -2199,17 +2473,21 @@
           <span>现价 <span class="qpx" data-k="${esc(r.key)}">${r.last ? U.fmt(r.key, r.last) : '--'}</span></span>
         </div>
         <div class="ra-t">
-          ${r.status === 'unattributed'
-            ? (r.echoOnly
-              ? '只有 25 分钟内的行情播报（涨跌幅/跳水类），没有事件级原因 —— 不拿结果当原因'
-              : '快讯库 25 分钟内无可归因消息 —— 资金或已提前定价')
-            : (r.cause
-              ? `归因：${r.cause.id
-                ? `<button class="ra-cn" data-news="${esc(r.cause.id)}">${esc(plain(r.cause.title))}</button>`
-                : (r.cause.url
-                  ? `<button class="ra-cn" data-open="${esc(r.cause.url)}">${esc(plain(r.cause.title))}</button>`
-                  : `<span class="rl-nt">${esc(r.cause.title || '事件快讯')}</span>`)}`
-              : '已有对应事件快讯，属「消息驱动」波动')}
+          ${r.aiPending
+            ? `<span class="ai-pending">${r.cause ? '本地初判 · ' : ''}AI归因中…</span>`
+            : (r.status === 'unattributed'
+              ? (r.aiChecked
+                ? '<span class="ai-checked">AI已排查：暂无明确消息催化</span><button class="ai-recheck" data-ai-recheck="${esc(r.key)}" title="用最新快讯重查一次">重查</button>'
+                : (r.echoOnly
+                  ? '只有 25 分钟内的行情播报（涨跌幅/跳水类），没有事件级原因 —— 不拿结果当原因'
+                  : '快讯库 25 分钟内无可归因消息 —— 资金或已提前定价'))
+              : (r.cause
+                ? `归因：${r.cause.id
+                  ? `<button class="ra-cn" data-news="${esc(r.cause.id)}">${esc(plain(r.cause.title))}</button>`
+                  : (r.cause.url
+                    ? `<button class="ra-cn" data-open="${esc(r.cause.url)}">${esc(plain(r.cause.title))}</button>`
+                    : `<span class="rl-nt">${esc(r.cause.title || '事件快讯')}</span>`)}${r.aiFrom === 'ai' ? '<i class="ai-tag" title="AI归因">AI</i>' : ''}`
+                : '已有对应事件快讯，属「消息驱动」波动'))}
           <button class="ra-go" data-k="${esc(r.key)}">看图 →</button>
         </div>
       </div>`;
@@ -2455,7 +2733,18 @@
     while (box.children.length > 3) box.firstChild.remove();
   }
 
-  function showAlarm(r) {
+  /** v500：横幅/通知的归因后缀——根据本地/AI归因状态动态显示，不再一律"暂无匹配快讯" */
+  function alarmTail(r) {
+    if (!r) return '· 暂无匹配快讯';
+    if (r.aiFrom === 'ai' && r.aiCause) return '· AI归因：' + String(r.aiCause).slice(0, 20);
+    if (r.cause && r.cause.title) return '· 归因：' + String(r.cause.title).slice(0, 20);
+    if (r.aiChecked) return '· AI已排查：暂无明确催化';
+    return '· 暂无匹配快讯';
+  }
+
+  function showAlarm(r, aiPromise) {
+    /* v501: 持续异动(APP被杀期间发生、重启后只看到跌幅扩大)归因复用/补查 */
+    try { aiReuseOrFetch(r); } catch (e) {}
     const bar = $('#alarmBanner');
     /* 软横幅（S 级快讯）占着同一个元素时，必须走完整渲染，
      * 不能进下面的「同一条还在继续」早退分支 —— 否则
@@ -2465,7 +2754,7 @@
       // 同一条异动还在继续：文案要跟着刷新（持续时间/当日跌幅每 20 秒都在变），
       // 早退会把首轮的数字冻在屏幕上，用户看到的是过期值。
       const sp = bar.querySelector('.al-tx span');
-      if (sp) sp.innerHTML = `${alarmWords(r)} · 暂无匹配快讯`;
+      if (sp) sp.innerHTML = `${alarmWords(r)} ${alarmTail(r)}`;
       S.lastAlarm = r;
       /* 账本里的幅度同步推到当前值 ——
        * 语义是「你已经知道的最大幅度」。这样：
@@ -2484,7 +2773,7 @@
       <div class="al-ic">!</div>
       <div class="al-tx">
         <b>${esc(r.name)}${r.holding ? '仍在剧烈波动' : '突发剧烈异动'}，正在全力捕获催化剂…</b>
-        <span>${alarmWords(r)} · 暂无匹配快讯</span>
+        <span>${alarmWords(r)} ${alarmTail(r)}</span>
       </div>
       <button class="al-btn" data-k="${esc(r.key)}">看图</button>
       <button class="al-x" aria-label="关闭">✕</button>`;
@@ -2508,7 +2797,26 @@
     buzz([30, 60, 30]);
     /* v197：系统通知栏保留（用户明确要通知进通知栏）；
      * 去掉的是网页内那个深红 .toast 浮窗，见 onAlert。 */
-    sysNotify('异动提醒 · ' + r.name, alarmWords(r), 'mm-anom-' + r.key, 'anom');
+    /* v497【通知栏2.5秒合并窗口】页面内卡片0ms已渲染(见上);
+     * 系统通知等本次AI归因Promise最多2.5s:命中则把摘要拼进通知一次性弹出,
+     * 超时/未命中按本地alarmWords(r)弹。避免"先弹本地、AI后来又补一条"的双通知。 */
+    if (aiPromise && typeof aiPromise.then === 'function') {
+      var fired = false;
+      var fire = (d) => {
+        if (fired) return; fired = true;
+        var body = alarmWords(r) + ' ' + alarmTail(r);
+        if (d && d.matched && d.summary) body = 'AI归因：' + d.summary + ' · ' + alarmWords(r);
+        sysNotify('异动提醒 · ' + r.name, body, 'mm-anom-' + r.key, 'anom');
+      };
+      try {
+        Promise.race([
+          aiPromise.then(d => fire(d)).catch(() => fire(null)),
+          new Promise(ok => setTimeout(() => fire(null), 2500)),
+        ]);
+      } catch (e) { fire(null); }
+    } else {
+      sysNotify('异动提醒 · ' + r.name, alarmWords(r) + ' ' + alarmTail(r), 'mm-anom-' + r.key, 'anom');
+    }
   }
 
   /* ---------------- 声音 / 震动（v193：统一走 Android 原生，不再落媒体声道） ----------------
@@ -2740,6 +3048,18 @@
     return { label: label, full: label, color: color };
   }
 
+  /* v443：用户手动拖拽过的组内顺序——按 S.watch 里的索引排，不再走 sessionSort
+   * 默认规则（否则拖完一点「完成」就被 sessionSort 打回原形）。 */
+  function userOrderSort(list) {
+    return list.slice().sort((a, b) => {
+      const ia = S.watch.indexOf(a), ib = S.watch.indexOf(b);
+      return (ia < 0 ? 9999 : ia) - (ib < 0 ? 9999 : ib);
+    });
+  }
+  function fixedSort(list) {
+    return store.get('mm_watch_ordered', '') === '1' ? userOrderSort(list) : sessionSort(list);
+  }
+
   // 同一时段区内：指数在前，其次按 GROUP 原始 order，再按资产 ord，最后按名称
   function sessionSort(list) {
     return list.slice().sort((x, y) => {
@@ -2900,9 +3220,8 @@
           <span class="qp" data-k="${esc(k)}">${q ? U.changeLabel(k, q) : '--'}</span>
         </div>
         ${S.marketEdit ? `<div class="mk-mv">
-            <button data-mv="up" data-k="${esc(k)}" ${first ? 'disabled' : ''} title="上移">▲</button>
-            <button data-mv="down" data-k="${esc(k)}" ${last ? 'disabled' : ''} title="下移">▼</button>
-            <button class="mk-x" data-del="${esc(k)}">×</button>
+            <span class="mk-drag" data-drag="${esc(k)}" title="按住拖动排序" aria-label="拖动排序">☰</span>
+            <button class="mk-x" data-del="${esc(k)}" title="移除">×</button>
           </div>` : '<span class="mk-x-ph"></span>'}
       </div>`;
     }).join('');
@@ -3301,7 +3620,7 @@
       const sk = sessionKeyOf(keys[0]);
       const meta = sessionMeta(sk);
       const list = (S.marketSort === 'fixed')
-        ? sessionSort(keys.slice())
+        ? fixedSort(keys.slice())
         : keys.slice().sort(byPct(S.marketSort));
       body.innerHTML = `<section class="mkg">
         <div class="mkg-h">
@@ -3317,12 +3636,12 @@
         (sessGroups[sk] = sessGroups[sk] || []).push(k);
       });
       const order = sessionOrder().filter(sk => sessGroups[sk]);
-      const _hint = orderHint() || (S.marketEdit ? '用 ▲▼ 调整组内顺序' : '');
+      const _hint = orderHint() || (S.marketEdit ? '按住 ☰ 拖动排序 · × 移除' : '');
       body.innerHTML = `${_hint ? `<div class="mkt-hint">${esc(_hint)}</div>` : ''}`
         + order.map(sk => {
         const meta = sessionMeta(sk);
         const list = (S.marketSort === 'fixed')
-          ? sessionSort(sessGroups[sk])
+          ? fixedSort(sessGroups[sk])
           : sessGroups[sk].slice().sort(byPct(S.marketSort));
         const st = sessionOf(list[0]);
         return `<section class="mkg">
@@ -4240,6 +4559,8 @@
           <button class="mini-btn" id="btnTestNotify">测试</button></div>
         <div class="set-row"><div><b>5 秒后测试后台通知</b><span>点完立刻切到后台或锁屏。5 秒后应响铃 + 震动 + 通知栏；计时在 APP 原生层，不受网页定时器冻结影响。没响＝后台进程被系统冻结，去「后台防杀」设为无限制</span></div>
           <button class="mini-btn" id="btnTestDelayed">5 秒</button></div>
+        <div class="set-row"><div><b>模拟异动 AI 归因</b><span>点后跳到异动看板，模拟一次黄金急跌并触发归因：观察「AI归因中…→AI角标」状态流转，同时验证通知栏 2.5 秒合并窗口（通知会带归因摘要）</span></div>
+          <button class="mini-btn" id="btnMockAnomaly">模拟</button></div>
         <div class="set-row"><div><b>后台防杀</b></div>
           <button class="mini-btn" id="btnBattery">去设置</button></div>
       </div>
@@ -6591,11 +6912,20 @@
      * 任何一条传进半成品（null、无 id、无标题）都不能把整个首屏打崩 ——
      * 之前 normItem(null) 抛异常，直接导致「刷新后全屏空白 10 秒」。 */
     if (!it || !it.id || !it.title) return null;
+    // v455【未来时间防护】源头若解析错时区会产生未来时间戳（昨夜10:16固定时间bug），
+    // 超过当前5分钟的视为污染，钳制为当前时间，避免"10:16·刚刚"永远霸占顶部。
+    let ts0 = it.ts ? new Date(it.ts).getTime() : Date.now();
+    if (!isFinite(ts0) || ts0 > Date.now() + 5 * 60 * 1000) ts0 = Date.now();
     const item = {
       id: it.id,
-      ts: it.ts ? new Date(it.ts).getTime() : Date.now(),
+      ts: ts0,
       level: (it.level || 'A').toUpperCase(),
       cat: it.cat || '快讯',
+      // v452：云端KV池带来的 LLM 分级标记必须透传，否则 AI 角标丢失
+      aiGraded: it.aiGraded === true,
+      /* v478b：判级来源版本标记必须随条目透传+回写池子，否则重算后标记丢失，
+       * 下次启动又被当成旧贴标反复重算。 */
+      gradeSrc: it.gradeSrc || '',
       region: it.region || '',
       title: it.title,
       brief: it.brief || '',
@@ -6651,6 +6981,9 @@
     list.forEach(it => {
       try {
       if (!it || !it.id || !it.title) return;
+      /* v455【未来时间脏数据】时区bug(UTC当北京)曾把时间戳推后8小时，
+       * 这些条目 ts 在未来、按倒序永远霸占顶部。冷启动直接跳过。 */
+      if (it.ts && new Date(it.ts).getTime() > Date.now() + 5 * 60 * 1000) return;
       /* 池子里历史残留的 C 级（v76 那版曾把「值得复核的 C」留过池，
        * 后来用户否掉了）直接跳过 —— 否则「C」档计数永远挂着个 1，
        * 用户看着就是「C 不是让你去掉了吗怎么还有」。 */
@@ -6662,7 +6995,11 @@
        * 不重算的话，池子里 72 小时的旧分级会一直生效：
        * 用户报「A 类 143 条」，其中大半是老口径放进来的，
        * 光改规则不改存量，用户永远看不到变化。 */
-      if (GV && it.gv !== GV) {
+      /* v478b【清数据仍见旧S标】带 aiGraded 但无 gradeSrc 的条目 = 旧版LLM贴标，
+       * 强制走本地v2.0重算并清掉 AI 角标，避免旧S级残留（统计显示S0但卡片显示S4的矛盾）。 */
+      const _staleAi = it.aiGraded === true && it.gradeSrc !== 'v477';
+      if (_staleAi) { it.aiGraded = false; it.level = undefined; }
+      if (GV && (it.gv !== GV || _staleAi)) {
         let fresh = null;
         try {
           fresh = w.LiveNews._enrich({
@@ -6746,6 +7083,7 @@
   /** 首屏之后做一次「过去 24 小时回溯」，补齐没打开页面时漏掉的暴涨暴跌 */
   function startBackfill() {
     if (bfStarted) return;
+    /* v453：恢复 H5 原本的 24h 历史回溯（用户正常访问行为）。v452 误关，已撤回。 */
     if (!w.LiveNews || !w.LiveNews.backfill) return;
 
     let st = null;
@@ -6813,7 +7151,7 @@
      *  · 但只有「当前档位可见」的消息才触发重绘/横幅——重点页(=S+A)收到纯 B 级
      *    迟到消息时静默入池、不重绘、不弹提醒，不打扰阅读；B 级在后台自动补齐。
      * 这正是用户口径：「重点页只刷 A+S，B 级后台轮询；哪个源快先出、慢的后台补」。 */
-    const onLate = soft ? (srcName, items) => {
+    const onLate = (srcName, items) => {
       if (!Array.isArray(items) || !items.length) return;
       const LN = w.LiveNews;
       let changed = 0, visibleHere = 0;
@@ -6841,10 +7179,10 @@
       if (!visibleHere) return;              // 全是别的档位 → 静默入池，不重绘/不提醒
       renderFeed();                          // 当前档位有新内容才重绘
       if (!S.modalOn) showSoftSBanner();     // 软横幅兜底（不弹全屏，避免打断）
-    } : null;
+    };
     const res = soft && w.API && typeof w.API.newsSoft === 'function'
       ? await w.API.newsSoft(showStatus ? onProg : null, onLate)
-      : await w.API.news(false, showStatus ? onProg : null);
+      : await w.API.news(false, showStatus ? onProg : null, onLate);
     if (!res) {
       /* 下拉抓取失败：保持现有「全部已连接」，别把顶栏打成「未接入」 */
       if (!soft) S.flashState = 'off';
@@ -6882,6 +7220,16 @@
         const prev = S.news[idx];
         S.news[idx] = Object.assign(norm, {
           spike: (prev && prev.spike) || norm.spike || null,
+          /* v464【AI标/S级跳变根因】norm 是刚抓的源条目(aiGraded=false、级别=本地规则)，
+           * 直接覆盖会冲掉上一轮 overlay/fast-grade 贴好的 AI 标和 LLM 级别，
+           * 于是 25s 一轮：贴标→被冲掉→再贴→再冲掉，用户看到「标/S级变来变去」。
+           * 必须保留 prev 的 aiGraded 和 LLM 判过的 level/cat。 */
+          aiGraded: (prev && prev.aiGraded) || norm.aiGraded || false,
+          level: (prev && prev.aiGraded && prev.level) || norm.level,
+          cat: (prev && prev.aiGraded && prev.cat) || norm.cat,
+          fixed: (prev && prev.aiGraded && prev.fixed) || norm.fixed || false,
+          /* v476：AI判级保护锁（与用户改判 fixed 完全独立，仅防本地规则重算冲掉AI标） */
+          aiLocked: (prev && prev.aiGraded && prev.aiLocked) || norm.aiLocked || false,
           /* 【关键】fromCache 必须一起保留。
            * 这批条目最早是 hydrateFromPool() 从本地缓存灌进来的（fromCache=true），
            * 结果 norm 里没有这个字段，一覆盖就丢了「这是缓存里的旧条目」标记 ——
@@ -7251,7 +7599,7 @@
    * 只作用在配了 autoProgress 的事件上，其它卡片完全不受影响。
    * 规则按优先级从高到低匹配；neg 是防误判闸门（「不会同意停火」不算达成）。
    * 返回浅拷贝，绝不污染 events.js 里的原始数据。 */
-  const EV_STAGE_KEY = 'mm_ev_stage_v1';
+  const EV_STAGE_KEY = 'mm_hn_mmsjw_t8';   /* v513:规则修正后bump,作废含「南非央行误判决议公布」的旧锁 */
   let _evStage = null;
   function evStageMap() {
     if (!_evStage) {
@@ -7324,6 +7672,20 @@
    * 天数退到副行，绝不覆盖真实进展。 */
   function eventAutoHeadline(ev, view) {
     const h = ev.headline;
+    /* v434【大字只放状态，详细放小字】用户口径：蓝色大字是「一眼扫的状态」，几个字即可
+     * （如 会谈进行中 / 领导人抵离中），详细态势全在上方简介小字里。
+     * 此前把 progress_line 长句塞进大字 → 与简介重复且被截断，本末倒置。
+     * 有实时行情(pred/asset)的卡不走这里、仍显示行情数字（图1美伊/美联储效果）。
+     * 仅无行情的卡(俄乌/APEC)用 status 极简状态取代机械「第 N 天」。 */
+    if (ev.progress_line) {
+      /* phase 是稳定的阶段短语(会谈进行中/会议进行中)，放 events.js；
+       * 没有就退回 headline.value(同样是人工短标签)，绝不用 status 长句或 progress_line 长句。 */
+      const short = String(ev.phase || (h && h.value) || '跟踪中').slice(0, 12);
+      return Object.assign({}, view, { headline: Object.assign({}, h || {}, {
+        value: short,
+        sub: (ev.updated ? 'LLM 态势 · ' + String(ev.updated).slice(5, 16) : 'LLM 态势演进')
+      }) });
+    }
     let a = h && h.auto;
     /* v352：用户端若缓存了旧版 events.js（headline 还没有 auto 字段），
      * 就从 metrics 里带 auto.daysSince 的进度指标推导，避免又显示写死的「第 2 天」。
@@ -7402,9 +7764,11 @@
      * 之前只有指标行接了，导致大数永远停在写死的值上。 */
     if (h.pred) {
       const cached = (w.Predict && w.Predict.instant) ? w.Predict.instant(h.pred) : null;
+      /* v437：实时价未到之前不显示写死的快照 value（如美联储写死 77.5%，
+       * 用户实录「刚进去 70 多、几秒后跳 90 多」的跳动感根源）。改成等待占位。 */
       const cur = cached ? (cached.settled
         ? ('已结算 · ' + (cached.p >= 50 ? 'Yes' : 'No'))
-        : cached.p.toFixed(1) + '%') : (h.value || '--');
+        : cached.p.toFixed(1) + '%') : '读取中…';
       return `<div class="${cls}" data-pred="${esc(h.pred.slug || '')}"
         data-pred-q="${esc(h.pred.q || '')}"
         data-pred-ev="${esc(h.pred.event || '')}"
@@ -7476,16 +7840,18 @@
       /* 首屏优先用「上一次拿到的实时值」垫底：
        * 页面每 30 秒整块重绘，若还用写死的快照值，屏幕上会先闪一下旧数。 */
       const cached = (w.Predict && w.Predict.instant) ? w.Predict.instant(m.pred) : null;
-      const cur = cached ? cached.p : m.value;
-      const pct0 = Math.max(0, Math.min(100, (cur / max0) * 100));
+      /* v437：无缓存时不显示写死的快照 value（用户实录「刚进去 70 多、几秒后跳 90 多」）。
+       * 改成读取中占位，实时价一到立即替换，杜绝旧值闪现。 */
+      const cur = cached ? cached.p : null;
+      const pct0 = cur == null ? 0 : Math.max(0, Math.min(100, (cur / max0) * 100));
       return `<div class="ev-m" data-pred="${esc(m.pred.slug || '')}"
         data-pred-q="${esc(m.pred.q || '')}"
         data-pred-ev="${esc(m.pred.event || '')}"
         data-pred-out="${esc(m.pred.outcome || '')}"
         data-pred-mk="${esc(m.pred.market || '')}">
-        <div class="ev-mh"><span>${esc(m.name)}</span><b style="color:${m.color}" data-pred-v>${cur}${cached ? '%<i class="ev-livetag">预测市场</i>' : (m.unit || '')}</b></div>
+        <div class="ev-mh"><span>${esc(m.name)}</span><b style="color:${m.color}" data-pred-v>${cur == null ? '读取中…' : (cur + (cached ? '%<i class="ev-livetag">预测市场</i>' : (m.unit || '')))}</b></div>
         <div class="ev-bar"><i data-pred-bar style="width:${pct0.toFixed(1)}%;background:${m.color}"></i></div>
-        <div class="ev-mn" data-pred-note>${esc(cached ? ('Polymarket 实时合约价 · ' + hhmm(cached.at)) : (m.note || ''))}</div>
+        <div class="ev-mn" data-pred-note>${esc(cached ? ('Polymarket 实时合约价 · ' + hhmm(cached.at)) : (cur == null ? '正在获取实时概率…' : (m.note || '')))}</div>
       </div>`;
     }
     /* —— 情形 C：人工快照指标（预测 / 人工指数），无外部数据源 —— */
@@ -7544,19 +7910,17 @@
     /* 自动进展：把该事件匹配到的 24 小时内快讯挂到人工时间线上方。
      * 用户要的是「俄乌和谈的进展能自己动」—— 人工时间线是叙事，不能天天手改，
      * 所以新进展直接由快讯池流入，标注「自动」，与人工节点分开。 */
-    const winMs = (ev.autoWindowH || 72) * 3600 * 1000;
-    const fresh = news.filter(n => Date.now() - (n.ts || 0) < winMs).slice(0, 6);
+    /* v439：相关报道与最新进展重复，合并为唯一新闻流。列出全部匹配快讯（时间倒序），
+     * 每条可点(data-evn)打开快讯详情——用户实录「最新进展的新闻点不了」。 */
+    const fresh = news.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0));
     const autoTl = fresh.map(n =>
-      `<div class="ev-tl-i is-auto"><em>${n.seed ? esc(n.dateLabel || '') : hhmm(n.ts)}</em>`
+      `<div class="ev-tl-i is-auto ev-tl-click" data-evn="${esc(n.id)}"><em>${n.seed ? esc(n.dateLabel || '') : hhmm(n.ts)}</em>`
       + `<i class="ev-tl-k auto">${n.seed ? '核实' : '自动'}</i><p>${esc(plain(n.title))}</p></div>`).join('');
     const themes = (ev.themes || []).map(x => `<span class="ev-chip t">${esc(x)}</span>`).join('');
     const assets = (ev.assets || []).filter(k => U.get(k)).map(eventAssetBtn).join('');
-    const newsHTML = news.length
-      ? news.map(n => `<div class="ev-news" data-evn="${esc(n.id)}"><span class="lv ${LVCLS[n.level] || 'lv-b'}">${n.level}</span>${n.seed ? '' : liveBadge(n)}<div><b>${esc(plain(n.title))}</b><em>${evNewsWhen(n)} · ${esc(n.cat)}${n.src ? ' · ' + esc(n.src) : ''}</em></div></div>`).join('')
-      : '<div class="empty sm">暂无匹配快讯（快讯源连通后自动归集）</div>';
 
-    /* headline —— 与卡片页共用同一个渲染函数，两处绝不会显示成两个值 */
-    const headline = eventHeadlineHTML(view, 'ev-hl');
+    /* v435：详情页不再渲染蓝色大字 headline —— 完整陈述已在 ev-sum 小字里，
+     * 大字会造成与列表/简介的重复。详情行情由下方关键指标与相关标的承载。 */
 
     const liveAt = evLastQuoteAt();
 
@@ -7565,19 +7929,17 @@
         <div class="ev-icon">${esc(ev.icon || '◉')}</div>
         <div class="ev-hdt">
           <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
-          <div class="ev-cat">${esc(view.cat || '')} · 人工叙事 ${evNarrativeHTML(view)}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
+          <div class="ev-cat">${esc(view.cat || '')} · 更新于 ${evNarrativeHTML(view)}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
       </div>
       <div class="ev-sum">${esc(plain(ev.summary))}</div>
-      ${headline}
       ${metrics ? `<div class="ev-sec"><div class="ev-sec-h">关键指标</div>${metrics}</div>` : ''}
       ${eventSeats(ev)}
-      ${autoTl ? `<div class="ev-sec"><div class="ev-sec-h">最新进展</div><div class="ev-tlx">${autoTl}</div></div>` : ''}
+      ${autoTl ? `<div class="ev-sec"><div class="ev-sec-h">最新进展<span class="ev-hint-inline">实时 ${news.filter(n => !n.seed).length} 条 · 人工核实 ${news.filter(n => n.seed).length} 条 · 可点开详情</span></div><div class="ev-tlx">${autoTl}</div></div>` : ''}
       ${timeline ? `<div class="ev-sec"><div class="ev-sec-h">时间线</div><div class="ev-tlx">${timeline}</div></div>` : ''}
       ${battleground ? `<div class="ev-sec"><div class="ev-sec-h">关键变量 / 战场</div><div class="ev-chips">${battleground}</div></div>` : ''}
       ${themes ? `<div class="ev-sec"><div class="ev-sec-h">主题</div><div class="ev-chips">${themes}</div></div>` : ''}
       ${assets ? `<div class="ev-sec"><div class="ev-sec-h">相关标的</div><div class="ev-assets">${assets}</div></div>` : ''}
-      <div class="ev-sec"><div class="ev-sec-h">相关报道<span class="ev-hint-inline">实时 ${news.filter(n => !n.seed).length} 条 · 人工核实 ${news.filter(n => n.seed).length} 条</span></div>${newsHTML}</div>
       ${(liveAt || view.src) ? `<div class="ev-src">${liveAt ? '<b>最近报价</b> ' + liveAt : ''}${liveAt && view.src ? ' · ' : ''}${view.src ? '参考来源：' + esc(view.src) : ''}</div>` : ''}
       <div class="ev-tapback">轻点页面任意处返回事件列表</div>
     </div>`;
@@ -7586,6 +7948,16 @@
   function eventCardHTML(ev) {
     const news = eventNews(ev);
     const view = eventAutoHeadline(ev, eventAutoView(ev, news));
+    /* v435：列表卡唯一正文 = 一句蓝色 briefing（倒金字塔首句，完整不截断）。
+     * 详细陈述移到详情页；行情数字由下方 strip 连带显示。 */
+    const firstLine = String(plain(ev.summary || '')).split(/[。！？]/)[0].trim();
+    const brief = firstLine || String(ev.status || '跟踪中');
+    const briefHTML = `<div class="ev-card-brief">${esc(brief)}</div>`;
+    /* v436：美联储(加息概率)这类「事件本身围绕某个数字」的卡，必须把概率/行情大字
+     * 单独突出显示（用户实录：塞进一句话里不够醒目）。仅 pred/asset 卡显示大字，
+     * 纯叙事卡(俄乌/APEC)仍只有蓝色 briefing。 */
+    const h0 = ev.headline || {};
+    const hasLive = !!(h0.pred || (h0.asset && U.get(h0.asset)));
     /* 人工核实的 seed 条目是兜底叙事，不算「实时」；只有抓到的快讯才算。 */
     const liveNews = news.filter(n => !n.seed && (n.ts || 0) > 0);
     const picks = (ev.assets || []).filter(k => U.get(k) && evLive(k)).slice(0, 3);
@@ -7608,9 +7980,9 @@
     const checkTs = _evLastCheck || Date.now();
     /* 状态是 autoProgress 按快讯推进的，标出推进时间，避免被当成写死文案 */
     const stageAt = evStageAt(ev.id);
-    const stageTag = stageAt
-      ? `<i class="ev-stage-at">阶段更新于 <span data-rel-ts="${stageAt}">${relTime(stageAt)}</span></i>`
-      : '';
+    /* v499: 去掉"本地阶段时间"显示——用户只认官方演进时间(GHA早晚两班),
+     * 本地autoProgress照常推进状态,但不再单独标一个易混淆的时间。 */
+    const stageTag = '';
     /* 脚注明确区分：人工叙事（静态）/ 实时快讯（动态）/ 最近检查（心跳）。
      * 旧文案「叙事维护于 2026-11-05 · 相关快讯 8」会把兜底条目也当成实时更新。 */
     /* v351：人工叙事的「多久没更新」也自动走（9 天前 → 10 天前），
@@ -7619,15 +7991,15 @@
     const newsTag = (liveNews.length === news.length)
       ? `实时快讯 ${liveNews.length} 条`
       : `实时快讯 ${liveNews.length} 条 · 人工核实 ${news.length - liveNews.length} 条`;
-    const ft = `${esc(view.cat || '')} · 人工叙事 ${narrative}`
+    const ft = `${esc(view.cat || '')} · 更新于 ${narrative}`
       + ` · ${newsTag}`
       + ` · 最近检查 <span data-rel-ts="${checkTs}">${relTime(checkTs)}</span>`;
     return `<button class="ev-card" data-evid="${esc(ev.id)}">
       <div class="ev-icon">${esc(ev.icon || '◉')}</div>
       <div class="ev-card-bd">
         <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span>${stageTag}</div>
-        <div class="ev-card-sum">${esc(plain(ev.summary))}</div>
-        ${eventHeadlineHTML(view, 'ev-card-hl')}
+        ${briefHTML}
+        ${hasLive ? eventHeadlineHTML(view, 'ev-card-hl') : ''}
         ${strip}
         <div class="ev-card-ft">${ft}</div>
       </div>
@@ -7800,8 +8172,9 @@
           + '<div class="empty"><b>卡片都被你收起来了</b>'
           + '<span>点上面的「编辑 → 恢复默认」可以把它们放回来</span></div>';
       } else {
-        body.innerHTML = evToolbar(evs.length, shown.length)
-          + shown.map(ev => S.evEdit
+        /* v440：把休眠/归档卡从主列表移到折叠区（默认收起），保持首页清爽。
+         * 顺序：活跃 → 休眠观察 → 历史归档。展开后卡片仍可正常点击进详情。 */
+        const cardOf = ev => S.evEdit
             ? `<div class="ev-wrap" data-ev-wrap="${esc(ev.id)}">
                  <div class="ev-ops">
                    <button data-ev-op="up" title="上移">↑</button>
@@ -7810,12 +8183,99 @@
                  </div>
                  ${eventCardHTML(ev)}
                </div>`
-            : eventCardHTML(ev)).join('');
+            : eventCardHTML(ev);
+        const active   = shown.filter(e => !e._dormant && !e._archived);
+        const dormant  = shown.filter(e => e._dormant && !e._archived);
+        const archived = shown.filter(e => e._archived);
+        body.innerHTML = evToolbar(evs.length, active.length)
+          + active.map(cardOf).join('')
+          + (dormant.length ? `<details class="ev-fold"><summary>休眠观察 · ${dormant.length} 张<span>连续7天无进展，有新动态会自动唤醒</span></summary>${dormant.map(cardOf).join('')}</details>` : '')
+          + (archived.length ? `<details class="ev-fold"><summary>历史归档 · ${archived.length} 张<span>事件已完结</span></summary>${archived.map(cardOf).join('')}</details>` : '');
       }
     }
     syncEvEditBtn();
     hydratePredictions();
     if (keepY) w.scrollTo(0, keepY);
+  }
+
+  /* v448【LLM 分级迟到覆盖】后台 overlay 到达时，对已入库的新浪/同花顺条目补做
+   * 分级覆盖+AI角标，并重绘（否则首屏秒出的本地分级永远拿不到 LLM 结果）。 */
+  window.addEventListener('mp-llm-overlay-ready', (e) => {
+    const ov = (e && e.detail) || w.__llmNewsOverlay;
+    if (!ov || !ov.byTitle || ov.disabled) return;   // v492: AI贴标已停用，忽略所有overlay事件
+    let changed = 0;
+    const newS = [];   // v463：LLM 改判出来的 S 级，补触发通知
+    (S.news || []).forEach(n => {
+      /* v451：全10源覆盖（金十/财联社/华尔街见闻/格隆汇/东方财富/KZG/川普/新浪/同花顺）
+       * 不再限制 src——凡标题命中边缘池的都贴 AI 角标。 */
+      if (!n || !n.title) return;
+      const key = String(n.title || '').replace(/\s+/g, '').slice(0, 20);
+      const hit = ov.byTitle[key];
+        if (hit && 'SABC'.indexOf(hit.level) >= 0) {
+          if (n.level !== hit.level) {
+            // LLM 把非S改判成S → 这条此前不会走 renderFeed 的 newS 分支，需手动补通知
+            if (hit.level === 'S' && n.level !== 'S') newS.push(n);
+            n.level = hit.level; changed++;
+          }
+          if (hit.category) n.cat = hit.category;
+          // v476：AI贴标保护改用独立的 aiLocked 字段，防止下一轮 mergeNews 按本地规则
+          // 重算 level/cat 冲掉 LLM 判级；绝不设 fixed —— fixed 专属于「用户手工改判」，
+          // 两者共用会让 AI 标的也显示「已改判」，与用户真实改判混淆。
+          n.aiLocked = true;
+          // v463【关键修复】即使级别没变，只要新增了 AI 角标也必须重绘——
+          if (!n.aiGraded) { n.aiGraded = true; changed++; }
+        }
+    });
+    if (changed) {
+      try { if (typeof renderGradeFilters === 'function') renderGradeFilters(); } catch (err) {}
+      try { if (typeof renderFeed === 'function') renderFeed(); } catch (err) {}
+      try { if (typeof poolSync === 'function') poolSync(); } catch (err) {}
+    }
+    // v463：LLM/fast-grade 新判出的 S 级，补走气泡+通知栏（同一条 id 由 sLevelSeen 去重）
+    newS.forEach(n => { try { sAlert(n); } catch (err) {} });
+  });
+
+  /* v446【LLM 全断红灯】轮询 news-live-client 暴露的边缘状态：
+   * 仅当智谱+Google全失效(down)时亮红灯「🚨 AI已断开·规则兜底」，恢复自动撤下。
+   * 与事件卡 model_channel 告警独立，这是快讯分级链路的实时状态。 */
+  /* v456【AI全断通知改造】不再用顶部红条（会把整个页面顶下去）。
+   * 复用 S级/异动同款气泡(toast) + 系统通知栏(sysNotify)，只在 up→down 跃迁时触发一次。 */
+  let __llmDownNotified = false;
+  function checkLlmDownAlert() {
+    const st = w.__llmStatus;
+    if (!st) return;
+    /* v476【过期状态防误报】KV 写入额度耗尽时，Worker 无法把 down:true 改回 false，
+     * 导致每次打开 APP 都误报「AI已断开」。加10分钟新鲜度门槛：
+     * 断联标记超过10分钟视为陈旧状态，不弹报，等下次真实状态更新。 */
+    const _stale = st.down === true && st.ts && (Date.now() - st.ts > 10 * 60 * 1000);
+    if (st.down === true && !_stale && !__llmDownNotified) {
+      __llmDownNotified = true;
+      // 气泡（复用 toast.mini.alert）
+      try {
+        const box = document.getElementById('toasts');
+        if (box) {
+          const el = d.createElement('div');
+          el.className = 'toast mini';
+          el.innerHTML = '<span class="t-dot"></span><div class="t-b"><b>🚨 AI 分级已断开</b>'
+            + '<span>智谱+Gemini 双通道全断，快讯暂用本地规则</span></div>'
+            + '<button class="t-x" title="关闭">✕</button>';   // v476：与异动toast同款关闭按钮
+          box.appendChild(el);
+          requestAnimationFrame(() => el.classList.add('on'));
+          // v476：可手动关闭；关闭后本轮不再重复弹（__llmDownNotified 保持 true）
+          const kill = () => { el.classList.remove('on'); setTimeout(() => el.remove(), 260); };
+          const timer = setTimeout(kill, 12000);
+          el.querySelector('.t-x').onclick = (e) => { e.stopPropagation(); clearTimeout(timer); kill(); };
+        }
+      } catch (e) {}
+      // 通知栏（复用 sysNotify，tag=mm-ai-down 避免与其他通知混）
+      try { sysNotify('🚨 MACRO PULSE · AI已断开', '双通道全断，快讯暂用本地规则，正在自动恢复', 'mm-ai-down', 's'); } catch (e) {}
+    } else if (st.down === false && __llmDownNotified) {
+      __llmDownNotified = false;   // 恢复后复位，下次再断还能提醒
+    }
+  }
+  if (!window.__llmAlertTimer) {
+    window.__llmAlertTimer = setInterval(checkLlmDownAlert, 3000);
+    setTimeout(checkLlmDownAlert, 2000);
   }
 
   /* 事件页自动刷新：拉最新报价 + 重绘。
@@ -7850,7 +8310,17 @@
     const f = $('#effectFrame');
     if (!f || _effectLoaded) return;
     _effectLoaded = true;
-    f.src = f.dataset.src || './breadth/?embed=1';
+    var src = f.dataset.src || './sse/index.html?embed=1';
+    /* v504【赚钱效应加载不出来根因】WorkBuddy站点网关要求每个入口URL带sharecode,
+     * 相对路径 ./sse/index.html?embed=1 不带 → 被网关拦成"链接不完整"错误页,iframe空白。
+     * 从当前URL继承sharecode(分享码可能变),动态拼进iframe src。 */
+    try {
+      var sc = new URLSearchParams(location.search).get('sharecode') || '';
+      if (sc && src.indexOf('sharecode=') < 0) {
+        src += (src.indexOf('?') >= 0 ? '&' : '?') + 'sharecode=' + encodeURIComponent(sc);
+      }
+    } catch (e) {}
+    f.src = src;
     f.onload = postEffectTheme;
   }
 
@@ -7930,30 +8400,65 @@
       try { window.scrollTo(0, 0); } catch (err) {}
     };
 
-    /* 长按卡片 0.55 秒 → 改判面板。
-     * 用 pointer 事件而不是 touch/mouse 各写一套：安卓 WebView 和 iOS Safari
-     * 都支持，且能同时拿到鼠标（桌面调试）。位移超过 10px 视为滚动，取消长按。 */
+    /* v448【长按=列表多选】长按卡片 0.55s → 进入多选模式并勾选该条。
+     * 多选模式下点其他卡片=切换勾选；勾1条显示「改判分级」、≥2条显示「去重」。
+     * 勾选源就是当前列表渲染的卡片，不存在弹窗候选与列表不一致的问题。 */
+    const multiSel = new Set();
+    function renderMulti() {
+      const list = $('#feedList');
+      if (!list) return;
+      list.classList.toggle('multi', multiSel.size > 0 || S.multiMode === true);
+      // 同步每条卡勾选框（按 data-id / 折叠子卡 data-tlid）
+      list.querySelectorAll('.card, .ev-tl[data-tlid]').forEach(el => {
+        const id = el.dataset.id || el.dataset.tlid;
+        const box = el.querySelector('.c-sel input') || (el.matches('.ev-tl') ? null : null);
+        if (box) box.checked = multiSel.has(id);
+        el.classList.toggle('sel', multiSel.has(id));
+      });
+      const bar = document.getElementById('multiBar');
+      const n = multiSel.size;
+      if (bar) bar.hidden = n === 0 && !S.multiMode;
+      const nEl = document.getElementById('multiN');
+      if (nEl) nEl.textContent = '已选 ' + n + ' 条';
+      const fixB = document.getElementById('multiFix'), dupB = document.getElementById('multiDup');
+      if (fixB) fixB.hidden = n !== 1;
+      if (dupB) dupB.hidden = n < 2;
+    }
+    function exitMulti() {
+      multiSel.clear();
+      S.multiMode = false;
+      renderMulti();
+    }
     (function bindLongPress() {
       const list = $('#feedList');
       if (!list) return;
       let timer = null, sx = 0, sy = 0, target = null;
       const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } target = null; };
       list.addEventListener('pointerdown', (e) => {
-        /* 卡片里的按钮（N 条进展、来源、关联标的）有自己的点击语义，不抢 */
-        if (e.target.closest('button, a, .chips, .c-imp')) return;
-        // 母卡和子卡都能改判：子卡是折叠起来的那几条，标级同样可能错
+        if (e.target.closest('button, a, .chips, .c-imp, .c-sel')) return;
         const card = e.target.closest('.card');
         const sub = e.target.closest('.ev-tl[data-tlid]');
         const id = (card && card.dataset.id) || (sub && sub.dataset.tlid);
         if (!id) return;
-        cancel();                    // 先清掉上一轮（cancel 会把 target 置空）
+        cancel();
         target = id;
         sx = e.clientX; sy = e.clientY;
         timer = setTimeout(() => {
           timer = null;
           const id = target;
           target = null;
-          if (id) { fixGuardAt = Date.now(); openFixPanel(id); }
+          if (!id) return;
+          fixGuardAt = Date.now();
+          // 多选模式下点卡片=切换勾选；否则长按=进入多选并勾选该条
+          if (S.multiMode) {
+            if (multiSel.has(id)) multiSel.delete(id); else multiSel.add(id);
+            renderMulti();
+          } else {
+            S.multiMode = true;
+            multiSel.clear(); multiSel.add(id);
+            try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) {}
+            renderMulti();
+          }
         }, 550);
       }, { passive: true });
       list.addEventListener('pointermove', (e) => {
@@ -7963,7 +8468,49 @@
       ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => list.addEventListener(t, cancel, { passive: true }));
       /* 安卓长按会先弹系统的「选择/复制」菜单，等它弹出来面板就被盖住了 */
       list.addEventListener('contextmenu', (e) => { if (e.target.closest('.card')) e.preventDefault(); });
+      /* 多选模式下普通点击=切换勾选（短按即可，不用长按） */
+      list.addEventListener('click', (e) => {
+        if (!S.multiMode) return;
+        if (Date.now() - fixGuardAt < 700) return;
+        const card = e.target.closest('.card');
+        const sub = e.target.closest('.ev-tl[data-tlid]');
+        const id = (card && card.dataset.id) || (sub && sub.dataset.tlid);
+        if (!id || e.target.closest('button, a, .chips, .c-imp')) return;
+        e.preventDefault(); e.stopPropagation();
+        if (multiSel.has(id)) multiSel.delete(id); else multiSel.add(id);
+        renderMulti();
+      }, true);
     })();
+    /* 多选操作栏：改判（1条）→ 复用原 openFixPanel；去重（≥2条）→ 主条=最新，其余合并。 */
+    const multiCancel = document.getElementById('multiCancel');
+    if (multiCancel) multiCancel.onclick = exitMulti;
+    const multiFix = document.getElementById('multiFix');
+    if (multiFix) multiFix.onclick = () => {
+      const ids = [...multiSel];
+      if (ids.length !== 1) return;
+      const id = ids[0];
+      exitMulti();
+      fixGuardAt = Date.now();
+      openFixPanel(id);
+    };
+    const multiDup = document.getElementById('multiDup');
+    if (multiDup) multiDup.onclick = () => {
+      const ids = [...multiSel];
+      if (ids.length < 2) return;
+      // 主条=时间最新的一条；其余为被合并的重复条
+      const picked = S.news.filter(x => ids.indexOf(x.id) >= 0);
+      picked.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      const anchor = picked[0], dups = picked.slice(1);
+      if (!anchor) { exitMulti(); return; }
+      // 去重理由用统一默认（用户可在纠错单里补）；页面合并+进纠错单
+      const ok = fixDupRecord(anchor, dups, '手动勾选去重：' + dups.length + ' 条重复快讯合并');
+      exitMulti();
+      if (ok) {
+        if (typeof renderFeed === 'function') renderFeed();
+        if (S.tab === 'set' && typeof renderSettings === 'function') renderSettings();
+        try { toast && toast('已合并 ' + dups.length + ' 条并记入纠错单'); } catch (e) {}
+      }
+    };
     $('#topicFilters').onclick = (e) => {
       const b = e.target.closest('button');
       if (!b) return;
@@ -7976,6 +8523,7 @@
     if (chgBtn2) chgBtn2.onclick = () => {
       S.marketSort = S.marketSort === 'fixed' ? 'desc' : (S.marketSort === 'desc' ? 'asc' : 'fixed');
       store.set('mm_msort', S.marketSort);
+      if (S.marketSort !== 'fixed') store.set('mm_watch_ordered', '');  // 用户主动切排序→清手动顺序标记
       renderMarket();
     };
     $('#mktEdit').onclick = () => {
@@ -8097,7 +8645,62 @@
       if (row && !S.marketEdit) openSheet(row.dataset.k);
     };
 
+    /* v441：编辑态 ☰ 拖拽排序（触屏/鼠标通用，替代点不中的▲▼）。
+     * pointermove 只移动 DOM 节点，pointerup 时按 DOM 顺序一次性写回 S.watch。 */
+    (function initMarketDrag() {
+      const body = $('#marketBody');
+      if (!body) return;
+      let dragRow = null, dragKey = null;
+      body.addEventListener('pointerdown', (e) => {
+        const h = e.target.closest('.mk-drag');
+        if (!h || !S.marketEdit) return;
+        dragRow = h.closest('.mk-row');
+        if (!dragRow) return;
+        dragKey = h.dataset.drag;
+        dragRow.classList.add('mk-dragging');
+        // 不用 setPointerCapture——它会让 elementFromPoint 只会返回手柄自身，
+        // 找不到目标行。改为在 body 上监听 move/up，指针移出手柄照样收到。
+        e.preventDefault();
+      });
+      body.addEventListener('pointermove', (e) => {
+        if (!dragRow) return;
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const over = el && el.closest('.mk-row');
+        if (!over || over === dragRow) return;
+        // 只在同一分组内拖动（同 sessionKey），避免跨组乱序
+        const sk = sessionKeyOf(dragKey);
+        if (sessionKeyOf(over.dataset.k) !== sk) return;
+        body.querySelectorAll('.mk-row.mk-dragover').forEach(x => x.classList.remove('mk-dragover'));
+        over.classList.add('mk-dragover');
+        const rect = over.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        over.parentNode.insertBefore(dragRow, before ? over : over.nextSibling);
+      });
+      const finish = () => {
+        if (!dragRow) return;
+        dragRow.classList.remove('mk-dragging');
+        body.querySelectorAll('.mk-row.mk-dragover').forEach(x => x.classList.remove('mk-dragover'));
+        // 按 DOM 中 .mk-row 的 data-k 顺序重排 S.watch（保持非展示项在末尾）
+        const order = [...body.querySelectorAll('.mk-row')].map(r => r.dataset.k).filter(Boolean);
+        const rest = S.watch.filter(k => order.indexOf(k) < 0);
+        S.watch = order.concat(rest);
+        store.set('mm_watch2', S.watch);
+        store.set('mm_watch_ordered', '1');   // v443：标记用户拖过，fixed 排序改按 S.watch
+        dragRow = null; dragKey = null;
+      };
+      body.addEventListener('pointerup', finish);
+      body.addEventListener('pointercancel', finish);
+    })();
+
     $('#radarActive').onclick = (e) => {
+      /* v497②【手动重查】跳过冷却,用当前最新快讯重调一次归因 */
+      const rc = e.target.closest('[data-ai-recheck]');
+      if (rc) {
+        e.stopPropagation();
+        var k = rc.dataset.aiRe, a = S.activeAlerts && S.activeAlerts[k];
+        if (a) { a.aiChecked = false; a.aiPending = true; try { requestAnomalyAI(a, true); } catch (er) {} }
+        return;
+      }
       /* v100：「归因：新闻标题」/「新闻补获」的链接要先于卡片本身处理，
        * 否则会冒泡到 .ra 的 data-k，点开的是行情面板而不是新闻详情。 */
       const rel = e.target.closest('[data-news]');
@@ -8215,6 +8818,9 @@
       if (ak && ak.dataset.evk) { openSheet(ak.dataset.evk); return; }
       const nk = e.target.closest('.ev-news');
       if (nk && nk.dataset.evn) { openNews(nk.dataset.evn); return; }
+      /* v439：最新进展里的新闻也可点开详情 */
+      const tk = e.target.closest('.ev-tl-click');
+      if (tk && tk.dataset.evn) { openNews(tk.dataset.evn); return; }
       // 详情页里点空白 / 正文 → 直接回列表
       if (S.eventOpen) {
         const moved = evTap ? Math.hypot(e.clientX - evTap.x, e.clientY - evTap.y) : 0;
@@ -8272,6 +8878,15 @@
         const cur = alertPrefs(t);
         setAlertPref(t, k, !cur[k]);
         apBtn.classList.toggle('on', !cur[k]);
+        return;
+      }
+      if (e.target.id === 'btnMockAnomaly') {
+        try { switchTab('radar'); } catch (e) {}
+        toast2('已模拟黄金急跌，观察异动看板归因状态与通知栏');
+        setTimeout(() => { try {
+          if (typeof w.__mockAnomalyExplain === 'function') w.__mockAnomalyExplain('黄金', 'down', -3.2);
+          else toast2('模拟入口未就绪，请刷新页面后重试');
+        } catch (er) { toast2('模拟失败：' + er); } }, 600);
         return;
       }
       if (e.target.id === 'btnTestNotify') {
@@ -8529,9 +9144,13 @@
       }
       const fs = flashTxt ? ' · ' + flashTxt : '';
       const fss = flashTxt ? '·' + flashTxt : '';
-      el.title = '快讯逐源状态' + flashTip;
+      // v431：LLM 提纯通道（事件卡演进实际命中的模型），一眼核对是否免费通道
+      const llmDown = /local-rule|规则|all-llm-failed/.test(S.llmChannel || '');
+      const llmTxt = S.llmChannel ? ' · AI:<span style="color:' + (llmDown ? '#ff6b6b' : 'inherit') + '">' + S.llmChannel + '</span>' : '';
+      el.title = '快讯逐源状态' + flashTip
+        + (S.llmChannel ? '\n事件卡提纯通道：' + S.llmChannel : '');
       // 窄屏只留短标签，避免顶栏被挤成两行
-      el.innerHTML = `<span class="sp-l">${lbl}${fs}</span>`
+      el.innerHTML = `<span class="sp-l">${lbl}${fs}${llmTxt}</span>`
         + `<span class="sp-s">${short}${fss}</span>`;
       el.className = 'src-pill ' + (bad ? 'bad' : ok || S.flashState === 'live' ? 'ok' : '');
     };
@@ -8702,8 +9321,260 @@
       .catch(() => {});
   }
 
+  /* v431→v432：读事件卡每日演进产物——既提取 LLM 通道供顶栏显示，
+   * 也把 LLM 重写的 summary/status/progress_line merge 进 w.EVENTS，让演进真正上屏。
+   * 还处理自动建卡（新增卡）、双轨归档（archived/dormant 标记下沉）。失败静默。 */
+  /* v448：新事件卡提醒改为「铃铛+红点」——LLM 聚合出新卡不再自动弹窗，
+   * 只入队并存 localStorage（刷新/误关都不丢），底部事件菜单显示红点数字；
+   * 用户切到事件页点🔔才弹出确认框，逐个处理（加入 / 7天/30天/永远不再提醒）。 */
+  const PENDING_KEY = 'mm_pending_cards';
+  function getPendingCards() {
+    try { const r = store.get(PENDING_KEY, []); return Array.isArray(r) ? r : (typeof r === 'string' ? JSON.parse(r) : []); }
+    catch (e) { return []; }
+  }
+  function savePendingCards(list) { store.set(PENDING_KEY, list); updatePendingBadges(list.length); }
+  function updatePendingBadges(n) {
+    const dot = document.getElementById('eventTabDot'), bell = document.getElementById('eventBell'), bellN = document.getElementById('eventBellN');
+    if (dot) { dot.textContent = n > 99 ? '99+' : String(n); dot.hidden = n <= 0; }
+    if (bell) bell.hidden = n <= 0;
+    if (bellN) bellN.textContent = n > 99 ? '99+' : String(n);
+  }
+  function queueAutoCardConfirm(items) {
+    const pending = getPendingCards();
+    let added = 0;
+    items.forEach(it => {
+      if (pending.some(p => p.cid === it.cid) || (w.EVENTS || []).some(ev => ev.id === it.cid)) return;
+      pending.push(it); added++;
+    });
+    if (added) savePendingCards(pending);   // 只入队+亮红点，绝不自动弹窗
+  }
+  // 点铃铛才打开确认框，逐个处理队列
+  function nextAutoCardAsk() {
+    const mask = document.getElementById('autoCardAsk');
+    if (!mask) return;
+    const pending = getPendingCards();
+    if (!pending.length) { mask.hidden = true; updatePendingBadges(0); return; }
+    mask.hidden = false;
+    const item = pending[0];
+    const c = item.c, cid = item.cid;
+    const t = document.getElementById('acaTitle'), s = document.getElementById('acaSum'), ic = document.getElementById('acaIcon');
+    if (t) t.textContent = c.title || '新事件';
+    if (s) s.textContent = c.summary || 'LLM 聚合到一组新快讯，建议建卡跟踪。';
+    if (ic) ic.textContent = c.icon || '📌';
+    const yes = document.getElementById('acaYes'), no = document.getElementById('acaToggle');
+    const later = document.getElementById('acaLater'), opts = document.getElementById('acaRejectOpts');
+    if (opts) opts.hidden = true;
+    const cleanup = () => {
+      if (yes) yes.onclick = null; if (no) { no.onclick = null; no.textContent = '不加入'; }
+      if (later) later.onclick = null; if (opts) opts.hidden = true;
+    };
+    const popAndNext = () => {
+      const rest = getPendingCards().filter(p => p.cid !== cid);
+      savePendingCards(rest);
+      cleanup();
+      nextAutoCardAsk();
+    };
+    if (yes) yes.onclick = () => {
+      if (!(w.EVENTS || []).some(ev => ev.id === cid)) w.EVENTS.push(item.ev);
+      try { renderEvent && renderEvent(); } catch (e) {}
+      popAndNext();
+    };
+    // 稍后再说：直接关弹窗，队列保留（红点仍在，可从铃铛复现）
+    if (later) later.onclick = () => { mask.hidden = true; cleanup(); };
+    // 两步拒绝：第一次展开时限选项；第二次按选中的时限写入精确事件黑名单
+    let rejectArmed = false;
+    if (no) no.onclick = () => {
+      if (!rejectArmed) {
+        rejectArmed = true;
+        if (opts) opts.hidden = false;
+        no.textContent = '确认拒绝';
+        return;
+      }
+      let term = '30';
+      const sel = document.querySelector('input[name=acaTerm]:checked');
+      if (sel) term = sel.value;
+      let rejected = [];
+      try { const r0 = store.get('mm_card_rejected', []); rejected = Array.isArray(r0) ? r0 : (typeof r0 === 'string' ? JSON.parse(r0) : []); } catch (e) { rejected = []; }
+      // 精确事件：只按 card id 拒绝，绝不按标题前缀（避免误杀俄乌/美伊等不同事件）
+      rejected = rejected.filter(x => !(x && x.cid === cid));
+      rejected.push({ cid: cid, title: String(c.title || ''),
+        until: term === 'forever' ? 0 : Date.now() + parseInt(term, 10) * 86400000 });
+      store.set('mm_card_rejected', rejected);   // store 内部已 JSON.stringify，勿重复
+      popAndNext();
+    };
+  }
+  // 铃铛点击 → 打开待确认队列；切到事件页时初始化角标
+  const bellBtn = document.getElementById('eventBell');
+  if (bellBtn) bellBtn.onclick = () => nextAutoCardAsk();
+  updatePendingBadges(getPendingCards().length);
+
+  /* v456【卡片自动同步·复用赚钱效应多源竞速+追新】
+   * 旧版串行 tryNext 且本地优先 → 本地旧产物(发版时的)抢先成功就 return，
+   * 永远挡住 CDN 上 GHA 每天更新的新产物 → 卡片显示十几个小时前。
+   * 新版：远端为主并发竞速，按 generated 新鲜度选最新；本地只做全挂兜底；
+   * 发现更新才 merge+重绘（幂等），配合 boot 里 10min 定时自动追新。 */
+  let __cardLoadedAt = '';   // 已加载产物 generated，追新判据
+  const CARD_URLS = [
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/macropulse-news@main/data/events_daily.json',
+    'https://raw.githubusercontent.com/chrisliu1116-y/macropulse-news/main/data/events_daily.json',
+    'data/events_daily.json'
+  ];
+  function loadLlmChannel() {
+    const tag = Date.now();
+    /* 全源并发，按 generated 选最新——不能用 Promise.any（第一个成功可能
+     * 是 jsdelivr 旧缓存），必须比新鲜度。追新幂等由 applyCardData 保证。 */
+    Promise.allSettled(CARD_URLS.map(u => fetch(u + '?t=' + tag, { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { if (!d || !d.cards) throw new Error('no cards'); return d; })))
+      .then(results => {
+        let best = null;
+        results.forEach(r => {
+          if (r.status !== 'fulfilled') return;
+          const gen = String(r.value.generated || '');
+          if (!best || gen > String(best.generated || '')) best = r.value;
+        });
+        if (best) applyCardData(best);
+      })
+      .catch(() => { /* 全挂：保留现有卡，不影响展示 */ });
+  }
+  function applyCardData(d) {
+          const gen = String(d.generated || '');
+          // 新鲜度校验：云端产物不比已加载的更新 → 幂等跳过（本地旧档永不回退新档）
+          if (__cardLoadedAt && gen && gen <= __cardLoadedAt) return;
+          if (gen) __cardLoadedAt = gen;
+          const cards = d && d.cards || {};
+          const ch = (cards.apec || cards.iran || {}).model_channel;
+          if (ch) S.llmChannel = String(ch).split('/')[0].replace(/-rule.*/, '规则');
+          /* v448：事件卡 model_channel 只用于顶栏显示，不再控制红灯。
+           * 红灯统一由 CF 边缘快讯链路的 __llmStatus 驱动（checkLlmDownAlert），
+           * 避免事件卡偶发用本地规则就误亮"AI全断"。 */
+          /* v507【数据驱动·与赚钱效应同款】以云端 cards 为准遍历:
+           * 云端有的卡 → 更新演进字段(保留前端专属 icon/metrics/timeline/assets);
+           * 云端新增的卡 → 自动构造 EVENTS 条目,不再需要手动改 events.js 静态列表。
+           * 这样新增卡只改云端数据+SCOPES 即可,APP 自动显示。 */
+          const _evs = w.EVENTS || (w.EVENTS = []);
+          Object.keys(cards).forEach(cid => {
+            const c = cards[cid];
+            if (!c) return;
+            let ev = _evs.find(e => e.id === cid);
+            if (!ev) {
+              ev = { id: cid, icon: c.icon || '📌', title: c.title || c.short || cid,
+                phase: c.status || '跟踪中', cat: c.cat || '事件跟踪',
+                status: c.status || '跟踪中', statusCls: c.statusCls || 'watch',
+                hot: c.hot || 2, updated: '', summary: '',
+                headline: null, metrics: [], timeline: [],
+                newsKeys: c.newsKeys || [], newsMust: [], newsExcl: [],
+                assets: c.assets || [], src: c.src || '云端事件卡',
+                scope: c.scope || null, _cloud: true };
+              _evs.push(ev);
+            }
+            if (c.summary) ev.summary = c.summary;
+            if (c.status) ev.status = c.status;
+            if (c.statusCls) ev.statusCls = c.statusCls;
+            if (!ev.phase || ev._cloud) ev.phase = c.status || ev.phase;
+            if (c.progress_line) ev.progress_line = c.progress_line;
+            if (c.updated || d.generated) ev.updated = String(d.generated || c.updated || '').replace(' ', ' ');
+            if (c.icon && ev._cloud) ev.icon = c.icon;
+            if (c.title && ev._cloud) ev.title = c.title;
+            if (c.assets && ev._cloud) ev.assets = c.assets;
+            ev._archived = !!c.archived;
+            ev._dormant = !!c.dormant;
+          });
+          // v442 自动建卡：不再静默追加——新 auto_ 卡先进待确认队列并弹窗问用户。
+          // 用户拒绝的主题写入 mm_card_rejected 黑名单，以后同类事件不再弹/不再建。
+          let rejected = [];
+          try { const r0 = store.get('mm_card_rejected', []); rejected = Array.isArray(r0) ? r0 : (typeof r0 === 'string' ? JSON.parse(r0) : []); } catch (e) { rejected = []; }
+          // v443：精确事件(cid)+时限判断。until=0 永远；否则过期后自动失效可再提示。
+          const now = Date.now();
+          const isRejected = (cid, c) => rejected.some(x => {
+            if (!x) return false;
+            if (typeof x === 'string') return x === cid;   // 兼容旧格式(精确id)
+            if (x.cid !== cid) return false;                // 只认精确 card id，绝不按标题前缀
+            return !x.until || x.until > now;
+          });
+          const pending = [];
+          Object.keys(cards).forEach(cid => {
+            if (cid.indexOf('auto_') !== 0) return;
+            if ((w.EVENTS || []).some(ev => ev.id === cid)) return;
+            const c = cards[cid];
+            if (isRejected(cid, c)) return;   // 用户拒绝过的主题，永久跳过
+            pending.push({ cid, c,
+              ev: { id: cid, icon: c.icon || '📌', title: c.title || '新事件',
+                cat: c.cat || '自动发现', status: c.status || '跟踪中',
+                statusCls: c.statusCls || 'watch', hot: 2,
+                updated: String(d.generated || ''), summary: c.summary || '',
+                scope: c.scope || null, auto_created: true,
+                _dormant: !!c.dormant, _archived: !!c.archived } });
+          });
+          if (pending.length) queueAutoCardConfirm(pending);
+          // 排序：活跃卡在前，休眠/归档下沉
+          w.EVENTS.sort((a, b) => {
+            const rank = e => (e._archived ? 2 : e._dormant ? 1 : 0);
+            return rank(a) - rank(b);
+          });
+          // 发现云端有更新 → 若当前在事件页，原地重绘（像赚钱效应那样无感追新）
+          try { if (S.tab === 'event' && typeof renderEvent === 'function') renderEvent(); } catch (e) {}
+  }
   function boot() {
+    /* v457【时间bug污染缓存一次性清理】 Worker 时区bug曾把新闻 ts 推后8小时（未来时间），
+     * v452纯读KV那版把脏时间写进了本地 NewsPool。这里一次性检测并清空被污染的池子，
+     * 让下次抓取重建正确时间的新闻。只执行一次（localStorage 标记），不反复清用户数据。 */
+    try {
+      if (!localStorage.getItem('mm_pool_timeclean_v457')) {
+        let dirty = 0;
+        try { const pl = w.NewsPool && w.NewsPool.list ? (w.NewsPool.list(72) || []) : [];
+          dirty = pl.filter(x => x && x.ts && new Date(x.ts).getTime() > Date.now() + 5 * 60 * 1000).length;
+        } catch (e) {}
+        if (dirty) {
+          if (w.NewsPool && typeof w.NewsPool.clear === 'function') w.NewsPool.clear();
+          try { localStorage.removeItem('mp_llm_news_overlay'); } catch (e) {}  // overlay缓存也清(含旧ts)
+          console.log('[v457] 已清理未来时间污染缓存 ' + dirty + ' 条，将重新抓取');
+        }
+        localStorage.setItem('mm_pool_timeclean_v457', '1');
+      }
+    } catch (e) {}
+    /* v492【新闻AI贴标停用·清洗本地池AI字段】只移除AI角标相关字段，不清空新闻本体，
+     * 保证首屏仍由本地池秒铺。一次性执行，重启项目时把标记删掉即可重跑。 */
+    try {
+      if (!localStorage.getItem('mm_ai_pool_clean_v492')) {
+        const raw = localStorage.getItem('mm_pool_v2');
+        if (raw) {
+          const pd = JSON.parse(raw);
+          const AI = ['aiGraded','aiLocked','gradeSrc','fixed','s_code','regraded_v'];
+          if (pd && Array.isArray(pd.items)) {
+            pd.items = pd.items.map(x => {
+              if (!x || typeof x !== 'object') return x;
+              const y = {}; Object.keys(x).forEach(k => { if (AI.indexOf(k) < 0) y[k] = x[k]; }); return y;
+            });
+            localStorage.setItem('mm_pool_v2', JSON.stringify(pd));
+            console.log('[v492] 已清洗本地新闻池AI贴标字段 ' + pd.items.length + ' 条');
+          }
+        }
+        localStorage.setItem('mm_ai_pool_clean_v492', '1');
+      }
+    } catch (e) {}
+    /* v505【清除模拟归因假新闻】此前 __mockAnomalyExplain 把测试快讯写进真实池
+     * 并被poolSync持久化,用户会在信息流看到"美联储加息25bp"等假新闻。按id前缀清洗。 */
+    try {
+      if (!localStorage.getItem('mm_mock_news_clean_v505')) {
+        var raw2 = localStorage.getItem('mm_pool_v2');
+        var removed = 0;
+        if (raw2) {
+          var pd2 = JSON.parse(raw2);
+          if (pd2 && Array.isArray(pd2.items)) {
+            var before = pd2.items.length;
+            pd2.items = pd2.items.filter(x => !(x && typeof x.id === 'string' && x.id.indexOf('__mock_') === 0));
+            removed = before - pd2.items.length;
+            localStorage.setItem('mm_pool_v2', JSON.stringify(pd2));
+          }
+        }
+        try { S.news = (S.news || []).filter(x => !(x && typeof x.id === 'string' && x.id.indexOf('__mock_') === 0)); } catch (e) {}
+        localStorage.setItem('mm_mock_news_clean_v505', '1');
+        console.log('[v505] 已清除模拟测试假新闻 ' + removed + ' 条');
+      }
+    } catch (e) {}
     try { initAlertEngine(); } catch (e) {}
+    try { loadLlmChannel(); setInterval(loadLlmChannel, 10 * 60 * 1000); } catch (e) {}
     /* 自动化/调试抓手：闭包读模块级 chart，任何时候调用都指向「当前真正在用的」图表 */
     w.__chart = () => chart;
     w.__draw = () => (chart ? chart.drawLayer : null);
@@ -8772,6 +9643,8 @@
       onUpdate: (results, inst) => {
         S.activeAlerts = {};
         results.forEach(r => { if (r.status !== 'quiet') S.activeAlerts[r.key] = r; });
+        /* v497: 回填sessionStorage里30分钟内的AI归因结果(刷新页面不丢失) */
+        try { aiRestore(); } catch (e) {}
         if (S.tab === 'radar') renderRadar(results, inst);
         else syncAlerts(inst);
       },
@@ -8779,12 +9652,59 @@
         /* v197：网页内深红 .toast 浮窗已下线（用户口径「黑色弹窗」）。
          * 异动只保留顶部粉色 alarm 横幅 + 系统通知栏那条通知，
          * 不再同一件事弹两个网页浮窗。新闻驱动异动同样不弹全屏黑天鹅。 */
-        if (!(r && r.kind === 'news')) showAlarm(r);
+        /* v497: 先发起AI归因(拿Promise给通知栏2.5s合并),再0ms渲染页面卡片。
+         * 本地newsCause()仍0ms占位;AI命中后原地升级卡片,失败静默不影响报警。 */
+        var _aiP = null;
+        try { _aiP = requestAnomalyAI(r, false, true); } catch (e) {}
+        if (!(r && r.kind === 'news')) showAlarm(r, _aiP);
         if (S.tab === 'set') renderSettings();
       }
     });
     radar.setThresholdScale(S.thrScale);
     radar.start(20000);
+    /* v497①【切回前台即时唤醒】原生onResume已调forceScan,但有15s节流;
+     * 这里前端补一个5s节流的visibilitychange唤醒,消除切回时的等待感。 */
+    var _lastWake = Date.now();
+    try {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        var now = Date.now();
+        if (now - _lastWake < 5000) return;   // 5s节流,避免与原生forceScan重复
+        _lastWake = now;
+        try { aiRestore(); } catch (e) {}     // 回前台回填AI归因(刷新/后台期间的结果)
+        try { if (w.__forceAnomalyScan) w.__forceAnomalyScan(); } catch (e) {}
+      });
+    } catch (e) {}
+    /* v497①【模拟归因入口】控制台 w.__mockAnomalyExplain(name,dir,chg) 手动模拟一次异动归因,
+     * 亲眼验证归因状态流转+通知栏2.5s合并效果(不改生产数据,纯前端模拟)。 */
+    try {
+      w.__mockAnomalyExplain = function (name, dir, chg) {
+        name = name || '黄金'; dir = dir || 'down'; chg = chg == null ? -3.2 : chg;
+        var mock = { key: '__mock__', name: name, kind: 'mock', chg: chg,
+          status: 'unattributed', statusCls: 'watch' };
+        /* v505: 测试快讯只放局部数组,绝不进S.news(此前unshift进真实池被poolSync
+         * 持久化到localStorage,导致假新闻显示在信息流且重启不消失)。
+         * 用 mockNews 临时替换 S.news 供 collectRawNews 捞取,调用后立即恢复。 */
+        var savedNews = S.news;
+        var now = Date.now();
+        S.news = [
+          { id: '__mock_n1', title: '美联储宣布加息25个基点，美元指数走强', live: true, ts: now - 60000,
+            level: 'S', direct: [{ k: '__mock__' }], us: [], cn: [], hk: [] },
+          { id: '__mock_n2', title: '美国CPI数据超预期升至3.5%', live: true, ts: now - 120000,
+            level: 'A', direct: [], us: [], cn: [], hk: [] }
+        ];
+        S.activeAlerts = S.activeAlerts || {};
+        S.activeAlerts[mock.key] = mock;
+        try { aiReuseOrFetch(mock); } catch (e) {}   // v501: 先试复用缓存归因
+        var p = mock._aiReused ? null : requestAnomalyAI(mock, true);  // 复用则不调AI
+        // 同步部分已执行完(collectRawNews已捞到测试快讯),立即恢复真实新闻池
+        try { S.news = savedNews; } catch (e) {}
+        showAlarm(mock, p);                      // 触发通知栏2.5s合并
+        // AI异步回调里若再读S.news已是真实池(归因摘要已随job保存,不依赖S.news)
+        if (S.tab === 'radar') { try { renderRadar(Object.values(radar.state), radar); } catch (e) {} }
+        return { mock: mock, promise: !!p };
+      };
+    } catch (e) {}
     /* v201：WebView 原生下拉刷新有时会整页重载（前端 preventDefault 拦不住），
      * 重载后 S.tab 默认回 'feed'，用户就被甩回首页。这里等 radar 等依赖都就绪后，
      * 把重载前的 tab 原地恢复 —— 在矩阵/事件/行情页下拉也不再跳页。 */

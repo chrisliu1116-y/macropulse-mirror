@@ -193,6 +193,37 @@
     'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
     'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/breadth.json'
   ];
+  /* v276：上证 K 线也进云端跑批，与 breadth.json 同批成对提交。
+   * 用户实测出现过「insum 新 / 上证旧」，所以 SSE 也必须竞速远端。 */
+  var REMOTE_S = [
+    'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/sse.json',
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/sse.json',
+    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/sse.json'
+  ];
+  function loadRemoteS() {
+    if (typeof fetch !== 'function') return Promise.reject(new Error('offline'));
+    return REMOTE_S.reduce(function (p, url) {
+      return p.catch(function () { return loadJSONTimeout(url, 6000); });
+    }, Promise.reject(new Error('start')));
+  }
+  /* v278：上证标的自检 —— 线上曾出现 sse.json 实为平安银行（末收盘 11.71）却标成
+   * 「上证指数」，整条 K 线画错。按点位量级拒收：宁可显示缺失，也不画错数据。 */
+  function sseOK(k) {
+    var c = (k && k.c) || [];
+    if (!c.length) return false;
+    var v = c[c.length - 1];
+    return v > 50 && v < 20000;
+  }
+  function applyNewSse(k) {
+    if (!k || !k.dates || !k.dates.length) return false;
+    if (!sseOK(k)) return false;
+    if (S.K && S.K.meta && k.meta && String(S.K.meta.to) >= String(k.meta.to)) return false;
+    S.K = k;
+    if (S.B && $('btnCompare')) $('btnCompare').disabled = false;
+    renderAll();
+    try { parent.postMessage({ mm_sse_state: (k.meta && k.meta.to) || '' }, '*'); } catch (e) {}
+    return true;
+  }
   function loadJSONTimeout(url, ms) {
     return new Promise(function (resolve, reject) {
       var done = false;
@@ -220,15 +251,27 @@
     if (!S.B || !S.axis) return false;
     var oldLast = S.B.dates[S.B.dates.length - 1];
     if (b.dates[b.dates.length - 1] <= oldLast) return false;
+    /* v292【右端跟随 · 用户核心诉求】此前只按日期保持视窗：
+     * 数据更新（本地旧 8816 → 远端新 8818）后，视窗仍停在旧日期（11-10），
+     * 用户必须手动往右拖才能看到最新（11-12）。
+     * 现在：若更新前视窗右端就贴着旧轴末尾（用户在看最新），
+     * 新数据进来后整窗右移到新末尾；若用户已拖到历史中间，按日期保持原位。 */
+    var wasAtEnd = S.to >= S.axis.length - 1 - 0.5;
+    var span = S.to - S.from;
     var fromDate = S.axis[Math.max(0, Math.min(S.axis.length - 1, Math.round(S.from)))];
     var toDate = S.axis[Math.max(0, Math.min(S.axis.length - 1, Math.round(S.to)))];
     S.B = b;
     S.bIndex = new Map();
     for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
     buildAxis();
-    var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
-    S.from = nf >= 0 ? Math.min(nf, S.axis.length - 1) : 0;
-    S.to = nt >= 0 ? Math.max(S.from, Math.min(nt, S.axis.length - 1)) : S.axis.length - 1;
+    if (wasAtEnd) {
+      S.to = S.axis.length - 1;
+      S.from = Math.max(0, S.to - span);
+    } else {
+      var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
+      S.from = nf >= 0 ? Math.min(nf, S.axis.length - 1) : 0;
+      S.to = nt >= 0 ? Math.max(S.from, Math.min(nt, S.axis.length - 1)) : S.axis.length - 1;
+    }
     $('upd').textContent = '全A股 · ' + updText(b);
     $('ft').textContent = footText();
     if (isFresh(b)) $('dot').classList.remove('old');
@@ -239,7 +282,10 @@
   }
   function startRemoteRefresh() {
     if (typeof fetch !== 'function') return;   /* jsdom/offline 静默跳过 */
-    function tick() { remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {}); }
+    function tick() {
+      remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {});
+      loadRemoteS().then(function (k) { applyNewSse(k); }).catch(function () {});
+    }
     tick();
     var timer = setInterval(function () {
       var bj = new Date(Date.now() + 8 * 3600 * 1000);
@@ -268,7 +314,8 @@
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
     var txt = '数据 ' + day + (short ? ' · 更新 ' + short + (m.generated_tz ? ' 北京' : '')
       : '（无跑批时间）');
-    if (!isFresh(d)) txt += ' · 待更新';
+    if (d.meta && d.meta.stale) txt += ' · 跑批未更新，数据停留在 ' + day;
+    else if (!isFresh(d)) txt += ' · 待更新';
     return txt;
   }
 
@@ -286,9 +333,10 @@
     if (S.K) {
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
-      if (bLast && kLast < bLast) parts.push('上证截至 ' + kLast + '（待补）');
+      if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
     }
-    if (S.B && !isFresh(S.B)) parts.push('待更新');
+    if (S.B && S.B.meta && S.B.meta.stale) parts.push('跑批未更新');
+    else if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');
   }
   /* 把「日期 周X 收盘 + 新鲜度」推给主站工具条（老版 header 里那颗绿点） */
@@ -1119,6 +1167,18 @@
   }
 
   /* ============ 启动 ============ */
+  /* 只读调试句柄：验证进入时视窗是否在最右最新 */
+  window.__breadthView = function () {
+    return {
+      from: S.from, to: S.to, n: S.axis ? S.axis.length : 0,
+      lastDate: S.axis ? S.axis[S.axis.length - 1] : null,
+      compare: S.compare, embed: document.body.classList.contains('embed'),
+      docScrollH: document.documentElement.scrollHeight,
+      docClientH: document.documentElement.clientHeight,
+      bodyOverflow: getComputedStyle(document.body).overflow
+    };
+  };
+
   function boot() {
     bindFullscreen();
     if (/embed=1/.test(location.search)) document.body.classList.add('embed');
@@ -1187,8 +1247,9 @@
         $('dot').classList.add('old');
       });
 
-    loadJSON('data/sse.json')
+    loadRemoteS()
       .then(function (k) {
+        if (!sseOK(k)) throw new Error('sse-symbol-check');
         S.K = k;
         if (S.B) cmp.disabled = false;
         cmp.title = '';
@@ -1196,10 +1257,22 @@
           $('ft').textContent = footText();
           if (/compare=1/.test(location.search)) setCompare(true);
         }
+        renderAll();
+      })
+      .catch(function () {
+        return loadJSON('data/sse.json').then(function (k) {
+          if (!sseOK(k)) throw new Error('sse-symbol-check');
+          S.K = k;
+          if (S.B) cmp.disabled = false;
+          if (S.B) $('ft').textContent = footText();
+          renderAll();
+        });
       })
       .catch(function () {
         cmp.disabled = true;
-        cmp.title = '上证数据缺失，无法对比';
+        /* v278：区分「缺数据」与「数据标的校验失败」——后者是抓错标的，必须显式提示 */
+        cmp.title = '上证数据缺失或校验失败，无法对比';
+        try { if ($('gen')) $('gen').textContent = '上证数据校验失败'; } catch (e) {}
         $('gen').textContent = '上证数据缺失';   /* v265：移动端 hover 不出 title，给可见提示 */
       });
   }

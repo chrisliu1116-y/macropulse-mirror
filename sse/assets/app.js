@@ -189,45 +189,22 @@
    * 更新的 breadth.json；只原地换数据、保留视口，绝不整页重载。
    * 远程全失败时静默回退本地，页面照常可用（收盘窗口每 3 分钟再查一次）。 */
   var REMOTE_B = [
-    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
     'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/breadth.json',
-    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/breadth.json',
-    /* v431：github.io/insum-cloud 当前 404（Pages 未启用），但源本身有效、404 可能暂时，
-     * 按用户要求保留为备用。竞速模式下失败源不阻塞前台，无副作用。 */
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/breadth.json',
     'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/breadth.json'
   ];
   /* v276：上证 K 线也进云端跑批，与 breadth.json 同批成对提交。
    * 用户实测出现过「insum 新 / 上证旧」，所以 SSE 也必须竞速远端。 */
   var REMOTE_S = [
-    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/sse.json',
     'https://raw.githubusercontent.com/chrisliu1116-y/insum-cloud/main/breadth/data/sse.json',
-    'https://chrisliu1116-y.github.io/macropulse-mirror/breadth/data/sse.json',
-    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/sse.json'   /* v431 备用，同上 */
+    'https://cdn.jsdelivr.net/gh/chrisliu1116-y/insum-cloud@main/breadth/data/sse.json',
+    'https://chrisliu1116-y.github.io/insum-cloud/breadth/data/sse.json'
   ];
-  /* v430【竞速：谁先到用谁】用户口径：前面的源加载出来就用前面的，慢的源不阻塞前台。
-   * 所有源并发发出，第一个返回「有效数据」的立即 resolve；其余不等待（后台自然结束）。
-   * sse.json 需过点位自检；breadth 需有 dates。 */
-  function raceRemote(urls, validate, ms) {
-    if (typeof fetch !== 'function') return Promise.reject(new Error('offline'));
-    return new Promise(function (resolve, reject) {
-      var settled = false, tried = 0;
-      var timer = setTimeout(function () {
-        if (!settled) { settled = true; reject(new Error('all-timeout')); }
-      }, ms || 5000);
-      urls.forEach(function (u) {
-        var full = u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
-        loadJSONTimeout(full, ms || 5000).then(function (d) {
-          if (settled) return;
-          if (validate && !validate(d)) { if (++tried >= urls.length) { settled=true; clearTimeout(timer); reject(new Error('all-invalid')); } return; }
-          settled = true; clearTimeout(timer); resolve(d);   // 第一个有效结果立即采用
-        }).catch(function () {
-          if (!settled && ++tried >= urls.length) { settled = true; clearTimeout(timer); reject(new Error('all-fail')); }
-        });
-      });
-    });
-  }
   function loadRemoteS() {
-    return raceRemote(REMOTE_S, sseOK, 4000);
+    if (typeof fetch !== 'function') return Promise.reject(new Error('offline'));
+    return REMOTE_S.reduce(function (p, url) {
+      return p.catch(function () { return loadJSONTimeout(url, 6000); });
+    }, Promise.reject(new Error('start')));
   }
   /* v278：上证标的自检 —— 线上曾出现 sse.json 实为平安银行（末收盘 11.71）却标成
    * 「上证指数」，整条 K 线画错。按点位量级拒收：宁可显示缺失，也不画错数据。 */
@@ -256,8 +233,19 @@
     });
   }
   function remoteBreadth() {
-    /* v430：竞速，第一个有效 breadth 立即采用，慢源不阻塞 */
-    return raceRemote(REMOTE_B, function (d) { return !!(d && d.dates && d.dates.length); }, 4000);
+    var t = Date.now();
+    return Promise.all(REMOTE_B.map(function (u) {
+      return loadJSONTimeout(u + (u.indexOf('?') >= 0 ? '&' : '?') + 't=' + t)
+        .then(function (d) { if (!d || !d.dates || !d.dates.length) throw new Error('empty'); return d; })
+        .catch(function () { return null; });
+    })).then(function (arr) {
+      var best = null;
+      for (var i = 0; i < arr.length; i++) {
+        var d = arr[i]; if (!d) continue;
+        if (!best || d.dates[d.dates.length - 1] > best.dates[best.dates.length - 1]) best = d;
+      }
+      return best;
+    });
   }
   function applyNewBreadth(b) {
     if (!S.B || !S.axis) return false;
@@ -292,13 +280,13 @@
     postStatus();
     return true;
   }
-  function startRemoteRefresh(skipFirst) {
+  function startRemoteRefresh() {
     if (typeof fetch !== 'function') return;   /* jsdom/offline 静默跳过 */
     function tick() {
       remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {});
       loadRemoteS().then(function (k) { applyNewSse(k); }).catch(function () {});
     }
-    if (!skipFirst) tick();
+    tick();
     var timer = setInterval(function () {
       var bj = new Date(Date.now() + 8 * 3600 * 1000);
       var wd = bj.getUTCDay(), hh = bj.getUTCHours();
@@ -333,32 +321,21 @@
 
   /* v267【底部只一行】老版「数据日期 + 更新时间」折成两行浪费一行，
    * 数据日期已放在主站工具条状态里，这里只写更新时间 + 精简统计。 */
-  /* v347：底部显示数据源，一眼看出当前跑的是东财还是腾讯。
-   * 优先 meta.source（跑批写入）；缺失时按历史长度反推：东财 1990 起 8000+ 日、
-   * 腾讯 2013 起 3000+ 日，差异极大，反推可靠。 */
-  function srcLabel(m, d) {
-    var s = String((m && m.source) || '').toLowerCase();
-    if (s.indexOf('tencent') >= 0) return '腾讯';
-    if (s.indexOf('eastmoney') >= 0) return '东财';
-    var n = (d && d.dates) ? d.dates.length : 0;
-    if (n >= 6000) return '东财';
-    if (n > 0) return '腾讯';
-    return '未知';
-  }
-
   function footText() {
     var m = (S.B && S.B.meta) || {};
     var g = String(m.generated || '');
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
     var parts = [];
-    if (S.B) parts.push('A股 ' + m.universe + '/' + m.valid + ' · ' + m.days + '日 · 源 ' + srcLabel(m, S.B));
-    parts.push(short ? short + (m.generated_tz ? ' 北京' : '') : '时间未知');
+    /* v268：补回老版完整口径「全部A股 X 只 · 有效 X 只 · X 个交易日」，
+     * 数据日期不重复写（工具条状态已有），只保留更新时间，仍强制一行。 */
+    if (S.B) parts.push('全部A股 ' + m.universe + ' 只 · 有效 ' + m.valid + ' 只 · ' + m.days + ' 个交易日');
+    parts.push(short ? '更新 ' + short + (m.generated_tz ? ' 北京' : '') : '更新时间未知');
     if (S.K) {
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
-      parts.push('上证 ' + kLast + (bLast && kLast < bLast ? ' 待补' : ''));
+      if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
     }
-    if (S.B && S.B.meta && S.B.meta.stale) parts.push('未更新');
+    if (S.B && S.B.meta && S.B.meta.stale) parts.push('跑批未更新');
     else if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');
   }
@@ -1245,56 +1222,59 @@
       applyTheme(next);
     });
 
-    /* v340：进页即取最新。本地快照不再先渲染旧数据（用户实测关掉 APP 重进
-     * 仍先看到 12 号，过一会才跳）。远端 3.5s 内拿不到才落本地，并按最后
-     * 交易日取较新的一份；上证 K 线与宽度同批到齐后再一次性渲染。 */
-    function timeoutVal(promise, ms, fallback) {
-      return new Promise(function (resolve) {
-        var done = false;
-        var t = setTimeout(function () { if (!done) { done = true; resolve(fallback); } }, ms);
-        promise.then(function (v) { if (!done) { done = true; clearTimeout(t); resolve(v); } },
-                     function () { if (!done) { done = true; clearTimeout(t); resolve(fallback); } });
+    loadJSON('data/breadth.json')
+      .then(function (b) {
+        S.B = b;
+        S.bIndex = new Map();
+        for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
+        buildAxis();
+        $('upd').textContent = '全A股 · ' + updText(b);
+        setRange(30);
+        updateCards(S.axis.length - 1);
+        if (isFresh(b)) $('dot').classList.remove('old'); else $('dot').classList.add('old');
+        if (S.K) cmp.disabled = false;
+        paintLegend();
+        $('ft').textContent = footText();
+        renderAll();
+        if (S.K && /compare=1/.test(location.search)) setCompare(true);
+        try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
+        postStatus();
+        startRemoteRefresh();
+      })
+      .catch(function () {
+        $('gen').textContent = '数据加载失败';
+        $('upd').textContent = '全A股 · 数据未更新，请检查跑批';
+        $('dot').classList.add('old');
       });
-    }
-    /* v430【首屏不等远端】用户 2026-11-18 指出：远端 GitHub Pages 兜底源会拖慢首屏。
-     * 旧实现 Promise.all([localPair, remotePair]) 让首屏干等远端 3.5s（即使本地已是最新）。
-     * 改为：首屏只用本地快照秒渲染；远端交给 startRemoteRefresh 后台静默竞速，
-     * 谁先拿到更新数据就 applyNewBreadth/applyNewSse 原地替换（只换数据、保留视口）。
-     * 这样远端慢/404/被墙都不影响首屏速度，且新数据照样能静默追上。 */
-    var localPair = Promise.all([
-      loadJSON('data/breadth.json').catch(function () { return null; }),
-      loadJSON('data/sse.json').catch(function () { return null; })
-    ]);
-    localPair.then(function (a) {
-      var lb = a[0], lk = a[1];
-      var b = lb;
-      var k = lk;
-      if (k && !sseOK(k)) k = null;
-      if (!b) throw new Error('no breadth');
-      S.B = b; S.K = k;
-      S.bIndex = new Map();
-      for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);
-      buildAxis();
-      $('upd').textContent = '全A股 · ' + updText(b);
-      setRange(30);
-      updateCards(S.axis.length - 1);
-      if (isFresh(b)) $('dot').classList.remove('old'); else $('dot').classList.add('old');
-      cmp.disabled = !k;
-      cmp.title = k ? '' : '上证数据缺失或校验失败，无法对比';
-      if (!k && $('gen')) $('gen').textContent = '上证数据缺失';
-      paintLegend();
-      $('ft').textContent = footText();
-      renderAll();
-      if (k && /compare=1/.test(location.search)) setCompare(true);
-      try { parent.postMessage({ mm_compare_state: !!S.compare, mm_ready: 1 }, '*'); } catch (e) {}
-      postStatus();
-      startRemoteRefresh(false);  /* v430：首屏只用本地，远端从后台竞速首轮开始追新 */
-    }).catch(function () {
-      $('gen').textContent = '数据加载失败';
-      $('upd').textContent = '全A股 · 数据未更新，请检查跑批';
-      $('dot').classList.add('old');
-    });
 
+    loadRemoteS()
+      .then(function (k) {
+        if (!sseOK(k)) throw new Error('sse-symbol-check');
+        S.K = k;
+        if (S.B) cmp.disabled = false;
+        cmp.title = '';
+        if (S.B) {
+          $('ft').textContent = footText();
+          if (/compare=1/.test(location.search)) setCompare(true);
+        }
+        renderAll();
+      })
+      .catch(function () {
+        return loadJSON('data/sse.json').then(function (k) {
+          if (!sseOK(k)) throw new Error('sse-symbol-check');
+          S.K = k;
+          if (S.B) cmp.disabled = false;
+          if (S.B) $('ft').textContent = footText();
+          renderAll();
+        });
+      })
+      .catch(function () {
+        cmp.disabled = true;
+        /* v278：区分「缺数据」与「数据标的校验失败」——后者是抓错标的，必须显式提示 */
+        cmp.title = '上证数据缺失或校验失败，无法对比';
+        try { if ($('gen')) $('gen').textContent = '上证数据校验失败'; } catch (e) {}
+        $('gen').textContent = '上证数据缺失';   /* v265：移动端 hover 不出 title，给可见提示 */
+      });
   }
 
   /* 浏览器里才启动；node（自测）require 时不碰 DOM */

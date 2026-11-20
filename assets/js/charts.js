@@ -141,6 +141,7 @@
       mainEl.className = 'pane-main';
       this.host.appendChild(mainEl);
       this.paneMain = mainEl;
+      this._bindVerticalZoom(mainEl);   /* v512:单指上下滑缩放 */
       const chart = LC.createChart(mainEl, {
         autoSize: true,
         layout: {
@@ -1516,16 +1517,25 @@
            * 上不会盖住任何实体，视觉上就是从那根 K 水平延伸出来，而不是悬空
            * 在两根 K 之间。只把「起点」往前挪一根，往右延伸与剩余片段口径不变。 */
           const prev = this._gapPts && this._gapPts[g.i - 1];
-          const x0 = L._xOf(prev ? prev.time : src.time), yTop = L._yOf(g.hi), yBot = L._yOf(g.lo);
-          if (x0 == null || yTop == null || yBot == null) continue;
-          /* v208【真正的 bug】：_xOf( = timeToCoordinate ) 返回的是**绘图区坐标**，
-           * 但 extraPainter 的 canvas 覆盖整个 pane-main（左右各外扩了一个轴宽）。
-           * 以前直接拿 x0 当 canvas 坐标用，灰带整体左移了一个左轴宽 →
-           * 看上去就是「从缺口左边延伸过来」。补上左轴宽，灰带才严格贴着
-           * 起点那根 K 线往右画、绝不向左越界。这里现读轴宽，不依赖异步字段。 */
+          /* v512【缺口跑到K线右边·根治】用户判断正确:与划线漂移同源问题。
+           * 三条错误路径:①timeToCoordinate(_xOf)对稀疏K线返回错误x(v425实测);
+           * ②_xOfPt依赖drawLayer.series的_dataTimes,与缺口所在的_mainSeries可能不同源,
+           *   _idxOfTime找不到精确时间就兜底返回末根索引→缺口全画到图表右侧;
+           * ③v208手动加paneL+v426已把paneL加进_xOf→双重偏移。
+           * 修法:用【同源的data数组】自己二分定位绝对索引,再logicalToCoordinate——
+           * 与K线渲染同一套逻辑坐标,索引必然精确。划线漂移走它自己的_xOfPt,不受影响。 */
+          const gt = prev ? prev.time : src.time;
+          let gi = -1, lo = 0, hi = data.length - 1;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (data[mid].time === gt) { gi = mid; break; }
+            if (data[mid].time < gt) lo = mid + 1; else hi = mid - 1;
+          }
           let paneL = 0;
           try { paneL = Math.round(this.chart.priceScale('left').width() || 0); } catch (e) {}
-          const px = x0 + paneL;
+          const px = gi >= 0 ? this.chart.timeScale().logicalToCoordinate(gi) + paneL : null;
+          const yTop = L._yOf(g.hi), yBot = L._yOf(g.lo);
+          if (px == null || !isFinite(px) || yTop == null || yBot == null) continue;
           if (px > right) continue;
           const y0 = Math.min(yTop, yBot), hgt = Math.max(2, Math.abs(yBot - yTop));
           ctx.save();
@@ -1559,12 +1569,56 @@
       this.setChartInteraction(!busy);
     }
 
+    /* v512【单指上下滑缩放】上滑放大、下滑缩小，无需双指。
+     * 只处理「单指且垂直位移占主导」：左右滑留给LWC原生平移，双指留给原生pinch，
+     * 画线工具激活/选中线时不介入（避免与画线拖拽冲突）。
+     * 缩放通过收窄/放宽可见logicalRange实现，保持手势起点所在的中心时间不动。 */
+    _bindVerticalZoom(el) {
+      if (!el) return;
+      let st = null;
+      const factorPerPx = 0.008;   // 每像素缩放系数，约125px放大/缩小一档
+      el.addEventListener('touchstart', (e) => {
+        st = null;
+        if (!this.chart || !this._interOn) return;
+        if (e.touches.length !== 1) return;   // 双指交给原生pinch
+        const t = e.touches[0];
+        let r = null;
+        try { r = this.chart.timeScale().getVisibleLogicalRange(); } catch (err) {}
+        if (!r) return;
+        const dataN = (this._mainSeries && this._mainSeries.data ? this._mainSeries.data().length : 0) || 1;
+        // 记录起始状态：后续每帧基于它做绝对计算，避免累积误差/跳变
+        st = { y: t.clientY, x: t.clientX,
+               span0: r.to - r.from, center0: (r.from + r.to) / 2, dataN: dataN };
+      }, { passive: true });
+      el.addEventListener('touchmove', (e) => {
+        if (!st || !this.chart || !this._interOn || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        const dy = t.clientY - st.y, dx = t.clientX - st.x;
+        if (Math.abs(dy) < 6 || Math.abs(dy) <= Math.abs(dx)) return;  // 横向为主→原生平移
+        e.preventDefault();   // 拦住页面滚动
+        // 上滑(dy<0)→span变小(放大)；下滑(dy>0)→span变大(缩小)。基于起始span绝对计算。
+        const scale = Math.exp(factorPerPx * dy);
+        const nspan = Math.max(3, Math.min(st.dataN * 1.2, st.span0 * scale));
+        try {
+          this.chart.timeScale().setVisibleLogicalRange({
+            from: st.center0 - nspan / 2,
+            to: st.center0 + nspan / 2
+          });
+        } catch (err) {}
+      }, { passive: false });
+      const end = () => { st = null; };
+      el.addEventListener('touchend', end, { passive: true });
+      el.addEventListener('touchcancel', end, { passive: true });
+    }
+
     setChartInteraction(on) {
       if (this._interOn === on) return;
       this._interOn = on;
       try {
         this.chart.applyOptions({
-          handleScroll: { mouseWheel: on, pressedMouseMove: on, horzTouchDrag: on, vertTouchDrag: on },
+          /* v512:vertTouchDrag关掉——单指上下滑改作自定义缩放(见_bindVerticalZoom),
+           * 左右平移horzTouchDrag与双指pinch保持原生不变。 */
+          handleScroll: { mouseWheel: on, pressedMouseMove: on, horzTouchDrag: on, vertTouchDrag: false },
           handleScale: { axisPressedMouseMove: on, mouseWheel: on, pinch: on }
         });
       } catch (e) {}
