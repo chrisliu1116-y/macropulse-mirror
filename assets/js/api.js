@@ -3006,23 +3006,35 @@
    * （拆股常在数年前，1y 只覆盖近一年会漏因子、断崖照旧；不用 epoch 是
    *   v331 教训：period1=0 全历史走代理会超时/截断，5y≈1255 根足够覆盖）。 */
   const _emFqCache = new Map();
-  async function emOverseasFqFactor(ysd, range) {
+  /* v516：新增 timeoutMs —— A股走东财 fqt=1 已复权，校准只是兜底，用 1.5s 短试，
+   * 超时即放弃，绝不拖慢详情首屏；海外品种不设限时（v515 已实测可达）。
+   * 失败结果同样缓存 10 分钟，避免每次切周期都重等一次超时。 */
+  async function emOverseasFqFactor(ysd, range, timeoutMs) {
     const rg = range || '1y';
-    const ck = ysd + '|' + rg;                    // 日韩 1y 与美股 5y 因子表隔离，避免串味
+    const ck = ysd + '|' + rg;                    // 各市场/各 range 因子表隔离，避免串味
     const hit = _emFqCache.get(ck);
-    if (hit && Date.now() - hit.t < 600000) return hit.f;
+    if (hit && Date.now() - hit.t < 600000) return hit.f;  // f=null 即失败缓存，也吃命中
     const f = {};
     try {
-      const y = await yahooBars(ysd, '1d', rg);
+      const y = timeoutMs > 0
+        ? await Promise.race([
+            yahooBars(ysd, '1d', rg),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('fq factor timeout')), timeoutMs))
+          ])
+        : await yahooBars(ysd, '1d', rg);
       for (const p of (y && y.points) || []) {
         if (!(p.close > 0)) continue;
         f[new Date(p.time * 1000).toISOString().slice(0, 10)] = p.close;
       }
-    } catch (e) { return null; }
-    if (!Object.keys(f).length) return null;
+    } catch (e) {
+      _emFqCache.set(ck, { t: Date.now(), f: null });
+      return null;
+    }
+    if (!Object.keys(f).length) { _emFqCache.set(ck, { t: Date.now(), f: null }); return null; }
     _emFqCache.set(ck, { t: Date.now(), f: f });
     return f;
   }
+  /* FQ_LIB_BEGIN —— 本段纯函数由 tools/test_fq_universal.js 从源码直接提取测试，勿移动标记 */
   /* v515：日K精确命中；周/月K的 time 可能落在非交易日，向前回溯最多 10 天取
    * 最近交易日因子（正常日K 100% 精确命中，不触发回溯，零回归风险）。 */
   function fqFactorAt(f, day) {
@@ -3035,6 +3047,65 @@
     }
     return 0;
   }
+  /* v516【全品种前复权校准】v515 只按 grp 白名单修美股/日/台/韩，港股与动态
+   * 注册的 ETF 仍是缺口，将来新增市场也会再漏一次。改为「按数据特征判定」：
+   * 逐日 factor = Yahoo 前复权收盘 / 东财同日收盘。已复权的源（A股东财 fqt=1、
+   * 港股、指数）factor 是一条平线；未复权的源在拆股/大比例送转日会出现
+   * **阶梯跳变**（NVDA 10 倍、铠侠 2 倍）。只有检测到真实阶梯才缩放，
+   * 平线品种一根都不动 —— 因此可安全推广到所有个股/ETF，零回归风险。
+   * 另外把因子归一化到「最新一根 = 1」：v515 直接乘绝对因子，若 Yahoo 与
+   * 东财当日收盘有细微口径差，会把最新价改成 Yahoo 的价、与顶部快照打架；
+   * 归一化后最新价恒定不变，只回溯调整历史。 */
+  function emFqNeeded(a) {
+    if (!a || a.src !== 'em' || !a.secid) return false;   // 非东财链不借 Yahoo 因子
+    if (a.kind === 'stock' || a.kind === 'etf') return true; // 个股/ETF（含动态注册）
+    return a.grp === 'usstock' || a.grp === 'hkstock' || a.grp === 'cnstock'
+        || a.grp === 'jpstock' || a.grp === 'twstock' || a.grp === 'krstock';
+  }
+  function emFqRange(a) {
+    /* 美股/港股/A股拆股与高送转可能远至数年前，1y 覆盖不到；日韩台沿用 1y
+     * （v364 已实测有效，响应更小、代理更稳）。 */
+    if (a.grp === 'cnstock') return '1y';   // A股仅兜底短试，响应小、覆盖近一年即可
+    return (a.grp === 'usstock' || a.grp === 'hkstock') ? '5y' : '1y';
+  }
+  function emFqApply(pts, fq) {
+    const n = pts && pts.length;
+    if (!n || n < 2 || !fq) return 0;
+    const fac = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      const day = new Date(pts[i].time * 1000).toISOString().slice(0, 10);
+      const yc = fqFactorAt(fq, day);
+      if (yc > 0 && pts[i].close > 0) fac[i] = yc / pts[i].close;
+    }
+    /* 阶梯判定：相邻因子比值 >1.3 视为一次复权事件；并要求跳变前后各有一段
+     * 平稳平台（±10%），排除周/月K日期错位或单日脏数据造成的孤立噪声。 */
+    let jumpAt = -1, jump = 1.3;
+    for (let i = 1; i < n; i++) {
+      if (!(fac[i] > 0) || !(fac[i - 1] > 0)) continue;
+      const r = fac[i] / fac[i - 1];
+      const j = r >= 1 ? r : 1 / r;
+      if (j <= jump) continue;
+      const prevOK = (fac[i - 2] > 0 && Math.abs(fac[i - 1] / fac[i - 2] - 1) < 0.1);
+      const nextOK = (fac[i + 1] > 0 && Math.abs(fac[i + 1] / fac[i] - 1) < 0.1);
+      if (!prevOK || !nextOK) continue;   // 两侧都要平稳：孤立单日尖峰不算复权事件
+      jump = j; jumpAt = i;
+    }
+    if (jumpAt < 0) return 0;                 // 无复权阶梯：已复权或脏数据，完全不动
+    let last = 0;
+    for (let i = n - 1; i >= 0; i--) if (fac[i] > 0) { last = fac[i]; break; }
+    if (!(last > 0)) return 0;
+    let changed = 0;
+    for (let i = 0; i < n; i++) {
+      if (!(fac[i] > 0)) continue;
+      const k = fac[i] / last;                // 归一化：最新一根 = 1
+      if (!(isFinite(k) && k > 0) || Math.abs(k - 1) < 1e-9) continue;
+      const p = pts[i];
+      p.open *= k; p.high *= k; p.low *= k; p.close *= k;
+      changed++;
+    }
+    return changed;
+  }
+  /* FQ_LIB_END */
 
   /* ---------------- v372 同花顺兜底（仅 A股 / ETF，最后一道） ----------------
    * 实测（2026-11-16）：`d.10jqka.com.cn` 浏览器 fetch 直连 200 且**带 CORS**
@@ -3558,26 +3629,18 @@
             if (y && y.points.length > pts.length) pts = y.points;
           } catch (e) { /* 拿不到就维持现有那段 */ }
         }
-        /* v364/v515【海外个股东财 → Yahoo 因子前复权】日/台/韩 + v515 美股
-         * 的东财 fqt 无效，emKline 结果是未复权价（拆股断崖）。用 Yahoo 复权价/
-         * 东财同日收盘的逐日比值把 OHLC 缩放平掉 —— 东财仍是主源，只借 Yahoo
-         * 提供复权因子。美股拆股（NVDA 2024/6 10:1）在数年前，必须传 5y 才覆盖
-         * （日韩沿用 1y）。校准失败维持原样 —— 有图优先于精确。 */
-        if (a && (a.grp === 'jpstock' || a.grp === 'twstock' || a.grp === 'krstock' || a.grp === 'usstock') && pts.length) {
+        /* v516【全品种前复权校准】东财对所有海外市场的 fqt 基本无效、A股/港股
+         * 虽有效但不能假设永远有效。统一按「Yahoo 因子是否存在复权阶梯」判定：
+         * 有阶梯就缩放（拆股/高送转断崖被抹平），无阶梯一根不动（已复权零回归）。
+         * 东财仍是主源，只借 Yahoo 提供因子；Yahoo 挂了维持原样（有图优先）。
+         * 不做拟合/不合成价格，只做等比缩放，防假数据三层约束不变。 */
+        if (a && emFqNeeded(a) && pts.length) {
           try {
-            const isUS = a.grp === 'usstock';
             const ysd2 = yahooSymbolFor(key, a);
-            const fq = ysd2 ? await emOverseasFqFactor(ysd2, isUS ? '5y' : '1y') : null;
-            if (fq) {
-              for (const p of pts) {
-                const day = new Date(p.time * 1000).toISOString().slice(0, 10);
-                const yc = fqFactorAt(fq, day);
-                if (yc > 0 && p.close > 0) {
-                  const k = yc / p.close;
-                  if (isFinite(k) && k > 0) { p.open *= k; p.high *= k; p.low *= k; p.close *= k; }
-                }
-              }
-            }
+            const fq = ysd2
+              ? await emOverseasFqFactor(ysd2, emFqRange(a), a.grp === 'cnstock' ? 1500 : 0)
+              : null;
+            if (fq) emFqApply(pts, fq);
           } catch (eF) { /* 校准失败维持原样 */ }
         }
         pts = pts.slice(-m);
