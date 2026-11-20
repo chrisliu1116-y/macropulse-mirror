@@ -304,6 +304,35 @@
     return '未知';
   }
 
+  /* v490【分段源显示】拼接底稿：1990~2013-12-23 东财（含北交所长历史），
+   * 2013-12-24 起腾讯（当前增量源）。十字游标停在哪段就显示哪段的源。
+   * 优先读 meta.segments；老数据无 segments 时按 merge_cut 兜底；再老的单源
+   * 退回 srcLabel。绝不改数据，只改显示。 */
+  var MERGE_CUT_FALLBACK = '2013-12-24';
+  function srcAt(d, i) {
+    if (!d || !d.dates || i < 0 || i >= d.dates.length) return '';
+    var day = d.dates[i];
+    var m = d.meta || {};
+    if (m.segments && m.segments.length) {
+      /* segments: [{source,from,to,...}, ...] 按区间命中 */
+      for (var k = 0; k < m.segments.length; k++) {
+        var sg = m.segments[k];
+        if (day >= sg.from && day <= sg.to) {
+          var s = String(sg.source || '').toLowerCase();
+          if (s.indexOf('tencent') >= 0) return '腾讯';
+          if (s.indexOf('eastmoney') >= 0) return '东财';
+          return sg.source || '';
+        }
+      }
+    }
+    /* 老拼接数据：只有 merge_cut 标记 */
+    if (m.merged && m.merge_cut) {
+      return day < m.merge_cut ? '东财' : '腾讯';
+    }
+    /* 更早的单源数据：整段显示同一个源 */
+    return srcLabel(m, d);
+  }
+
   function footText(d) {
     var m = d.meta || {}, g = String(m.generated || '');
     var short = g ? g.replace(/^\d{4}-/, '').slice(0, 11) : '';
@@ -475,9 +504,12 @@
     $('vDay').style.color = day >= 150 ? T.num[1] : (half ? T.num[2] : T.num[0]);
     $('vDayTag').textContent = day >= 150 ? '攻击' : (half ? '冰点' : '');
 
-    /* 标题右侧日期：游标模式显示游标日，否则显示最新日 */
+    /* 标题右侧日期：游标模式显示游标日，否则显示最新日。
+     * v490：带上游源名——游标停在东财段显示「东财」、腾讯段显示「腾讯」。 */
     var isLast = i === d.dates.length - 1;
-    $('gen').textContent = d.dates[i] + ' 周' + wkOf(d.dates[i]) + (isLast ? ' 收盘' : '');
+    var srcName = srcAt(d, i);
+    $('gen').textContent = d.dates[i] + ' 周' + wkOf(d.dates[i])
+      + (srcName ? ' · 源 ' + srcName : '') + (isLast ? ' 收盘' : '');
     $('gen').style.color = isLast ? '' : T.num[2];
   }
 
