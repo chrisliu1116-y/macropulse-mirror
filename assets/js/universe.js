@@ -621,7 +621,13 @@
     '00700':  { sym: 'TENCENT',   label: 'RWA(美元)', ratio: null },
     '09988':  { sym: 'BABA',      label: 'RWA(美元)', ratio: null },
     '300750': { sym: 'CATL',      label: 'RWA(美元)', ratio: null },
-    '688256': { sym: 'CAMBRICON', label: 'RWA(美元)', ratio: null }
+    '688256': { sym: 'CAMBRICON', label: 'RWA(美元)', ratio: null },
+    /* v533【补漏·标的身份已核实】CXMT=长鑫科技(SHE:688825,Gate/HyperAcademy资料确认
+     * xyz:CXMT跟踪该股,RMB折算USD,现价35.16元≈4.9美元 vs RWA 4.97≈1:1);
+     * HYUNDAI=现代汽车(KRX:005380,Keel/HyperAcademy确认xyz:HYUNDAI跟踪该股,KRW折算USD)。
+     * 均为海外RWA映射、币种不同→ratio:null只作参考价不算基差。 */
+    '688825': { sym: 'CXMT',      label: 'RWA(美元)', ratio: null },
+    '005380': { sym: 'HYUNDAI',   label: 'RWA(美元)', ratio: null }
   };
   function adrOf(key) { return ADR_MAP[String(key)] || null; }
 
