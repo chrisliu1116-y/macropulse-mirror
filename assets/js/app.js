@@ -4709,6 +4709,10 @@
       ? ` <b class="pct24 ${v >= 0 ? 'up' : 'down'}">${v >= 0 ? '+' : ''}${v.toFixed(2)}%</b>` : '';
     const basisOf = (sp) => (sp != null)
       ? `基差${sp >= 0 ? '+' : ''}${sp.toFixed(2)}%` : '';
+    /* v529：基差做成独立徽章常驻主行（APP无hover，必须一眼可见），
+     * 不再埋在灰字说明末尾。中性灰底、与24h涨跌色区分。 */
+    const basisBadge = (sp) => (sp != null)
+      ? `<span class="basis-badge" title="基差：相对主报价的偏离，非涨跌幅">基差${sp >= 0 ? '+' : ''}${sp.toFixed(2)}%</span>` : '';
     // ⓪ 日股夜盤PTS（Japannext J-Market）
     const pj = S.pts[key];
     if (pj) {
@@ -4726,14 +4730,14 @@
       if (dark.adr) {
         rows.push(
           `<div class="ext-row"><span class="ext-tag ext-dark">暗盘</span>`
-          + `<span class="ext-val">$${dark.price.toFixed(2)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}</span>`
-          + `<span class="ext-meta">Hyperliquid ${esc(dark.adr.label)}(${esc(dark.sym)}) · 美元计价，未换算本币${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}${basisOf(dark.spread) ? ' · ' + basisOf(dark.spread) : ''}</span></div>`
+          + `<span class="ext-val">$${dark.price.toFixed(2)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}${basisBadge(dark.spread)}</span>`
+          + `<span class="ext-meta">Hyperliquid ${esc(dark.adr.label)}(${esc(dark.sym)}) · 美元计价，未换算本币${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
         );
       } else {
         rows.push(
           `<div class="ext-row"><span class="ext-tag ext-dark">暗盘</span>`
-          + `<span class="ext-val">${withUnit(dark.price)}${dark.chg24h != null ? pctOf(dark.chg24h) : (basisOf(dark.spread) ? ' · ' + basisOf(dark.spread) : '')}</span>`
-          + `<span class="ext-meta">Hyperliquid 暗盘池${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}${basisOf(dark.spread) ? ' · ' + basisOf(dark.spread) + '（相对主报价）' : ''}</span></div>`
+          + `<span class="ext-val">${withUnit(dark.price)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}${basisBadge(dark.spread)}</span>`
+          + `<span class="ext-meta">Hyperliquid 暗盘池${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
         );
       }
     }
@@ -4742,8 +4746,8 @@
     if (dex) {
       rows.push(
         `<div class="ext-row"><span class="ext-tag ext-dex">链上</span>`
-        + `<span class="ext-val">$${U.fmt(key, dex.price)}${dex.chg24h != null ? pctOf(dex.chg24h) : (basisOf(dex.spread) ? ' · ' + basisOf(dex.spread) : '')}</span>`
-        + `<span class="ext-meta">${esc(dex.pair ? 'DEX ' + dex.pair : '链上 DEX 池子实时成交价')}${dex.chg24h != null ? ' · 24h为自身涨跌' : ''}${basisOf(dex.spread) ? ' · ' + basisOf(dex.spread) + '（相对主报价）' : ''}</span></div>`
+        + `<span class="ext-val">$${U.fmt(key, dex.price)}${dex.chg24h != null ? pctOf(dex.chg24h) : ''}${basisBadge(dex.spread)}</span>`
+        + `<span class="ext-meta">${esc(dex.pair ? 'DEX ' + dex.pair : '链上 DEX 池子实时成交价')}${dex.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
       );
     }
     // ③ 延展时段（既不是暗盘也不是链上的替代价，如无 hl 的韩股）
