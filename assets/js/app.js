@@ -9971,13 +9971,19 @@
       _effCompareOn = !_effCompareOn;
       effectPost({ mm_compare: _effCompareOn });
       cmp.classList.toggle('on', _effCompareOn);
+      /* v521：对比指数下拉仅对比模式可见（sse 内 header 在 embed 下被隐藏，放这里） */
+      d.body.classList.toggle('eff-cmp-on', _effCompareOn);
     };
+    /* v521：下拉切换对比指数 → 转发给 iframe */
+    const idxSel = $('#effIdx');
+    if (idxSel) idxSel.onchange = () => effectPost({ mm_compare_index: idxSel.value });
     if (full) full.onclick = toggleEffectFS;
     w.addEventListener('message', (e) => {
       const m = e.data || {};
       if (typeof m.mm_compare_state === 'boolean') {
         _effCompareOn = m.mm_compare_state;
         if (cmp) cmp.classList.toggle('on', _effCompareOn);
+        d.body.classList.toggle('eff-cmp-on', _effCompareOn);
       }
       if (m.mm_theme_req) effectPost({ mm_theme: S.theme });
       if (m.mm_status) {

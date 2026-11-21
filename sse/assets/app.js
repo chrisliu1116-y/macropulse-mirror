@@ -1265,6 +1265,11 @@
     window.addEventListener('message', function (e) {
       if (e.data && typeof e.data.mm_theme === 'string' && !isEmbed()) applyTheme(e.data.mm_theme);
       if (e.data && typeof e.data.mm_compare === 'boolean') setCompare(e.data.mm_compare);
+      /* v521：主站 eff-bar 下拉切指数 → 本页切换；若数据未就绪则缓存，applySse 后生效 */
+      if (e.data && typeof e.data.mm_compare_index === 'string') {
+        if (typeof window.__switchCompareIndex === 'function') window.__switchCompareIndex(e.data.mm_compare_index);
+        else S.idxKey = e.data.mm_compare_index;   // 数据未加载，先记住
+      }
       if (e.data && e.data.mm_exit_fs) {
         var cur = document.fullscreenElement || document.webkitFullscreenElement;
         if (cur) { try { (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document); } catch (err) {} }
@@ -1278,15 +1283,11 @@
     var cmp = $('btnCompare');
     cmp.addEventListener('click', function () { setCompare(!S.compare); });
     /* v491：下拉切换对比指数。S.K 指向选中指数 → buildAxis() 用其 dates 当主轴，
-     * 指标自动从该指数首日开始，无 0 假基线。缺数据的指数(如抓失败的)禁用选项。 */
-    var cmpSel = $('cmpIndex');
-    if (cmpSel) cmpSel.addEventListener('change', function () {
-      var key = cmpSel.value;
+     * 指标自动从该指数首日开始，无 0 假基线。缺数据的指数(如抓失败的)回退当前。
+     * v521：下拉已移到主站 eff-bar(embed 下 sse header 被隐藏)，本页也可能有(独立打开时)。 */
+    function switchIndex(key) {
       var target = key === 'SH' ? (S.SH_K || S.K) : ((S.ALLIDX || {})[key]);
-      if (!target || !target.dates || !target.dates.length) {
-        cmpSel.value = S.idxKey;   // 该指数无数据，回退当前
-        return;
-      }
+      if (!target || !target.dates || !target.dates.length) return false;
       S.idxKey = key;
       S.K = target;
       S.cursor = -1; S.cursorMode = false;   // 切指数重置游标
@@ -1296,6 +1297,12 @@
       try { $('ft').textContent = footText(); } catch (e0) {}
       renderAll();
       try { parent.postMessage({ mm_compare_index: key }, '*'); } catch (e) {}
+      return true;
+    }
+    window.__switchCompareIndex = switchIndex;   // 供 message handler 调用
+    var cmpSel = $('cmpIndex');
+    if (cmpSel) cmpSel.addEventListener('change', function () {
+      if (!switchIndex(cmpSel.value)) cmpSel.value = S.idxKey;
     });
 
     if (isEmbed()) {

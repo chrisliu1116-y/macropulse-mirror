@@ -432,6 +432,10 @@ body.light .clock.clock-stale{color:#c2610d;border-bottom-color:#c2610d}
   box-shadow:0 0 0 3px rgba(34,197,94,.14)}
 .eff-dot.old{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.14)}
 #effCompare{margin-left:auto}
+/* v521：对比指数下拉，仅在对比模式显示（放主站工具条，避免被 iframe 内 embed header 隐藏） */
+.eff-idx{display:none;padding:3px 5px;border-radius:8px;border:1px solid var(--hair);
+  background:var(--bar2);color:var(--dim);font-size:10.5px;font-family:inherit;max-width:78px}
+body.eff-cmp-on .eff-idx{display:inline-block}
 .eff-bar .mini-btn.on{border-color:var(--blue,#4c8dff);color:var(--blue,#4c8dff);
   background:rgba(76,141,255,.10)}
 #view-effect,#view-effect.on{overflow:hidden}  /* v414：赚钱效应页一屏展示，禁止上下拖动 */
