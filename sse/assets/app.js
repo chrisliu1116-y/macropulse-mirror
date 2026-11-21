@@ -328,8 +328,9 @@
     var parts = [];
     /* v268：补回老版完整口径「全部A股 X 只 · 有效 X 只 · X 个交易日」，
      * 数据日期不重复写（工具条状态已有），只保留更新时间，仍强制一行。 */
-    if (S.B) parts.push('全部A股 ' + m.universe + ' 只 · 有效 ' + m.valid + ' 只 · ' + m.days + ' 个交易日');
-    parts.push(short ? '更新 ' + short + (m.generated_tz ? ' 北京' : '') : '更新时间未知');
+    /* v520：精简为一行可容纳（原「全部A股 X 只 · 有效 X 只 · X 个交易日 · 更新…」太长换行） */
+    if (S.B) parts.push('全A ' + m.universe + '只 · ' + m.days + '日');
+    parts.push(short ? '更新 ' + short : '未更新');
     if (S.K) {
       var kLast = S.K.dates[S.K.dates.length - 1];
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
@@ -380,9 +381,9 @@
         : ((S.B && S.B.dates[S.B.dates.length - 1]) || '');
       var last = !S.axis || i >= S.axis.length - 1;
       var wk = wkOf(date);
-      var srcName = srcAtDate(date);
+      /* v520：源名只在底部那行显示，顶部工具条保持「日期 周X」原样，不再重复 */
       parent.postMessage({ mm_status: {
-        text: date + (wk ? ' 周' + wk : '') + (srcName ? ' · 源 ' + srcName : '') + (last ? ' 收盘' : ''),
+        text: date + (wk ? ' 周' + wk : '') + (last ? ' 收盘' : ''),
         fresh: S.B ? isFresh(S.B) : true
       } }, '*');
     } catch (e) {}
@@ -931,6 +932,9 @@
     S.cursor = i;
     S.cursorMode = true;
     updateCards(i);
+    /* v520：底部源名要跟着游标变（东财段/腾讯段）。footer 原本只在数据加载时
+     * 刷新，游标移动不会更新，导致源名卡在最新日的段。这里显式重绘底部行。 */
+    try { $('ft').textContent = footText(); } catch (e0) {}
     renderAll();
   }
 
@@ -939,6 +943,7 @@
     S.cursorMode = false;
     S.cursor = -1;
     updateCards(S.axis.length - 1);
+    try { $('ft').textContent = footText(); } catch (e0) {}   // v520：离开游标源名回到最新段
     renderAll();
   }
 
