@@ -339,7 +339,32 @@
     else if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');
   }
-  /* 把「日期 周X 收盘 + 新鲜度」推给主站工具条（老版 header 里那颗绿点） */
+  /* v490【分段源显示】拼接底稿：1990~2013-12-23 东财（含北交所长历史），
+   * 2013-12-24 起腾讯。日期落在哪段就标哪个源，游标移动实时跟随。
+   * 优先读 meta.segments；老数据用 merge_cut 兜底；再老的纯单源退回 meta.source。
+   * 对比模式下主轴是上证日K日期(S.K)，仍按同一日期阈值判段。 */
+  function srcAtDate(date) {
+    var m = (S.B && S.B.meta) || {};
+    if (!date) return '';
+    if (m.segments && m.segments.length) {
+      for (var k = 0; k < m.segments.length; k++) {
+        var sg = m.segments[k];
+        if (date >= sg.from && date <= sg.to) {
+          var s = String(sg.source || '').toLowerCase();
+          if (s.indexOf('tencent') >= 0) return '腾讯';
+          if (s.indexOf('eastmoney') >= 0) return '东财';
+          return sg.source || '';
+        }
+      }
+    }
+    if (m.merged && m.merge_cut) return date < m.merge_cut ? '东财' : '腾讯';
+    var src = String(m.source || '').toLowerCase();
+    if (src.indexOf('tencent') >= 0) return '腾讯';
+    if (src.indexOf('eastmoney') >= 0) return '东财';
+    return '';
+  }
+
+  /* 把「日期 周X 收盘 · 源 + 新鲜度」推给主站工具条（老版 header 里那颗绿点） */
   function postStatus() {
     if (!isEmbed()) return;
     try {
@@ -348,8 +373,9 @@
         : ((S.B && S.B.dates[S.B.dates.length - 1]) || '');
       var last = !S.axis || i >= S.axis.length - 1;
       var wk = wkOf(date);
+      var srcName = srcAtDate(date);
       parent.postMessage({ mm_status: {
-        text: date + (wk ? ' 周' + wk : '') + (last ? ' 收盘' : ''),
+        text: date + (wk ? ' 周' + wk : '') + (srcName ? ' · 源 ' + srcName : '') + (last ? ' 收盘' : ''),
         fresh: S.B ? isFresh(S.B) : true
       } }, '*');
     } catch (e) {}

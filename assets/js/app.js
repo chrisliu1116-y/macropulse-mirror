@@ -9764,13 +9764,40 @@
     window.__openSheet = openSheet;
     window.__closeSheet = closeSheet;
     window.__openNews = openNews;
-    /* v288：原生通知点击路由。s→那条新闻；anom/price→对应品种行情详情 */
+    /* v288：原生通知点击路由。s→那条新闻；anom/price→对应品种行情详情（分时图）。
+     * v519【通知跳转必达】用户实测点通知没跳。链路审计：原生 notifyRoute→PendingIntent
+     * →captureRoute→onNewIntent→__notifyRoute 完整，H5 单测 __notifyRoute('anom','BTC')
+     * 返回 true 且 #sheet.on。真机无响应最可能是详情被上层弹窗(nsheet/lview/keyp)遮住，
+     * 或品种未注册导致 openSheet 静默 return。稳健增强（不动既有成功路径）：
+     * ① 打开前先关掉所有上层弹窗；② openSheet 内部已置 sheetMode='min' 且按最高
+     * z-index+10 置顶；③ 品种未注册时切行情 tab 兜底，不让点击变成"没反应"。
+     * 注意 openSheet 成功时无返回值，不能用返回值判成败，改用 U.get + sheet.on。 */
     window.__notifyRoute = function (rtype, rkey) {
       try {
         if (!rkey) return false;
-        if (rtype === 's') { if (typeof openNews === 'function') openNews(String(rkey)); return true; }
+        rkey = String(rkey);
+        /* ① 清掉可能盖住详情/新闻的上层弹层 */
+        try {
+          ['.nsheet.on', '.lview.on', '.keyp.on', '.pk.on', '.smodal.on'].forEach(function (sel) {
+            var el = document.querySelector(sel);
+            if (el) {
+              var btn = el.querySelector('[data-close],.sh-x,.nsheet-x,.lview-x,.pk-x,.smodal-x,.close');
+              if (btn && typeof btn.click === 'function') btn.click();
+              else el.classList.remove('on');
+            }
+          });
+        } catch (e0) {}
+        if (rtype === 's') {
+          if (typeof openNews === 'function') { openNews(rkey); return true; }
+          return false;
+        }
         if (rtype === 'anom' || rtype === 'price') {
-          if (typeof openSheet === 'function') openSheet(String(rkey)); return true;
+          var known = (typeof U !== 'undefined' && U.get) ? !!U.get(rkey) : true;
+          if (!known) { try { switchTab('market'); } catch (e2) {} return false; }
+          if (typeof openSheet === 'function') {
+            openSheet(rkey);                    // 内部置 sheetMode='min' + 最高 z-index
+            return true;
+          }
         }
       } catch (e) {}
       return false;
