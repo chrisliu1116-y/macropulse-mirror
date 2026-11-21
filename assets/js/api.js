@@ -2246,7 +2246,10 @@
       dex: best.dexId,
       chain: best.chainId,
       pair: (best.baseToken.symbol || '') + '/' + (best.quoteToken.symbol || ''),
-      at: Date.now()
+      at: Date.now(),
+      /* v528：链上 DEX 池自身24h涨跌（DexScreener priceChange.h24）——
+       * 市场判断涨跌的标准口径；与相对现货的基差是两回事。 */
+      chg24h: (best.priceChange && isFinite(+best.priceChange.h24)) ? +best.priceChange.h24 : null
     };
   }
 
@@ -2605,42 +2608,63 @@
    * ------------------------------------------------------------------ */
   const HL_API = 'https://api.hyperliquid.xyz/info';
   const HL_TTL = 30000;
-  let hlCache = { at: 0, map: null, busy: null };
+  let hlCache = { at: 0, map: null, chg: null, busy: null };
 
+  /* v528：改用 metaAndAssetCtxs 一次拿全池 markPx + prevDayPx（仍是1个请求，
+   * 取代原 allMids），直接算「暗盘相对自身24h前」的涨跌——这才是市场判断
+   * 暗盘涨/跌的标准口径（非相对现货的基差）。失败回退 allMids 保留价格。 */
   async function hlMids() {
     const now = Date.now();
     if (hlCache.map && now - hlCache.at < HL_TTL) return hlCache.map;
     if (hlCache.busy) return hlCache.busy;
     hlCache.busy = (async () => {
-      try {
+      const fetchBody = async (body) => {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 8000);
-        let res;
         try {
-          res = await fetch(HL_API, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'allMids', dex: 'xyz' }),
-            signal: ctrl.signal,
-            cache: 'no-store'
+          const res = await fetch(HL_API, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body), signal: ctrl.signal, cache: 'no-store'
           });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return await res.json();
         } finally { clearTimeout(timer); }
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const d = await res.json();
-        const map = {};
-        Object.keys(d || {}).forEach(k => {
-          // 回包 key 带 "xyz:" 前缀，值可能是字符串
-          const name = k.indexOf(':') >= 0 ? k.split(':').pop() : k;
-          const v = parseFloat(d[k]);
-          if (name && isFinite(v) && v > 0) map[name.toUpperCase()] = v;
+      };
+      try {
+        const d = await fetchBody({ type: 'metaAndAssetCtxs', dex: 'xyz' });
+        const map = {}, chg = {};
+        const uni = (d && d[0] && d[0].universe) || [];
+        const ctxs = (d && d[1]) || [];
+        uni.forEach((u, i) => {
+          const name = String(u.name || '').split(':').pop().toUpperCase();
+          const c = ctxs[i] || {};
+          const px = parseFloat(c.markPx ?? c.midPx);
+          if (!name || !isFinite(px) || px <= 0) return;
+          map[name] = px;
+          const prev = parseFloat(c.prevDayPx);
+          if (isFinite(prev) && prev > 0) chg[name] = (px - prev) / prev * 100;
         });
+        if (!Object.keys(map).length) throw new Error('meta empty');
         status.hl = 'ok';
-        hlCache = { at: Date.now(), map, busy: null };
+        hlCache = { at: Date.now(), map, chg, busy: null };
         return map;
       } catch (e) {
-        status.hl = 'fail';
-        hlCache.busy = null;
-        return hlCache.map || {};
+        // 回退：仍用 allMids 拿价格（无24h涨跌），不让暗盘价整体消失
+        try {
+          const d = await fetchBody({ type: 'allMids', dex: 'xyz' });
+          const map = {};
+          Object.keys(d || {}).forEach(k => {
+            const name = k.indexOf(':') >= 0 ? k.split(':').pop() : k;
+            const v = parseFloat(d[k]);
+            if (name && isFinite(v) && v > 0) map[name.toUpperCase()] = v;
+          });
+          status.hl = Object.keys(map).length ? 'ok' : 'fail';
+          hlCache = { at: Date.now(), map, chg: null, busy: null };
+          return map;
+        } catch (e2) {
+          status.hl = 'fail'; hlCache.busy = null;
+          return hlCache.map || {};
+        }
       }
     })();
     return hlCache.busy;
@@ -2666,7 +2690,9 @@
     const map = await hlMids();
     const p = map[String(sym).toUpperCase()];
     if (!p) return null;
-    return { price: p, sym: sym, at: hlCache.at, adr: adr || null };
+    const symKey = String(sym).toUpperCase();
+    return { price: p, sym: sym, at: hlCache.at, adr: adr || null,
+             chg24h: (hlCache.chg && isFinite(hlCache.chg[symKey])) ? hlCache.chg[symKey] : null };
   }
 
   /* ---------------- 韩股：常规 + 盘后（Nextrade 애프터마켓）分钟线 ----------------

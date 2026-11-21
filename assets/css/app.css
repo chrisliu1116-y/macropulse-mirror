@@ -1642,8 +1642,8 @@ body.chart-fs.draw-open .sh-tabs{left:calc((100% - var(--dp-w))/2)}
 .ext-tag.ext-pts{background:#3d8bfd}
 .ext-val{flex:none;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--tx1)}
 .ext-val b{font-weight:700}
-/* v527：基差标签——明确它不是涨跌幅，弱化成说明性小字，避免与主板涨跌幅混淆 */
-.ext-val b.basis{font-size:11px;font-weight:600;margin-left:4px;opacity:.85}
+/* v528：24h涨跌是主显示（市场标准口径），基差移到灰字 meta 供细看 */
+.ext-val b.pct24{font-size:13px;font-weight:700;margin-left:5px}
 .ext-meta{flex:1;font-size:10px;color:var(--tx3);line-height:1.4}
 .ext-src{float:right;font-size:9.5px;color:var(--tx3);font-weight:400;letter-spacing:0}
 .ext-empty{padding:14px 12px;border-radius:11px;background:var(--wash);border:1px dashed var(--line);font-size:11px;color:var(--tx3);line-height:1.6}
