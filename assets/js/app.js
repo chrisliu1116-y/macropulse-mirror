@@ -7684,14 +7684,22 @@
       const days = Math.max(1, Math.floor((Date.now() - d) / 86400000) + 1);
       return Object.assign({}, m, { value: days, max: Math.max(m.max || 7, days + 2) });
     }
-    /* v531：距未来某日的天数（如「距下次FOMC决策」），日期过后自动隐藏该指标。 */
+    /* v531/v532：距未来某日的天数。date 可为单个日期或日期数组（如 FOMC 多次会议），
+     * 自动挑「下一个未过期」的日期，随日历推进；全部过期才隐藏。 */
     if (m.auto.type === 'daysUntil') {
-      const d = Date.parse(String(m.auto.date) + 'T00:00:00+08:00');
-      if (!isFinite(d)) return m;
-      const left = Math.ceil((d - Date.now()) / 86400000);
-      if (left <= 0) return Object.assign({}, m, { _expired: true });
-      return Object.assign({}, m, { value: left, max: Math.max(m.max || 30, 30),
-        note: m.auto.note || m.note });
+      const dates = Array.isArray(m.auto.date) ? m.auto.date : [m.auto.date];
+      const now = Date.now();
+      let best = null;
+      for (const ds of dates) {
+        const d = Date.parse(String(ds) + 'T00:00:00+08:00');
+        if (isFinite(d) && d > now && (!best || d < best.d)) best = { d: d, ds: ds };
+      }
+      if (!best) return Object.assign({}, m, { _expired: true });
+      const left = Math.ceil((best.d - now) / 86400000);
+      // note 里 {date} 占位替换为实际选中的日期，让卡片显示具体哪天决策
+      const noteTpl = m.auto.note || m.note || '';
+      const note = noteTpl.replace('{date}', best.ds.slice(5).replace('-', '-'));
+      return Object.assign({}, m, { value: left, max: Math.max(m.max || 30, 30), note: note });
     }
     return m;
   }

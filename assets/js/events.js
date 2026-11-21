@@ -146,11 +146,15 @@
         pred: { q: 'fed decision december', event: 'Fed Decision in December',
                 market: 'increase interest rates by 25', outcome: 'Yes' } },
       metrics: [
-        /* v531【下次决策时间点】FOMC 2026 剩余会议=12/8-9（federalreserve.gov 官方日历），
-         * 决议 12/9 14:00 ET 公布。daysUntil 自动倒数，过期自动隐藏。 */
+        /* v531/v532【下次决策时间点·随时间自动推进】FOMC 官方日历已公布的决策日
+         * （每次会议第2天 14:00 ET = 北京次日 02:00 公布）。daysUntil 会自动挑
+         * 「下一个未过期」的日期并动态改写 note 的 {date}，过了12/9自动跳1/27。
+         * ⚠️ 只填官方已公布的日期（目前到2027-01-27），2027其余日程未公布，
+         * 绝不按规律推算填充——编造的日期比不显示更糟。官方公布后追加即可。 */
         { name: '距下次FOMC决策', value: 18, unit: '天',
-          note: '12-09 02:00 北京时间公布 · 官方日历', color: '#ffd43b',
-          auto: { type: 'daysUntil', date: '2026-12-09', note: '12-09 02:00 北京时间公布 · 官方日历' } },
+          note: '{date} 02:00 北京时间公布 · 官方日历', color: '#ffd43b',
+          auto: { type: 'daysUntil', date: ['2026-12-09', '2027-01-27'],
+                  note: '{date} 02:00 北京时间公布 · 官方日历' } },
         /* 【v289】跟踪推进天数按日期自动推算（自 11-03 JOLTS 数据日建档起算） */
         { name: '本卡跟踪已持续', value: 9, unit: '天', note: '自 11-03 JOLTS 数据日建档 · 按日期自动推算',
           color: '#8ce99a', max: 60, auto: { type: 'daysSince', date: '2026-11-03' } },
