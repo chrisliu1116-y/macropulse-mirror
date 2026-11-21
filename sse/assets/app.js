@@ -232,7 +232,8 @@
     }
     /* v523：数据就绪时同步图例标题（若消息在加载前设了 idxKey，这里也要跟上） */
     try {
-      var _lab = $('sseLgLabel');
+      /* v524：同样用一直存在的 .sse-lg span 兜底，避免旧 HTML 缓存丢失新 id */
+      var _lab = document.querySelector('.sse-lg span') || $('sseLgLabel');
       if (_lab) _lab.textContent = ((S.K && S.K.name) || '上证指数') + ' · 前复权 · 涨红跌绿';
     } catch (e0) {}
     syncIndexSelect();
@@ -1290,12 +1291,13 @@
     /* v491：下拉切换对比指数。S.K 指向选中指数 → buildAxis() 用其 dates 当主轴，
      * 指标自动从该指数首日开始，无 0 假基线。缺数据的指数(如抓失败的)回退当前。
      * v521：下拉已移到主站 eff-bar(embed 下 sse header 被隐藏)，本页也可能有(独立打开时)。 */
-    /* v523：更新 K 线图例标题为当前指数名（数据里的 name / 顶层 meta）。 */
+    /* v524：更新 K 线图例标题为当前指数名。
+     * 关键：iframe src 无版本号，手机可能缓存旧 HTML（没有 #sseLgLabel 这个新 id），
+     * 所以优先用「一直存在」的 .sse-lg span 选择器兜底，绝不依赖新加的 id。 */
     function updateIdxLabel(key, target) {
-      var el = $('sseLgLabel');
+      var el = document.querySelector('.sse-lg span') || $('sseLgLabel');
       if (!el) return;
       var name = (target && target.name) || '上证指数';
-      /* 指数裸数据无复权概念（qfq/hfq 等价），但保留原措辞避免引入其它展示变化 */
       el.textContent = name + ' · 前复权 · 涨红跌绿';
     }
     function switchIndex(key) {
@@ -1308,7 +1310,12 @@
       updateIdxLabel(key, target);
       S.cursor = -1; S.cursorMode = false;   // 切指数重置游标
       buildAxis();
-      setRange(0);                            // 铺满新指数全区间(从其首日开始)
+      /* v524：切指数后保持 30 日视图（用户口径：不要锁到全景最小粒度），
+       * 并同步区间按钮高亮到「30日」。 */
+      setRange(30);
+      Array.prototype.forEach.call(($('ranges') || {children: []}).children, function (x) {
+        x.classList.toggle('on', x.dataset.n === '30');
+      });
       updateCards(S.axis.length - 1);
       try { $('ft').textContent = footText(); } catch (e0) {}
       renderAll();

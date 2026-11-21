@@ -432,10 +432,34 @@ body.light .clock.clock-stale{color:#c2610d;border-bottom-color:#c2610d}
   box-shadow:0 0 0 3px rgba(34,197,94,.14)}
 .eff-dot.old{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.14)}
 #effCompare{margin-left:auto}
-/* v521：对比指数下拉，仅在对比模式显示（放主站工具条，避免被 iframe 内 embed header 隐藏） */
-.eff-idx{display:none;padding:3px 5px;border-radius:8px;border:1px solid var(--hair);
-  background:var(--bar2);color:var(--dim);font-size:10.5px;font-family:inherit;max-width:78px}
-body.eff-cmp-on .eff-idx{display:inline-block}
+/* v524：对比指数自定义下拉（不用原生 select，避免手机弹系统滚轮）。
+ * 按钮沿用 mini-btn 同款字体/配色；菜单走 CSS 变量，深浅色自动适配。 */
+.eff-idx{display:none;position:relative;flex:0 0 auto}
+body.eff-cmp-on .eff-idx{display:block}
+.eff-idx-btn{
+  font-family:inherit;font-size:11px;padding:5px 10px;border-radius:8px;
+  background:rgba(79,157,255,.10);border:1px solid rgba(79,157,255,.32);color:var(--accent-tx);
+  cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;
+}
+.eff-idx-btn:active{transform:scale(.95)}
+.eff-idx-btn .caret{font-style:normal;font-size:9px;opacity:.75}
+.eff-idx-menu{
+  display:none;position:absolute;top:calc(100% + 5px);right:0;z-index:200;
+  min-width:112px;padding:4px;border-radius:10px;
+  background:var(--panel2,#131a26);border:1px solid var(--hair2);
+  box-shadow:0 8px 24px rgba(0,0,0,.28);
+}
+.eff-idx.open .eff-idx-menu{display:block}
+.eff-idx-menu button{
+  display:block;width:100%;text-align:left;font-family:inherit;font-size:11px;
+  padding:7px 9px;border:0;border-radius:7px;background:transparent;color:var(--tx2);cursor:pointer;
+}
+.eff-idx-menu button:active{background:var(--wash)}
+.eff-idx-menu button.on{background:rgba(79,157,255,.18);color:var(--accent-tx)}
+body.light .eff-idx-btn{background:#fff;border-color:rgba(16,24,40,.12);color:#3a485e}
+body.light .eff-idx-menu{background:#fff;box-shadow:0 8px 24px rgba(15,23,42,.14)}
+body.light .eff-idx-menu button{color:#3a485e}
+body.light .eff-idx-menu button.on{background:#e8efff;color:#1f5cc0}
 .eff-bar .mini-btn.on{border-color:var(--blue,#4c8dff);color:var(--blue,#4c8dff);
   background:rgba(76,141,255,.10)}
 #view-effect,#view-effect.on{overflow:hidden}  /* v414：赚钱效应页一屏展示，禁止上下拖动 */

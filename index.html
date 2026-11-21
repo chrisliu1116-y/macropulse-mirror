@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=523">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=523">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=523">
-<link rel="stylesheet" href="assets/css/app.css?v=523">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=524">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=524">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=524">
+<link rel="stylesheet" href="assets/css/app.css?v=524">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -138,14 +138,17 @@
     <div class="eff-bar" id="effBar">
       <span class="eff-status"><i class="eff-dot" id="effDot"></i><span id="effStatusText">加载中…</span></span>
       <button class="mini-btn" id="effCompare" type="button">对比模式</button>
-      <select class="eff-idx" id="effIdx" aria-label="对比指数" title="选择对比指数">
-        <option value="SH">上证</option>
-        <option value="SZ">深成</option>
-        <option value="SZ50">上证50</option>
-        <option value="HS300">沪深300</option>
-        <option value="CYB">创业板</option>
-        <option value="KC50">科创50</option>
-      </select>
+      <div class="eff-idx" id="effIdx">
+        <button class="eff-idx-btn" id="effIdxBtn" type="button" aria-label="对比指数" aria-expanded="false">上证 <i class="caret">▾</i></button>
+        <div class="eff-idx-menu" id="effIdxMenu" role="listbox">
+          <button type="button" data-v="SH" class="on">上证指数</button>
+          <button type="button" data-v="SZ">深证成指</button>
+          <button type="button" data-v="SZ50">上证50</button>
+          <button type="button" data-v="HS300">沪深300</button>
+          <button type="button" data-v="CYB">创业板指</button>
+          <button type="button" data-v="KC50">科创50</button>
+        </div>
+      </div>
       <button class="mini-btn" id="effFull" type="button">全屏</button>
     </div>
     <iframe id="effectFrame" src="about:blank" data-src="./sse/index.html?embed=1"
@@ -202,35 +205,35 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=523">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=523">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=523">
-  <link rel="preload" as="script" href="assets/js/app.js?v=523">
-  <link rel="preload" as="script" href="assets/js/api.js?v=523">
-<script src="vendor/lightweight-charts.standalone.production.js?v=523"></script>
-<script src="assets/js/cn-stocks.js?v=523"></script>
-<script src="assets/js/universe.js?v=523"></script>
-<script src="assets/js/session.js?v=523"></script>
-<script src="assets/js/topics.js?v=523"></script>
-<script src="assets/js/news-crypto.js?v=523"></script>
-<script src="assets/js/news-zh.js?v=523"></script>
-<script src="assets/js/pool.js?v=523"></script>
-<script src="assets/js/news-live-client.js?v=523"></script>
-<script src="assets/js/api.js?v=523"></script>
-<script src="assets/js/alert.js?v=523"></script>
-<script src="assets/js/indicator.js?v=523"></script>
-<script src="assets/js/drawing.js?v=523"></script>
-<script src="assets/js/charts.js?v=523"></script>
-<script src="assets/js/news-spike.js?v=523"></script>
-<script src="assets/js/anomaly.js?v=523"></script>
-<script src="assets/js/volprofile.js?v=523"></script>
-<script src="assets/js/verify.js?v=523"></script>
-<script src="assets/js/predict.js?v=523"></script>
-<script src="assets/js/hot-events.js?v=523"></script>
-<script src="assets/js/events.js?v=523"></script>
-<script src="assets/js/account.js?v=523"></script>
-<script src="assets/js/app.js?v=523"></script>
-<script src="assets/js/coverage-probe.js?v=523"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=524">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=524">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=524">
+  <link rel="preload" as="script" href="assets/js/app.js?v=524">
+  <link rel="preload" as="script" href="assets/js/api.js?v=524">
+<script src="vendor/lightweight-charts.standalone.production.js?v=524"></script>
+<script src="assets/js/cn-stocks.js?v=524"></script>
+<script src="assets/js/universe.js?v=524"></script>
+<script src="assets/js/session.js?v=524"></script>
+<script src="assets/js/topics.js?v=524"></script>
+<script src="assets/js/news-crypto.js?v=524"></script>
+<script src="assets/js/news-zh.js?v=524"></script>
+<script src="assets/js/pool.js?v=524"></script>
+<script src="assets/js/news-live-client.js?v=524"></script>
+<script src="assets/js/api.js?v=524"></script>
+<script src="assets/js/alert.js?v=524"></script>
+<script src="assets/js/indicator.js?v=524"></script>
+<script src="assets/js/drawing.js?v=524"></script>
+<script src="assets/js/charts.js?v=524"></script>
+<script src="assets/js/news-spike.js?v=524"></script>
+<script src="assets/js/anomaly.js?v=524"></script>
+<script src="assets/js/volprofile.js?v=524"></script>
+<script src="assets/js/verify.js?v=524"></script>
+<script src="assets/js/predict.js?v=524"></script>
+<script src="assets/js/hot-events.js?v=524"></script>
+<script src="assets/js/events.js?v=524"></script>
+<script src="assets/js/account.js?v=524"></script>
+<script src="assets/js/app.js?v=524"></script>
+<script src="assets/js/coverage-probe.js?v=524"></script>
 <!-- v287：账号 SDK 改为 async 且排在 app.js 之后。它此前是同步脚本，
      会让整个 HTML 解析停下等 CDN（实测 0.35~1.24s），而 boot() 挂在
      DOMContentLoaded 上，等于每段首屏都被外部 SDK 拖住。async 后

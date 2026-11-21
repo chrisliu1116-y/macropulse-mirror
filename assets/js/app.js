@@ -9974,9 +9974,31 @@
       /* v521：对比指数下拉仅对比模式可见（sse 内 header 在 embed 下被隐藏，放这里） */
       d.body.classList.toggle('eff-cmp-on', _effCompareOn);
     };
-    /* v521：下拉切换对比指数 → 转发给 iframe */
-    const idxSel = $('#effIdx');
-    if (idxSel) idxSel.onchange = () => effectPost({ mm_compare_index: idxSel.value });
+    /* v524：自定义下拉——按钮展开菜单，点选项切换并转发给 iframe */
+    const idxBox = $('#effIdx'), idxBtn = $('#effIdxBtn'), idxMenu = $('#effIdxMenu');
+    if (idxBtn && idxMenu) {
+      idxBtn.onclick = (e) => {
+        e.stopPropagation();
+        const open = idxBox.classList.toggle('open');
+        idxBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      Array.prototype.forEach.call(idxMenu.querySelectorAll('button[data-v]'), (b) => {
+        b.onclick = (e) => {
+          e.stopPropagation();
+          const key = b.dataset.v, label = b.textContent.trim();
+          idxBtn.innerHTML = label + ' <i class="caret">▾</i>';
+          Array.prototype.forEach.call(idxMenu.querySelectorAll('button'), (x) => x.classList.remove('on'));
+          b.classList.add('on');
+          idxBox.classList.remove('open');
+          idxBtn.setAttribute('aria-expanded', 'false');
+          effectPost({ mm_compare_index: key });
+        };
+      });
+      d.addEventListener('click', () => {
+        idxBox.classList.remove('open');
+        idxBtn.setAttribute('aria-expanded', 'false');
+      });
+    }
     if (full) full.onclick = toggleEffectFS;
     w.addEventListener('message', (e) => {
       const m = e.data || {};
