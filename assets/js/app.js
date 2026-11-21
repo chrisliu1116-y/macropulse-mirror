@@ -9376,6 +9376,15 @@
     };
     if (yes) yes.onclick = () => {
       if (!(w.EVENTS || []).some(ev => ev.id === cid)) w.EVENTS.push(item.ev);
+      /* v526【Phase3·确认回执】点「加入」才回传 GHA：未确认前 GHA 绝不调 Gemini。
+       * POST 到 CF /__card-confirm（幂等 cid 去重），失败静默（不阻断本地入卡）。 */
+      try {
+        fetch('https://macropulse-api.pages.dev/__card-confirm', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: [{ cid: cid, title: item.c && item.c.title || '',
+            source: 'polyradar', ts: Date.now() }] })
+        }).catch(() => {});
+      } catch (e) {}
       try { renderEvent && renderEvent(); } catch (e) {}
       popAndNext();
     };
