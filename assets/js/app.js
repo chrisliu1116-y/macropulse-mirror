@@ -7677,11 +7677,23 @@
   /* v271【自动更新 · 进度指标】auto.daysSince 按日期自动推算「已进行 N 天」，
    * 每天自己 +1，不需要人工改 events.js。 */
   function eventAutoMetric(m) {
-    if (!m || !m.auto || m.auto.type !== 'daysSince') return m;
-    const d = Date.parse(String(m.auto.date) + 'T00:00:00+08:00');
-    if (!isFinite(d)) return m;
-    const days = Math.max(1, Math.floor((Date.now() - d) / 86400000) + 1);
-    return Object.assign({}, m, { value: days, max: Math.max(m.max || 7, days + 2) });
+    if (!m || !m.auto) return m;
+    if (m.auto.type === 'daysSince') {
+      const d = Date.parse(String(m.auto.date) + 'T00:00:00+08:00');
+      if (!isFinite(d)) return m;
+      const days = Math.max(1, Math.floor((Date.now() - d) / 86400000) + 1);
+      return Object.assign({}, m, { value: days, max: Math.max(m.max || 7, days + 2) });
+    }
+    /* v531：距未来某日的天数（如「距下次FOMC决策」），日期过后自动隐藏该指标。 */
+    if (m.auto.type === 'daysUntil') {
+      const d = Date.parse(String(m.auto.date) + 'T00:00:00+08:00');
+      if (!isFinite(d)) return m;
+      const left = Math.ceil((d - Date.now()) / 86400000);
+      if (left <= 0) return Object.assign({}, m, { _expired: true });
+      return Object.assign({}, m, { value: left, max: Math.max(m.max || 30, 30),
+        note: m.auto.note || m.note });
+    }
+    return m;
   }
   /* v351【headline 自动推算】卡片正面的「第 2 天 · 续谈中」原本写死在
    * events.js，日期一过就失真（11-14 看 11-10 启动的会谈仍显示第 2 天）。
@@ -7917,7 +7929,8 @@
   function eventDetailHTML(ev) {
     const news = eventNews(ev);
     const view = eventAutoHeadline(ev, eventAutoView(ev, news));
-    const metrics = (view.metrics || []).map(eventAutoMetric).map(eventMetricBar).join('');
+    const metrics = (view.metrics || []).map(eventAutoMetric)
+      .filter(m => !m._expired).map(eventMetricBar).join('');
     const battleground = (ev.battleground || []).map(x => `<span class="ev-chip">${esc(x)}</span>`).join('');
     // 时间线节点区分「已报道的既成事实」与「预期/关键节点」，避免把预测读成已发生
     const timeline = (ev.timeline || []).map(x => {

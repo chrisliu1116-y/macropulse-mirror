@@ -146,6 +146,11 @@
         pred: { q: 'fed decision december', event: 'Fed Decision in December',
                 market: 'increase interest rates by 25', outcome: 'Yes' } },
       metrics: [
+        /* v531【下次决策时间点】FOMC 2026 剩余会议=12/8-9（federalreserve.gov 官方日历），
+         * 决议 12/9 14:00 ET 公布。daysUntil 自动倒数，过期自动隐藏。 */
+        { name: '距下次FOMC决策', value: 18, unit: '天',
+          note: '12-09 02:00 北京时间公布 · 官方日历', color: '#ffd43b',
+          auto: { type: 'daysUntil', date: '2026-12-09', note: '12-09 02:00 北京时间公布 · 官方日历' } },
         /* 【v289】跟踪推进天数按日期自动推算（自 11-03 JOLTS 数据日建档起算） */
         { name: '本卡跟踪已持续', value: 9, unit: '天', note: '自 11-03 JOLTS 数据日建档 · 按日期自动推算',
           color: '#8ce99a', max: 60, auto: { type: 'daysSince', date: '2026-11-03' } },
