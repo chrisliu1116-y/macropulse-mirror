@@ -613,7 +613,15 @@
     '2303':   { sym: 'UMC',  label: 'ADR 1:5', ratio: 5 },
     '9984':   { sym: 'SOFTBANK', label: 'ADR', ratio: null },
     '285A':   { sym: 'KIOXIA',   label: 'ADR', ratio: null },
-    '4062':   { sym: 'IBIDEN',   label: 'ADR', ratio: null }
+    '4062':   { sym: 'IBIDEN',   label: 'ADR', ratio: null },
+    /* v530【补齐港/A股暗盘参考价】HL xyz 池里这几个有同名 RWA 永续，
+     * 但均为美元计价、与原股币种/换算比例不同（实测腾讯344HKD≈44USD vs RWA 49.74USD），
+     * 只作参考价+自身24h涨跌，ratio:null→不算基差（避免假基差）。
+     * 港股指数/A股指数在 HL 池无对应标的，无法补，不硬配。 */
+    '00700':  { sym: 'TENCENT',   label: 'RWA(美元)', ratio: null },
+    '09988':  { sym: 'BABA',      label: 'RWA(美元)', ratio: null },
+    '300750': { sym: 'CATL',      label: 'RWA(美元)', ratio: null },
+    '688256': { sym: 'CAMBRICON', label: 'RWA(美元)', ratio: null }
   };
   function adrOf(key) { return ADR_MAP[String(key)] || null; }
 
