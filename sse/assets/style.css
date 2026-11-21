@@ -35,6 +35,11 @@ body{
   box-shadow:0 0 0 3px rgba(59,107,181,.14);
 }
 .btn-cmp:disabled{opacity:.42;cursor:not-allowed}
+/* v491：对比指数下拉，仅对比模式显示 */
+.cmp-sel{display:none;padding:4px 6px;border-radius:8px;border:1px solid #2a3a55;
+  background:#111a2a;color:#a8c4ee;font-size:11px;font-family:inherit;max-width:92px}
+body.compare .cmp-sel{display:inline-block}
+body.light .cmp-sel{background:#fff;color:#3b5b8c;border-color:#c7d5e8}
 .btn-ico{
   display:inline-flex;align-items:center;justify-content:center;
   width:28px;height:28px;border-radius:8px;flex:0 0 auto;

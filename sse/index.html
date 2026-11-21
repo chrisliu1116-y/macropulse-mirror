@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#070a0f">
 <title>上证 · insum 同期对比</title>
-<link rel="stylesheet" href="assets/style.css?v=520">
+<link rel="stylesheet" href="assets/style.css?v=521">
 </head>
 <body>
 <div class="wrap">
@@ -18,6 +18,14 @@
       <span class="dot" id="dot"></span>
       <span id="gen">加载中</span>
       <button id="btnCompare" class="btn-cmp" type="button" aria-pressed="false" disabled title="加载上证数据后可开启">对比模式</button>
+      <select id="cmpIndex" class="cmp-sel" aria-label="对比指数" title="选择对比指数">
+        <option value="SH">上证指数</option>
+        <option value="SZ">深证成指</option>
+        <option value="SZ50">上证50</option>
+        <option value="HS300">沪深300</option>
+        <option value="CYB">创业板指</option>
+        <option value="KC50">科创50</option>
+      </select>
       <button id="btnTheme" class="btn-ico" type="button" title="切换深浅主题">◐</button>
       <button id="btnFull" class="btn-ico" type="button" title="全屏 / 横屏查看" aria-label="全屏查看">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
@@ -75,6 +83,6 @@
   <footer class="ft" id="ft"></footer>
 </div>
 <script>if(/[?&]embed=1/.test(location.search))document.body.classList.add("embed");</script>
-<script src="assets/app.js?v=520"></script>
+<script src="assets/app.js?v=521"></script>
 </body>
 </html>

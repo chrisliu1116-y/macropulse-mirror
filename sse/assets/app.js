@@ -8,6 +8,8 @@
    * 两窗共享同一套 from/to —— 绝不给两个 canvas 各自绑手势 */
   var S = {
     B: null, K: null,
+    ALLIDX: null,          /* v491: sse.json.indices —— 全部对比指数(各带自己的起点) */
+    idxKey: 'SH',          /* 当前对比指数: SH=顶层上证, 其余=indices[key] */
     bIndex: null,          /* Map: date -> breadth 索引 */
     compare: false,
     axis: null, insum: null,
@@ -214,11 +216,34 @@
     var v = c[c.length - 1];
     return v > 50 && v < 20000;
   }
+
+  /* v491【多指数对比】sse.json 顶层=上证(原字段,兼容),indices=额外5指数。
+   * 统一入口：存 ALLIDX,按当前 idxKey 把 S.K 指向对应数据(各带自己起点),
+   * buildAxis() 用 S.K.dates 当主轴 → 指标天然从该指数首日开始,无 0 假基线。 */
+  function applySse(k) {
+    if (!k || !k.dates || !k.dates.length) return false;
+    S.SH_K = k;                                // 顶层上证本体(固定在 S 上,不随 S.K 切换丢失)
+    S.ALLIDX = k.indices || null;              // 额外指数(可能为空=旧版 sse.json)
+    S.K = k;                                   // 默认指向上证
+    if (S.idxKey !== 'SH') {
+      var x = (S.ALLIDX || {})[S.idxKey];
+      if (x && x.dates && x.dates.length) S.K = x;   // 切到选中指数
+      else S.idxKey = 'SH';                          // 选中指数无数据 → 回上证
+    }
+    syncIndexSelect();
+    return true;
+  }
+  function syncIndexSelect() {
+    var sel = $('cmpIndex');
+    if (sel) sel.value = S.idxKey;
+  }
   function applyNewSse(k) {
     if (!k || !k.dates || !k.dates.length) return false;
     if (!sseOK(k)) return false;
-    if (S.K && S.K.meta && k.meta && String(S.K.meta.to) >= String(k.meta.to)) return false;
-    S.K = k;
+    /* v491：新旧比较固定用上证本体(S.SH_K)，避免选中科创后 meta 不同误判 */
+    var _sh = S.SH_K || S.K;
+    if (_sh && _sh.meta && k.meta && String(_sh.meta.to) >= String(k.meta.to)) return false;
+    applySse(k);
     if (S.B && $('btnCompare')) $('btnCompare').disabled = false;
     renderAll();
     try { parent.postMessage({ mm_sse_state: (k.meta && k.meta.to) || '' }, '*'); } catch (e) {}
@@ -392,6 +417,22 @@
   /* ============ 主轴对齐（按日期 Map，不按下标硬对齐） ============ */
   function buildAxis() {
     var dates = (S.compare && S.K) ? S.K.dates : S.B.dates;
+    /* v491【指标严格跟随 K 线起点】主轴起点 = max(指数首日, breadth 首日)。
+     * 指数起步晚于 breadth(如科创50 2019) → 主轴从 2019 开始，指标同步从那天显示；
+     * 指数起步早于 breadth(如上证/深成 1990) → 主轴从 breadth 2013 开始，
+     * 避免 2013 年前查不到指标而画出 0 假基线。两种方向都不会有"显示问题"。 */
+    S.KV = S.K;   // K线视图默认=完整数据
+    if (S.compare && S.K && S.B && S.B.dates && S.B.dates.length) {
+      var bFirst = S.B.dates[0];
+      var start = 0;
+      while (start < dates.length && dates[start] < bFirst) start++;
+      if (start > 0) {
+        dates = dates.slice(start);
+        /* K线视图同步裁剪，保证 drawSse 的 S.KV.c[gi] 与主轴 S.axis[gi] 一一对应 */
+        S.KV = { dates: S.K.dates.slice(start), o: S.K.o.slice(start), h: S.K.h.slice(start),
+                 l: S.K.l.slice(start), c: S.K.c.slice(start) };
+      }
+    }
     var insum = { total: [], daycnt: [], willrm: [], newadd: [], sig: [] };
     var prevTotal = 0, prevDay = 0, prevRm = 0, prevNew = 0;
     for (var i = 0; i < dates.length; i++) {
@@ -781,8 +822,8 @@
 
     var mn = Infinity, mx = -Infinity;
     for (var j = from; j <= to; j++) {
-      if (S.K.h[j] > mx) mx = S.K.h[j];
-      if (S.K.l[j] < mn) mn = S.K.l[j];
+      if (S.KV.h[j] > mx) mx = S.KV.h[j];
+      if (S.KV.l[j] < mn) mn = S.KV.l[j];
     }
     if (!isFinite(mn)) { mn = 0; mx = 1; }
     if (mx === mn) mx = mn + 1;
@@ -817,7 +858,7 @@
       var bw = Math.max(1, Math.min(9, step * 0.7));
       for (var k = 0; k < cnt; k++) {
         var gi = from + k;
-        var o = S.K.o[gi], c = S.K.c[gi], h = S.K.h[gi], l = S.K.l[gi];
+        var o = S.KV.o[gi], c = S.KV.c[gi], h = S.KV.h[gi], l = S.KV.l[gi];
         var up = c >= o;
         var col = up ? T.sseUp : T.sseDown;
         var x = xOf(k);
@@ -838,10 +879,10 @@
       var started = false;
       g.beginPath();
       for (var m = from; m <= to; m += stride) {
-        var x1 = xOf(m - from), y1 = yOf(S.K.c[m]);
+        var x1 = xOf(m - from), y1 = yOf(S.KV.c[m]);
         if (!started) { g.moveTo(x1, y1); started = true; } else g.lineTo(x1, y1);
       }
-      if ((to - from) % stride !== 0) g.lineTo(xEnd, yOf(S.K.c[to]));
+      if ((to - from) % stride !== 0) g.lineTo(xEnd, yOf(S.KV.c[to]));
       g.lineTo(xEnd, top); g.lineTo(xStart, top); g.closePath();
       var grd = g.createLinearGradient(0, P.t, 0, top);
       grd.addColorStop(0, T.sseFillTop);
@@ -851,10 +892,10 @@
       started = false;
       g.beginPath();
       for (var m2 = from; m2 <= to; m2 += stride) {
-        var x2 = xOf(m2 - from), y2 = yOf(S.K.c[m2]);
+        var x2 = xOf(m2 - from), y2 = yOf(S.KV.c[m2]);
         if (!started) { g.moveTo(x2, y2); started = true; } else g.lineTo(x2, y2);
       }
-      if ((to - from) % stride !== 0) g.lineTo(xEnd, yOf(S.K.c[to]));
+      if ((to - from) % stride !== 0) g.lineTo(xEnd, yOf(S.KV.c[to]));
       g.strokeStyle = T.sseLine;
       g.lineWidth = 1.4;
       g.lineJoin = 'round';
@@ -867,7 +908,7 @@
       var hk = S.cursor - from;
       if (hk >= 0 && hk < cnt) {
         var hx = xOf(hk);
-        var close = S.K.c[S.cursor];
+        var close = S.KV.c[S.cursor];
         var hy = yOf(close);
         g.strokeStyle = T.cursor;
         g.setLineDash([3, 3]);
@@ -878,7 +919,7 @@
         g.beginPath(); g.arc(hx, hy, 3.6, 0, Math.PI * 2);
         g.fillStyle = T.last; g.fill();
 
-        var prev = S.cursor > 0 ? S.K.c[S.cursor - 1] : null;
+        var prev = S.cursor > 0 ? S.KV.c[S.cursor - 1] : null;
         var chg = prev != null ? close - prev : 0;
         var pct = prev ? chg / prev * 100 : 0;
         var up = chg >= 0;
@@ -1236,6 +1277,26 @@
 
     var cmp = $('btnCompare');
     cmp.addEventListener('click', function () { setCompare(!S.compare); });
+    /* v491：下拉切换对比指数。S.K 指向选中指数 → buildAxis() 用其 dates 当主轴，
+     * 指标自动从该指数首日开始，无 0 假基线。缺数据的指数(如抓失败的)禁用选项。 */
+    var cmpSel = $('cmpIndex');
+    if (cmpSel) cmpSel.addEventListener('change', function () {
+      var key = cmpSel.value;
+      var target = key === 'SH' ? (S.SH_K || S.K) : ((S.ALLIDX || {})[key]);
+      if (!target || !target.dates || !target.dates.length) {
+        cmpSel.value = S.idxKey;   // 该指数无数据，回退当前
+        return;
+      }
+      S.idxKey = key;
+      S.K = target;
+      S.cursor = -1; S.cursorMode = false;   // 切指数重置游标
+      buildAxis();
+      setRange(0);                            // 铺满新指数全区间(从其首日开始)
+      updateCards(S.axis.length - 1);
+      try { $('ft').textContent = footText(); } catch (e0) {}
+      renderAll();
+      try { parent.postMessage({ mm_compare_index: key }, '*'); } catch (e) {}
+    });
 
     if (isEmbed()) {
       try {
@@ -1288,7 +1349,7 @@
     loadRemoteS()
       .then(function (k) {
         if (!sseOK(k)) throw new Error('sse-symbol-check');
-        S.K = k;
+        applySse(k);
         if (S.B) cmp.disabled = false;
         cmp.title = '';
         if (S.B) {
@@ -1300,7 +1361,7 @@
       .catch(function () {
         return loadJSON('data/sse.json').then(function (k) {
           if (!sseOK(k)) throw new Error('sse-symbol-check');
-          S.K = k;
+          applySse(k);
           if (S.B) cmp.disabled = false;
           if (S.B) $('ft').textContent = footText();
           renderAll();
