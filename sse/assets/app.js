@@ -230,6 +230,11 @@
       if (x && x.dates && x.dates.length) S.K = x;   // 切到选中指数
       else S.idxKey = 'SH';                          // 选中指数无数据 → 回上证
     }
+    /* v523：数据就绪时同步图例标题（若消息在加载前设了 idxKey，这里也要跟上） */
+    try {
+      var _lab = $('sseLgLabel');
+      if (_lab) _lab.textContent = ((S.K && S.K.name) || '上证指数') + ' · 前复权 · 涨红跌绿';
+    } catch (e0) {}
     syncIndexSelect();
     return true;
   }
@@ -1285,11 +1290,22 @@
     /* v491：下拉切换对比指数。S.K 指向选中指数 → buildAxis() 用其 dates 当主轴，
      * 指标自动从该指数首日开始，无 0 假基线。缺数据的指数(如抓失败的)回退当前。
      * v521：下拉已移到主站 eff-bar(embed 下 sse header 被隐藏)，本页也可能有(独立打开时)。 */
+    /* v523：更新 K 线图例标题为当前指数名（数据里的 name / 顶层 meta）。 */
+    function updateIdxLabel(key, target) {
+      var el = $('sseLgLabel');
+      if (!el) return;
+      var name = (target && target.name) || '上证指数';
+      /* 指数裸数据无复权概念（qfq/hfq 等价），但保留原措辞避免引入其它展示变化 */
+      el.textContent = name + ' · 前复权 · 涨红跌绿';
+    }
     function switchIndex(key) {
       var target = key === 'SH' ? (S.SH_K || S.K) : ((S.ALLIDX || {})[key]);
       if (!target || !target.dates || !target.dates.length) return false;
       S.idxKey = key;
       S.K = target;
+      /* v523：K线图例标题跟随选中指数——原来写死"上证指数"，切科创50后
+       * 数据已切对(Y轴 1200+)但标题仍是上证，用户误以为没切换。 */
+      updateIdxLabel(key, target);
       S.cursor = -1; S.cursorMode = false;   // 切指数重置游标
       buildAxis();
       setRange(0);                            // 铺满新指数全区间(从其首日开始)
