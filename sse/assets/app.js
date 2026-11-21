@@ -335,6 +335,13 @@
       var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
       if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
     }
+    /* v519【源名显示在底部】按用户口径，源名跟原来一样放底部那行。
+     * 取当前游标所在日期对应段的源（东财段/腾讯段），游标移动时随 footer 刷新。 */
+    var _i = S.cursor >= 0 ? S.cursor : (S.axis ? S.axis.length - 1 : -1);
+    var _date = (S.axis && _i >= 0) ? S.axis[_i]
+      : ((S.B && S.B.dates && S.B.dates[S.B.dates.length - 1]) || '');
+    var _src = srcAtDate(_date);
+    if (_src) parts.push('源 ' + _src);
     if (S.B && S.B.meta && S.B.meta.stale) parts.push('跑批未更新');
     else if (S.B && !isFresh(S.B)) parts.push('待更新');
     return parts.join(' · ');
