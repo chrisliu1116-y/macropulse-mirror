@@ -2792,6 +2792,10 @@ body.light .set-row code{background:#eef2f9;color:#3a485e}
 .c-sel{display:none;align-items:center;justify-content:center;flex:0 0 22px;width:22px;height:22px;
   border:2px solid var(--tx3);border-radius:6px;cursor:pointer;align-self:flex-start;margin-top:2px}
 .feed.multi .c-sel{display:flex}
+/* v72【修「勾选第二条方框没打勾」】方框只做展示，点击一律穿透到卡片由多选逻辑统一处理。
+ * 否则点 label 会先触发原生 toggle、再被 capture 阶段 renderMulti 的设置覆盖/反转，
+ * 结果就是「已选 2 条」但第二条方框是空的。 */
+.feed.multi .c-sel{pointer-events:none}
 .feed.multi .c-sel input{accent-color:var(--a);width:16px;height:16px;cursor:pointer}
 .card.sel{outline:2px solid var(--a);outline-offset:-2px;background:var(--wash)}
 .multi-bar{position:fixed;left:0;right:0;bottom:64px;z-index:70;display:flex;align-items:center;gap:8px;

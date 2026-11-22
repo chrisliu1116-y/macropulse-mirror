@@ -3252,7 +3252,7 @@
    *    大规模战争终结；油轮/设施/单边打击全部下放 A；其余七科目同步收紧；
    *    新增 isRecapOrCommentary 在 S_RE 入口拦“复盘综述/盘面归因”；
    *    ACT_WORD 补宣战/关闭/中断。GRADE_VER 64→65 让存量池重算。 */
-  const GRADE_VER = 71;
+  const GRADE_VER = 72;
 
   /* ---------------- 关于「C 级要不要进信息流」 ----------------
    * 11-05 曾试过把 C 级里「带硬信息」的那部分（小国数据 / 边缘板块 / 网络安全…）
@@ -3701,6 +3701,9 @@
     [/采取|采用/g, '用'],
     [/沟通|对话/g, '话'],
     [/愿意|愿/g, '愿'],
+    /* v72【台账#93·桶A】地区归一：必须写在「中国→中」之前，否则「中国台湾地区」
+     * 会被切成「中台湾地区」，与「台湾」永远对不上（本次纠错单第二条即此）。 */
+    [/中国台湾地区|台湾地区|中国台湾/g, '台湾'],
     [/中方|中国/g, '中'],
     [/美国|美方|美/g, '美'],
     [/总统|主席|总理|部长|行长|管委|委员|候选人|发言人|领袖|领导人|外长|财长|官员/g, ''],
@@ -3724,6 +3727,13 @@
     [/知情人士|消息人士|知情者|消息源|据知情|据消息/g, '讯源'],
     [/有望|正在讨论|正讨论|考虑|拟|或将|可能将|据悉将/g, '拟'],
     [/推迟|延后|暂缓|延期|延宕|押后/g, '延'],
+    /* v72【台账#93·桶A】融资保证金比例的三套官方/媒体写法归一：
+     *   最低保证金融资比例（金十）/ 融资保证金比例下限（财联社）/ 保证金维持率（金十·台湾稿）
+     * 监管语境里指同一个指标；不归一，canonClaim 骨架永远差一截（本次两条 dup 都栽在这里）。
+     * 长词在前，避免「融资保证金比例下限」被短规则先吃掉后半截。 */
+    [/最低保证金融资比例|融资保证金比例下限|保证金融资比例|保证金维持率|维持保证金比例|保证金维持比例|融资保证金比例/g, '融资保证金比例'],
+    /* v72【台账#93·桶A】政策效果的同义动词归一：释放/带来/注入 → 放 */
+    [/释放|带来|注入|投放|派生/g, '放'],
     [/下调|削减|降低|调降|减码/g, '降'],
     [/上调|提高|调升|抬升|加码/g, '升'],
   ];
@@ -3880,20 +3890,60 @@
    *  ② 同议题域（SYNC_TOPIC）或同地缘动作簇（GEO_ACTS 交集）
    *  ③ 至少 1 个相同核心数字，或两条都完全没有核心数字 */
   function strongSkeleton(t1, t2) {
-    if (!sharedCore(t1, t2)) return false;
     const ta = syncTopicOf(normTitle(t1)), tb = syncTopicOf(normTitle(t2));
+    const na = coreNumsOf(t1), nb = coreNumsOf(t2);
+    const setB = new Set(nb);
+    const numHits = na.filter(x => setB.has(x)).length;
+    /* v72【台账#93·桶A】政策类同义改写豁免：同一政策被两家写成不同主体
+     * （金十「中国将最低保证金融资比例下调至80%」vs 财联社「沪深北交易所降低融资
+     * 保证金比例下限至80%」），sharedCore 永远不相交；但「同属金融政策域 + ≥2 个
+     * 核心数字都对上」（80% 与 4000 亿）已足以证明是同一件事。
+     * 只对金融政策域开这个口子 —— 行情类（涨跌幅往往只有一个数字）不会被误放宽。 */
+    if (!sharedCore(t1, t2)) {
+      return !!(ta && ta === tb && ta === '金融政策' && numHits >= 2);
+    }
     const a1 = geoSet(t1, GEO_ACTS), a2 = geoSet(t2, GEO_ACTS);
     let actHit = false;
     a1.forEach(k => { if (a2.has(k)) actHit = true; });
     if (!(ta && ta === tb) && !actHit) return false;
-    const na = coreNumsOf(t1), nb = coreNumsOf(t2);
     if (!na.length && !nb.length) return true;
-    const setB = new Set(nb);
-    return na.some(x => setB.has(x));
+    return numHits > 0;
+  }
+
+  /* v72【台账#93·桶A】金融政策工具术语（去重侧）：融资保证金/两融/平准基金/稳定基金。
+   * 与 SYNC_TOPIC 的「金融政策」域同源，单独提出来给 samePolicyNums 用。 */
+  const POLICY_TERM_RE = /融资保证金|保证金融资比例|保证金比例|保证金维持|两融|融资融券|平准基金|稳定基金/;
+  /** 同属金融政策工具，且 ≥2 个核心数字都对上 → 同一件事（主体表述可不同）。
+   *  单数字不触发：避免「某政策降 25bp」与「另一政策降 25bp」被误合。 */
+  function samePolicyNums(t1, t2) {
+    if (!POLICY_TERM_RE.test(t1) || !POLICY_TERM_RE.test(t2)) return false;
+    /* 主体冲突守门：两条各自点名的国家/地区不同 → 是两个国家各自的政策，
+     * 哪怕政策工具与数字恰好相同（中国 80%/4000亿 vs 日本 80%/4000亿）也不能合。 */
+    const ga = DEDUP_GEO.filter(g => String(t1).indexOf(g) >= 0);
+    const gb = DEDUP_GEO.filter(g => String(t2).indexOf(g) >= 0);
+    if (ga.length && gb.length && !ga.some(g => gb.indexOf(g) >= 0)) return false;
+    const na = coreNumsOf(t1), nb = coreNumsOf(t2);
+    if (na.length < 2 || nb.length < 2) return false;
+    const sb = new Set(nb);
+    return na.filter(x => sb.has(x)).length >= 2;
   }
 
   function sameClaim(t1, t2) {
     if (slotConflict(t1, t2)) return false;
+    /* v72【台账#93·守门】两条各自点名不同国家 → 是不同国家的事，
+     * 不能因为句式/政策工具相同就合并（中国降保证金 vs 日本降保证金）。
+     * 只在一方完全没点名国家时放行（「央行降准」vs「中国央行降准」这类同义改写）。 */
+    const _ga = DEDUP_GEO.filter(g => String(t1).indexOf(g) >= 0);
+    const _gb = DEDUP_GEO.filter(g => String(t2).indexOf(g) >= 0);
+    if (_ga.length && _gb.length && !_ga.some(g => _gb.indexOf(g) >= 0)) return false;
+    /* v72【台账#93·桶A】同一政策工具的两种主体表述：
+     *   金十「中国将最低保证金融资比例下调至80%，或将释放4000亿元资金」
+     *   财联社「沪深北交易所降低融资保证金比例下限至80% 理论上可带来增量资金近4000亿元」
+     * 术语已由 DEDUP_SYN 归一，但主体（中国 / 沪深北交易所）与句式差异让 Dice 只有 0.43，
+     * 任何相似度阈值都合不上。通用判据：**同属金融政策工具 + ≥2 个核心数字都对上**
+     * （此处 80% 与 4000 亿两处吻合）即同一事件。不是针对 80%/4000 的一次性特征，
+     * 换任何政策工具+数字组合同样成立；单数字（如只有涨跌幅）不触发，防误合。 */
+    if (samePolicyNums(t1, t2)) return true;
     const ca = splitClaim(t1), cb = splitClaim(t2);
     const la = normTitle(ca).length, lb = normTitle(cb).length;
     // 陈述够长才用陈述判重 ——
@@ -4087,12 +4137,20 @@
   }
 
   function sameNews(t1, t2) {
-    /* 公司动作类先过主体闸：主体不同（丰田 vs 本田）绝不合。
-     * 放在最前面，因为「丰田将回购…82亿美元」和「本田将回购…82亿美元」
-     * 去掉公司名后骨架几乎一样，靠相似度会误合 —— 那是两家公司两件事。 */
-    if (FIRM_ACT.test(String(t1 || '')) && FIRM_ACT.test(String(t2 || ''))) {
-      const a = firmNameOf(t1), b = firmNameOf(t2);
-      if (a && b && a !== b) return false;
+    /* 主体闸（一个 return 管两类冲突，不新增早退分支 —— 去重棘轮锁上限 11）：
+     *   ① 公司动作：主体不同（丰田 vs 本田）绝不合 —— 「丰田将回购…82亿美元」和
+     *      「本田将回购…82亿美元」去掉公司名后骨架几乎一样，靠相似度会误合。
+     *   ② v72【台账#93】国家主体：「中国降融资保证金至80%」与「日本降融资保证金至80%」
+     *      去掉国名后字面几乎一致，尾句相似度/13 字长共用串都会误合，那是两国各自政策。
+     *      只在一方完全没点名国家时放行（「央行降准」vs「中国央行降准」这类同义改写）。 */
+    {
+      const A0 = String(t1 || ''), B0 = String(t2 || '');
+      const fa = firmNameOf(t1), fb = firmNameOf(t2);
+      const firmClash = FIRM_ACT.test(A0) && FIRM_ACT.test(B0) && fa && fb && fa !== fb;
+      const ga = DEDUP_GEO.filter(g => A0.indexOf(g) >= 0);
+      const gb = DEDUP_GEO.filter(g => B0.indexOf(g) >= 0);
+      const geoClash = ga.length > 0 && gb.length > 0 && !ga.some(g => gb.indexOf(g) >= 0);
+      if (firmClash || geoClash) return false;
     }
     if (sameNorm(normTitle(t1), normTitle(t2))) return true;
     /* 冒号前半截是发言主体、各源写法不同（「欧洲央行管委诺特」/「欧洲央行行长候选人诺特」），
@@ -4243,6 +4301,9 @@
     [/黄金|金价|白银|铜价|稀土|锂矿|铁矿|铝价|镍价/, '金属'],
     [/人工智能|超级智能|通用人工智能|\bai\b|大模型|机器学习|神经网络|芯片|半导体|算力|机器人|量子/, '科技'],
     [/回购|增持|减持|定增|并购|收购|重组|业绩|分红|上市|退市|重整|控制权/, '公司'],
+    /* v72【台账#93·桶A】金融政策工具域：融资保证金/两融/平准基金/救市基金。
+     * 供 strongSkeleton 的「同议题 + 核心数字重合」放宽通道识别政策类同义改写。 */
+    [/融资保证金|保证金比例|两融|融资融券|保证金维持|平准基金|股市稳定基金|稳定基金/, '金融政策'],
   ];
   /* 方向词只在「决定语境」下才判冲突 ——
    * 「我不会认同两次降息即止」和「我不会认同两次加息后就结束」是同一句引言的
@@ -6181,6 +6242,27 @@
    * 每条约 1~2 秒，并行跑，整轮多花 2 秒左右。没翻到的下一轮继续。 */
   const ZH_CAP = 16;
 
+  /* v72【修「详情页没翻译」】翻译缓存（原文 → 中文）。此前每轮都把同一批英文条目
+   * 重新翻一遍：翻译服务一慢就整批超时，英文条目持续显示原文（用户报的
+   * 「Behind record SpaceX…」就是金十英文稿一直没翻过来）。
+   * 有缓存后：翻成功过的后续轮次 0 延迟命中；没翻成功的下轮重试。LRU 上限 300。 */
+  const ZH_CACHE = new Map();
+  const ZH_CACHE_MAX = 300;
+  async function zhOne(Z, s) {
+    const key = String(s || '');
+    if (!key) return '';
+    if (ZH_CACHE.has(key)) return ZH_CACHE.get(key);
+    const zh = await Z.toZh(key);
+    if (zh && cjkCount(zh) >= 2) {
+      if (ZH_CACHE.size >= ZH_CACHE_MAX) {
+        const first = ZH_CACHE.keys().next().value;
+        if (first != null) ZH_CACHE.delete(first);
+      }
+      ZH_CACHE.set(key, zh);
+    }
+    return zh;
+  }
+
   async function zhPass(raw, budgetMs) {
     const Z = w.NewsZH;
     if (!Z || typeof Z.isEn !== 'function' || !Array.isArray(raw) || !raw.length) return 0;
@@ -6196,7 +6278,7 @@
     if (!todo.length) return 0;
     const work = Promise.all(todo.map(async (r) => {
       const src = String(r.title);
-      const zh = await Z.toZh(src);
+      const zh = await zhOne(Z, src);
       if (zh && cjkCount(zh) >= 2) {
         /* 订阅源（推文）抓下来时 titleEn 已经是**整段原文**，而这里拿来翻的是
          * 截到 90 字带「…」的标题。若无条件覆盖，中英对照的英文那半边就只剩开头
@@ -6205,7 +6287,7 @@
         r.title = zh;
       }
       if (r.brief && Z.isEn(String(r.brief).slice(0, 120))) {
-        const zb = await Z.toZh(String(r.brief));
+        const zb = await zhOne(Z, String(r.brief));
         if (zb && cjkCount(zb) >= 2) { r.briefEn = r.brief; r.brief = zb; }
       }
     }));
@@ -6441,7 +6523,9 @@
      *   ② 分级用的关键词、品种映射表都是中文的，不翻就全落空。
      * v541 提速①：给翻译 2s 时间预算——绝大多数轮次 2s 内翻完（并发 ZH_CAP 条），
      * 只有翻译服务变慢时才会超时；超时后保留原文继续 enrich，不阻塞首屏、不误删。 */
-    await zhPass(raw, 2000);
+    /* v72：预算 2s→4s（配合翻译缓存：命中缓存的条目 0 延迟，真正需要翻译的更少，
+     * 4s 足够翻完一批；2s 太紧会把慢一点的翻译整批放弃 → 英文稿长期显示原文）。 */
+    await zhPass(raw, 4000);
 
     const enriched = [];
     raw.forEach(r => {

@@ -2722,6 +2722,12 @@
   }
 
   function toast(r) {
+    /* v72【修「点去重弹出异动弹窗」】toast() 是**异动**弹窗渲染器（要异动对象：
+     * r.name / r.key / r.chg…）。历史上有 4 处把它当通用提示用（toast('已合并…')、
+     * toast('已恢复默认顺序') 等），传字符串就会渲染成
+     * 「未找到催化剂 · 正在全力捕获」+「看图」按钮的红色异动卡片。
+     * 这里统一兼容：字符串 → 走通用轻提示 pullToast，不再进异动模板。 */
+    if (typeof r === 'string') { try { pullToast(r); } catch (e) {} return; }
     if (!S.toastOn) return;
     const box = $('#toasts');
     const el = d.createElement('div');
