@@ -30,7 +30,7 @@
    * 「A 股上市辅导」挂到纳斯达克下面，用户看到的还是错的。
    * 所以规则一改就升 VER，版本对不上直接丢弃旧缓存重抓。 */
   var VER = 2;
-  var MAX = 800;           // 容量上限
+  var MAX = 0;             // v550【用户口径】取消条数上限：72h 内有多少留多少（0=不限）
   var KEEP_H = 72;         // 保留小时数
   var SAVE_DELAY = 5000;   // 写入 debounce（约 5 秒合并一次）
 
@@ -101,9 +101,9 @@
     return list.sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
   }
 
-  /** 超容量 → 从最旧的开始丢 */
+  /** 超容量 → 从最旧的开始丢（MAX=0 表示不限，只按 KEEP_H 时间窗裁） */
   function trimCap() {
-    if (mem.length <= MAX) return false;
+    if (!MAX || mem.length <= MAX) return false;
     sortDesc(mem);
     mem = mem.slice(0, MAX);
     return true;
@@ -294,12 +294,15 @@
       } catch (e1) {
         lastErr = String((e1 && e1.message) || e1);
       }
-      // 配额不够 → 裁到 400 再试，仍不行裁到 200（此时只保最新 200 条，页面照跑）
-      var ladders = [400, 200];
+      // v550：取消 800 上限后 72h 全量可能 1500~2500 条，配额阶梯相应放宽。
+      // 注意：这里只截断**写盘副本**，不动内存池 —— 原来 trimTo 会把 mem 永久裁小，
+      // 用户看到「在库」条数骤降；现在内存始终是全量，刷新后靠实时轮询补回。
+      var ladders = [2000, 1200, 600];
       for (var i = 0; i < ladders.length; i++) {
         try {
-          trimTo(ladders[i]);
-          ls.setItem(KEY, JSON.stringify({ v: VER, t: now(), items: mem }));
+          var n = ladders[i];
+          var list = (mem.length > n) ? sortDesc(mem.slice()).slice(0, n) : mem;
+          ls.setItem(KEY, JSON.stringify({ v: VER, t: now(), items: list }));
           savedAt = now();
           return true;
         } catch (e2) {
