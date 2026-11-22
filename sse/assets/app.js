@@ -232,8 +232,7 @@
     }
     /* v523：数据就绪时同步图例标题（若消息在加载前设了 idxKey，这里也要跟上） */
     try {
-      /* v524：同样用一直存在的 .sse-lg span 兜底，避免旧 HTML 缓存丢失新 id */
-      var _lab = document.querySelector('.sse-lg span') || $('sseLgLabel');
+      var _lab = $('sseLgLabel');
       if (_lab) _lab.textContent = ((S.K && S.K.name) || '上证指数') + ' · 前复权 · 涨红跌绿';
     } catch (e0) {}
     syncIndexSelect();
@@ -1291,18 +1290,25 @@
     /* v491：下拉切换对比指数。S.K 指向选中指数 → buildAxis() 用其 dates 当主轴，
      * 指标自动从该指数首日开始，无 0 假基线。缺数据的指数(如抓失败的)回退当前。
      * v521：下拉已移到主站 eff-bar(embed 下 sse header 被隐藏)，本页也可能有(独立打开时)。 */
-    /* v524：更新 K 线图例标题为当前指数名。
-     * 关键：iframe src 无版本号，手机可能缓存旧 HTML（没有 #sseLgLabel 这个新 id），
-     * 所以优先用「一直存在」的 .sse-lg span 选择器兜底，绝不依赖新加的 id。 */
+    /* v523：更新 K 线图例标题为当前指数名（数据里的 name / 顶层 meta）。 */
     function updateIdxLabel(key, target) {
-      var el = document.querySelector('.sse-lg span') || $('sseLgLabel');
+      var el = $('sseLgLabel');
       if (!el) return;
       var name = (target && target.name) || '上证指数';
+      /* 指数裸数据无复权概念（qfq/hfq 等价），但保留原措辞避免引入其它展示变化 */
       el.textContent = name + ' · 前复权 · 涨红跌绿';
     }
     function switchIndex(key) {
       var target = key === 'SH' ? (S.SH_K || S.K) : ((S.ALLIDX || {})[key]);
       if (!target || !target.dates || !target.dates.length) return false;
+      /* v539d【用户诉求】切指数保留正在看的时间段与缩放：
+       * 旧行为 setRange(0) 会把视窗铺满新指数全区间→正在看2015年切上证却跳到最新。
+       * 新行为：按【日期】而非索引保存/恢复（不同指数交易日数不同，索引不可直接用）；
+       * 仅当想看的整段都在新指数首日之前(如90年代看创业板)才回退到最新。 */
+      var oldAxis = S.axis || [];
+      var span = S.to - S.from;
+      var fromDate = oldAxis.length ? oldAxis[Math.max(0, Math.min(oldAxis.length - 1, Math.round(S.from)))] : null;
+      var toDate = oldAxis.length ? oldAxis[Math.max(0, Math.min(oldAxis.length - 1, Math.round(S.to)))] : null;
       S.idxKey = key;
       S.K = target;
       /* v523：K线图例标题跟随选中指数——原来写死"上证指数"，切科创50后
@@ -1310,13 +1316,23 @@
       updateIdxLabel(key, target);
       S.cursor = -1; S.cursorMode = false;   // 切指数重置游标
       buildAxis();
-      /* v524：切指数后保持 30 日视图（用户口径：不要锁到全景最小粒度），
-       * 并同步区间按钮高亮到「30日」。 */
-      setRange(30);
-      Array.prototype.forEach.call(($('ranges') || {children: []}).children, function (x) {
-        x.classList.toggle('on', x.dataset.n === '30');
-      });
-      updateCards(S.axis.length - 1);
+      var first = S.axis[0], last = S.axis[S.axis.length - 1];
+      // 保留条件：想看的区间与新指数数据范围有交集（结束日不早于新指数首日、开始日不晚于末日）
+      var overlap = fromDate && toDate && !(toDate < first) && !(fromDate > last);
+      if (overlap) {
+        var nf = nearestIdx(S.axis, fromDate), nt = nearestIdx(S.axis, toDate);
+        S.from = nf >= 0 ? Math.min(nf, S.axis.length - 1) : 0;
+        S.to = nt >= 0 ? Math.max(S.from, Math.min(nt, S.axis.length - 1)) : S.axis.length - 1;
+        // 缩放比例(span)保留：若两端都落在范围内，用原 span 修正右端，避免交易日疏密导致窗口宽度漂移
+        if (span > 0 && nf >= 0 && nt < S.axis.length && S.to - S.from < span - 0.5) {
+          S.from = Math.max(0, S.to - span);
+        }
+        if (S.to <= S.from) S.to = Math.min(S.axis.length - 1, S.from + 1);
+      } else {
+        setRange(0);   // 该指数在想看的时段根本不存在 → 铺满(跳到最新)，符合用户要求
+      }
+      var viewI = Math.round(S.to);
+      updateCards(viewI);
       try { $('ft').textContent = footText(); } catch (e0) {}
       renderAll();
       try { parent.postMessage({ mm_compare_index: key }, '*'); } catch (e) {}
