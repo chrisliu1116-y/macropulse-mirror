@@ -409,7 +409,13 @@
             let gran = 1, best = 0;
             for (const kk in cc) if (cc[kk] > best) { best = cc[kk]; gran = +kk; }
             const want = Math.max(pts.length, Math.round(full / gran));
-            return { want: want, n: pts.length, fixed: true };
+            /* v557【与 cmdty/rate 同型修复】外汇休市（周五 17:00 ET 收盘 → 周日 17:00 开盘）
+             * 原来仍按 1440 分钟轴锁，数据只到收盘点、右侧留一大块空白
+             * （用户截图：美元兑离岸人民币 / 欧元兑美元 / 美元指数 / 美元兑日元 四个品种）。
+             * 收盘后标 covered → _pinMin 用 fitContent 铺满；盘中仍固定 24h 轴 + 进度留白。 */
+            let phaseFx = null;
+            try { phaseFx = (w.Session && w.Session.state) ? ((w.Session.state(key) || {}).phase || null) : null; } catch (ePF) {}
+            return { want: want, n: pts.length, fixed: true, covered: phaseFx === 'closed' };
           }
           if (!(ar && ar.minSpan)) return { want: pts.length, n: pts.length };
           /* 有 minSpan 的（VIX）：两个条件任一成立就按实际点数铺满 ——
