@@ -6283,6 +6283,20 @@
       const enBrief = !!(r.brief && Z.isEn(String(r.brief).slice(0, 120)));
       if ((!enTitle && !enBrief) || seen.has(t)) continue;
       seen.add(t);
+      /* v555【关键修正】每轮 collect 都从 RSS 重新解析出新对象，标题又变回英文。
+       * 如果让「已在缓存里」的条目继续占 ZH_CAP 配额，它们每轮都会挤掉还没翻的
+       * （实测 12 条川普永远 6 中 6 英、轮轮不变）。
+       * 这里缓存命中直接就地应用，**不占配额**；配额全部留给真正没翻的条目。 */
+      if (enTitle && ZH_CACHE.has(t)) {
+        if (!r.titleEn) r.titleEn = t;
+        r.title = ZH_CACHE.get(t);
+      }
+      if (r.brief && ZH_CACHE.has(String(r.brief))) {
+        r.briefEn = r.briefEn || r.brief;
+        r.brief = ZH_CACHE.get(String(r.brief));
+      }
+      const stillEn = (r.title && Z.isEn(String(r.title))) || (r.brief && Z.isEn(String(r.brief).slice(0, 120)));
+      if (!stillEn) continue;      // 缓存已全部搞定，无需再翻
       todo.push(r);
     }
     if (!todo.length) return 0;
