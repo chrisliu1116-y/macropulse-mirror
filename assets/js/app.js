@@ -3727,7 +3727,7 @@
                 /* v528：chg24h = 暗盘相对自身24h前的涨跌（市场判断涨跌的标准口径）；
                  * spread = 相对主板的基差（辅助，隐藏到 title 可点看）。 */
                 S.alt[k] = { kind: 'hl', price: hp.price, spread, at: Date.now(), sym: hp.sym,
-                             adr: hp.adr || null, chg24h: hp.chg24h };
+                             adr: hp.adr || null, chg24h: hp.chg24h, vol24h: hp.vol24h, fxNote: hp.fxNote || '' };
                 patchAlt(k);
                 gotHl = true;
               }
@@ -3749,7 +3749,7 @@
               let sp = q && q.price ? (dx.price - q.price) / q.price * 100 : null;
               if (sp != null && Math.abs(sp) > 8) sp = null;
               S.dexAlt[k] = { kind: 'dex', price: dx.price, spread: sp, pair: dx.pair,
-                              chg24h: dx.chg24h, at: Date.now() };
+                              chg24h: dx.chg24h, fxNote: dx.fxNote || '', at: Date.now() };
             }
           }
         } catch (e) {}
@@ -3791,6 +3791,8 @@
     /* v528：主显示改为「相对自身24h涨跌」（市场标准口径），基差移到 title 可点看。
      * 无 chg24h 时回退基差，避免空白。 */
     const pctTxt = (v) => (v == null) ? '' : ' ' + (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    /* v535：列表行低流动性提示（短标记，完整说明在详情页） */
+    const thinTxt = (vol) => (vol != null && vol > 0 && vol < 100000) ? ' ·薄' : '';
     if (alt.kind === 'dex') {
       return '链上 ' + U.fmt(k, alt.price)
         + (alt.chg24h != null ? ' 24h' + pctTxt(alt.chg24h) : pctTxt(alt.spread));
@@ -3800,10 +3802,10 @@
        * 可能有换算比例，绝不能让人误读成本地价格。 */
       if (alt.adr) {
         return '暗盘 ' + alt.adr.label + '(' + alt.sym + ') $' + alt.price.toFixed(2)
-          + (alt.chg24h != null ? ' 24h' + pctTxt(alt.chg24h) : '');
+          + (alt.chg24h != null ? ' 24h' + pctTxt(alt.chg24h) : '') + thinTxt(alt.vol24h);
       }
       return '暗盘 ' + (sameUnit ? U.fmt(k, alt.price) : alt.price.toFixed(2))
-        + (alt.chg24h != null ? ' 24h' + pctTxt(alt.chg24h) : pctTxt(alt.spread));
+        + (alt.chg24h != null ? ' 24h' + pctTxt(alt.chg24h) : pctTxt(alt.spread)) + thinTxt(alt.vol24h);
     }
     if (alt.kind === 'pts') {
       return '夜盤PTS ' + U.fmt(k, alt.price)
@@ -4713,6 +4715,11 @@
      * 不再埋在灰字说明末尾。中性灰底、与24h涨跌色区分。 */
     const basisBadge = (sp) => (sp != null)
       ? `<span class="basis-badge" title="基差：相对主报价的偏离，非涨跌幅">基差${sp >= 0 ? '+' : ''}${sp.toFixed(2)}%</span>` : '';
+    /* v535【低流动性提示】日量<$10万的暗盘池，一笔散户单就能砸出大波动，
+     * 24h涨跌易被单一交易主导。不隐藏（休市时仍是唯一7×24参考），只加灰字提示。 */
+    const THIN_VOL = 100000;
+    const thinBadge = (vol) => (vol != null && vol > 0 && vol < THIN_VOL)
+      ? `<span class="thin-badge" title="日成交量仅 $${Math.round(vol).toLocaleString()}，薄池波动可能被单笔交易主导">低流动性</span>` : '';
     // ⓪ 日股夜盤PTS（Japannext J-Market）
     const pj = S.pts[key];
     if (pj) {
@@ -4730,13 +4737,13 @@
       if (dark.adr) {
         rows.push(
           `<div class="ext-row"><span class="ext-tag ext-dark">暗盘</span>`
-          + `<span class="ext-val">$${dark.price.toFixed(2)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}${basisBadge(dark.spread)}</span>`
-          + `<span class="ext-meta">Hyperliquid ${esc(dark.adr.label)}(${esc(dark.sym)}) · 美元计价，未换算本币${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
+          + `<span class="ext-val">$${dark.price.toFixed(2)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}${basisBadge(dark.spread)}${thinBadge(dark.vol24h)}</span>`
+          + `<span class="ext-meta">Hyperliquid ${esc(dark.adr.label)}(${esc(dark.sym)}) · ${dark.fxNote ? esc(dark.fxNote) + '（联系汇率7.8近似）' : '美元计价，未换算本币'}${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
         );
       } else {
         rows.push(
           `<div class="ext-row"><span class="ext-tag ext-dark">暗盘</span>`
-          + `<span class="ext-val">${withUnit(dark.price)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}${basisBadge(dark.spread)}</span>`
+          + `<span class="ext-val">${withUnit(dark.price)}${dark.chg24h != null ? pctOf(dark.chg24h) : ''}${basisBadge(dark.spread)}${thinBadge(dark.vol24h)}</span>`
           + `<span class="ext-meta">Hyperliquid 暗盘池${dark.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
         );
       }
@@ -4747,7 +4754,7 @@
       rows.push(
         `<div class="ext-row"><span class="ext-tag ext-dex">链上</span>`
         + `<span class="ext-val">$${U.fmt(key, dex.price)}${dex.chg24h != null ? pctOf(dex.chg24h) : ''}${basisBadge(dex.spread)}</span>`
-        + `<span class="ext-meta">${esc(dex.pair ? 'DEX ' + dex.pair : '链上 DEX 池子实时成交价')}${dex.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
+        + `<span class="ext-meta">${esc(dex.pair ? 'DEX ' + dex.pair : '链上 DEX 池子实时成交价')}${dex.fxNote ? ' · ' + esc(dex.fxNote) + '（联系汇率7.8近似）' : ''}${dex.chg24h != null ? ' · 24h为自身涨跌' : ''}</span></div>`
       );
     }
     // ③ 延展时段（既不是暗盘也不是链上的替代价，如无 hl 的韩股）

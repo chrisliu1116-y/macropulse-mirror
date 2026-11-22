@@ -1648,6 +1648,10 @@ body.chart-fs.draw-open .sh-tabs{left:calc((100% - var(--dp-w))/2)}
 .ext-val .basis-badge{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;
   font-size:10px;font-weight:600;color:var(--tx3);background:rgba(127,127,127,.14);
   border:1px solid rgba(127,127,127,.25);vertical-align:middle;white-space:nowrap}
+/* v535：低流动性提示——琥珀灰底，区别于基差徽章 */
+.ext-val .thin-badge{display:inline-block;margin-left:5px;padding:1px 5px;border-radius:4px;
+  font-size:10px;font-weight:600;color:#BA7517;background:rgba(186,117,23,.12);
+  border:1px solid rgba(186,117,23,.3);vertical-align:middle;white-space:nowrap}
 .ext-meta{flex:1;font-size:10px;color:var(--tx3);line-height:1.4}
 .ext-src{float:right;font-size:9.5px;color:var(--tx3);font-weight:400;letter-spacing:0}
 .ext-empty{padding:14px 12px;border-radius:11px;background:var(--wash);border:1px dashed var(--line);font-size:11px;color:var(--tx3);line-height:1.6}

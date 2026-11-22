@@ -2206,6 +2206,22 @@
     return out;
   }
 
+  /* v535【美元→港元换算】港元品种的链上/暗盘价以美元计价，直接拿去和主板港元价
+   * 比对会得 -87% 这种假偏离。港元是联系汇率（长期7.75-7.85），这里用 7.8 做
+   * 量级对齐近似——仅用于「是否同一标的」的校验与显示可比性，非实时汇率报价，
+   * 7.75~7.85 的波动对 87%→3% 这个判断毫无影响。ADR 先按 ratio 折成每股再换算。
+   * 例：腾讯 wTCENTx $42.55×7.8≈332HKD（主板344）；阿里 BABA $82÷8×7.8≈80HKD（主板83）。 */
+  const HKD_PER_USD = 7.8;
+  function altLocalPrice(key, usdPx, adr) {
+    const a = U.get(key);
+    if (!a || !/^(HKD|港元)$/i.test(String(a.unit || ''))) return { price: usdPx, fxNote: '' };
+    const ratio = (adr && adr.ratio > 0) ? adr.ratio : 1;
+    const px = usdPx / ratio * HKD_PER_USD;
+    const fxNote = ratio > 1
+      ? `美元÷${ratio}×7.8→港元等价` : '美元×7.8→港元等价';
+    return { price: px, fxNote, usdPx, ratio };
+  }
+
   /* ---------------- 链上价格（DexScreener，CORS 开放） ---------------- */
 
   async function dexQuote(key) {
@@ -2244,8 +2260,12 @@
       ((y.liquidity && y.liquidity.usd) || 0) - ((x.liquidity && x.liquidity.usd) || 0))[0];
     const best = pick(pairs.filter(p => p.quoteToken && STABLE.test(p.quoteToken.symbol))) || pick(pairs);
     if (!best || !best.priceUsd) throw new Error('no pair');
+    /* v535：港元品种（腾讯 wTCENTx）把美元价换算成港元等价，off校验/显示自动对齐主板 */
+    const local = altLocalPrice(key, +best.priceUsd, null);
     return {
-      price: +best.priceUsd,
+      price: local.price,
+      fxNote: local.fxNote,
+      usdPx: local.usdPx,
       liq: (best.liquidity && best.liquidity.usd) || 0,
       dex: best.dexId,
       chain: best.chainId,
@@ -2612,7 +2632,7 @@
    * ------------------------------------------------------------------ */
   const HL_API = 'https://api.hyperliquid.xyz/info';
   const HL_TTL = 30000;
-  let hlCache = { at: 0, map: null, chg: null, busy: null };
+  let hlCache = { at: 0, map: null, chg: null, vol: null, busy: null };
 
   /* v528：改用 metaAndAssetCtxs 一次拿全池 markPx + prevDayPx（仍是1个请求，
    * 取代原 allMids），直接算「暗盘相对自身24h前」的涨跌——这才是市场判断
@@ -2636,7 +2656,7 @@
       };
       try {
         const d = await fetchBody({ type: 'metaAndAssetCtxs', dex: 'xyz' });
-        const map = {}, chg = {};
+        const map = {}, chg = {}, vol = {};
         const uni = (d && d[0] && d[0].universe) || [];
         const ctxs = (d && d[1]) || [];
         uni.forEach((u, i) => {
@@ -2652,10 +2672,13 @@
           map[name] = px;
           const prev = parseFloat(c.prevDayPx);
           if (isFinite(prev) && prev > 0) chg[name] = (px - prev) / prev * 100;
+          /* v535：24h名义成交量，用于低流动性提示（薄池一笔散户单就能砸波动）。
+           * 同一响应里的 dayNtlVlm，零额外请求。 */
+          if (isFinite(c.dayNtlVlm) && c.dayNtlVlm > 0) vol[name] = c.dayNtlVlm;
         });
         if (!Object.keys(map).length) throw new Error('meta empty');
         status.hl = 'ok';
-        hlCache = { at: Date.now(), map, chg, busy: null };
+        hlCache = { at: Date.now(), map, chg, vol, busy: null };
         return map;
       } catch (e) {
         // 回退：仍用 allMids 拿价格（无24h涨跌），不让暗盘价整体消失
@@ -2700,8 +2723,12 @@
     const p = map[String(sym).toUpperCase()];
     if (!p) return null;
     const symKey = String(sym).toUpperCase();
-    return { price: p, sym: sym, at: hlCache.at, adr: adr || null,
-             chg24h: (hlCache.chg && isFinite(hlCache.chg[symKey])) ? hlCache.chg[symKey] : null };
+    /* v535：港元品种（阿里 BABA ADR 1:8）先折每股再换算港元等价 */
+    const local = altLocalPrice(key, p, adr);
+    return { price: local.price, sym: sym, at: hlCache.at, adr: adr || null,
+             fxNote: local.fxNote, usdPx: local.usdPx,
+             chg24h: (hlCache.chg && isFinite(hlCache.chg[symKey])) ? hlCache.chg[symKey] : null,
+             vol24h: (hlCache.vol && isFinite(hlCache.vol[symKey])) ? hlCache.vol[symKey] : null };
   }
 
   /* ---------------- 韩股：常规 + 盘后（Nextrade 애프터마켓）分钟线 ----------------

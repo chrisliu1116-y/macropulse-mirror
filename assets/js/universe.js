@@ -203,7 +203,10 @@
      * 原来标的字典里没有它，tagUS 就算挂上也会被 U.get() 过滤掉。 */
     ASML:  { name: '阿斯麦',   short: '阿斯麦', src: 'em', secid: '105.ASML',  dec: 2, grp: 'usstock', kind: 'stock', unit: 'USD', tv: 'NASDAQ:ASML',  extSym: 'ASML' },
 
-    '00700': { name: '腾讯控股',   src: 'em', secid: '116.00700', dec: 2, grp: 'hkstock', kind: 'stock', unit: 'HKD', tv: 'HKEX:700', txSym: 'hk00700' },
+    /* v535：腾讯链上真池 wTCENTx（xStocks RWA，BSC，1:1跟踪1股），合约地址锁定避免同名垃圾币。
+     * DEX 价为美元、主板为港元 → app.js 会自动做 USD→HKD 换算再比对/显示。 */
+    '00700': { name: '腾讯控股',   src: 'em', secid: '116.00700', dec: 2, grp: 'hkstock', kind: 'stock', unit: 'HKD', tv: 'HKEX:700', txSym: 'hk00700',
+               dexAddr: '0x41333Df9E7639188BBfca5522dC4844398Af9f9E' },
 
     /* ---------------- 海外个股（韩 / 日 / 台）----------------
      * 东财市场号：177=韩股(KRX)、176=日股(JPX)、178=台股(TWSE)
@@ -622,9 +625,9 @@
      * 且 4062 是日股、会被 synthTW 误合成台股；保留只会展示错误暗盘。2303→UMC 保留（台股合成会用到、UMC 未退市）。 */
     /* v534【撤回错误映射】v530 曾配 00700→TENCENT / 09988→BABA / 300750→CATL，
      * 映射复核实测发现：TENCENT/CATL 在 HL 已 isDelisted（markPx=prevDayPx 冻结价，
-     * 无 midPx），BABA 是美股 ADR（1 ADS=8股港股，$82 vs 港股≈$10/股，8倍错配）——
-     * 三个全是错误数据，撤回。港股指数/A股指数 HL 无对应标的，不硬配。
-     * 保留 688256→CAMBRICON（未退市、寒武纪688256标的正确、价132.98）。 */
+     * 无 midPx）→撤回；BABA 是美股 ADR（1 ADS=8股港股）→v535 用 ratio:8 正确补回。
+     * 港股指数/A股指数 HL 无对应标的，不硬配。 */
+    '09988':  { sym: 'BABA', label: 'ADR 1:8→港元', ratio: 8, usd2hkd: true },
     '688256': { sym: 'CAMBRICON', label: 'RWA(美元)', ratio: null },
     /* v533【补漏·标的身份已核实】CXMT=长鑫科技(SHE:688825,Gate/HyperAcademy资料确认
      * xyz:CXMT跟踪该股,RMB折算USD,现价35.16元≈4.9美元 vs RWA 4.97≈1:1);
