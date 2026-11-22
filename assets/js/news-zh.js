@@ -247,10 +247,25 @@
 
   /* v548【服务端智谱翻译】免费源（GTX / MyMemory）2026-11 起大面积 429 / 当日额度耗尽，
    * 浏览器端已无法稳定翻译 —— 用户截图里川普推文、格隆汇英文摘要全是英文。
-   * 主站 /__tr 用智谱 GLM 翻译并缓存（key 只在服务端），优先走它；失败再回退原双通道。 */
+   * 主站 /__tr 用智谱 GLM 翻译并缓存（key 只在服务端），优先走它；失败再回退原双通道。
+   * 【参数必须编进路径】平台网关按「路径」缓存响应、无视 query 和 no-store：
+   * 用 /__tr?q=... 时所有请求都会拿到第一份缓存（实测请求格隆汇却返回川普推文译文），
+   * 所以改成 /__tr/<随机token>/<base64url(文本)>，每次 token 不同，绝不串数据。 */
+  function b64urlText(s) {
+    try {
+      const bytes = new TextEncoder().encode(String(s));
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    } catch (e) { return ''; }
+  }
+
   async function viaServer(text) {
-    const u = '/__tr?q=' + encodeURIComponent(String(text).slice(0, 1500));
-    const j = await (await withTimeout(u, 12000)).json();
+    const t = String(text).slice(0, 1500);
+    const b = b64urlText(t);
+    if (!b) return '';
+    const token = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const j = await (await withTimeout('/__tr/' + token + '/' + b, 12000)).json();
     return String((j && j.zh) || '').trim();
   }
 

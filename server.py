@@ -52,6 +52,16 @@ def _b64d(s):
         return ''
 
 
+def _b64d_text(s):
+    """通用 base64url 解码（UTF-8 文本，不限定 http 前缀）—— 供 /__tr 用。"""
+    try:
+        t = str(s).replace('-', '+').replace('_', '/')
+        t += '=' * (-len(t) % 4)
+        return base64.urlsafe_b64decode(t.encode('ascii')).decode('utf-8', 'ignore')
+    except Exception:
+        return ''
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **k):
         super().__init__(*a, directory=ROOT, **k)
@@ -179,15 +189,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _translate(self):
         """v548：服务端智谱翻译。免费源(GTX/MyMemory)2026-11 起大面积 429/额度耗尽，
-        浏览器端已不可用；这里用智谱 GLM 翻译并做内存缓存，前端 /__tr 优先调用。"""
-        try:
-            qs = urllib.parse.urlparse(self.path).query
-            q = (urllib.parse.parse_qs(qs).get('q', ['']) or [''])[0].strip()
-        except Exception:
-            q = ''
+        浏览器端已不可用；这里用智谱 GLM 翻译并做内存缓存，前端 /__tr 优先调用。
+
+        【必须把文本编进路径】平台网关按「路径」缓存响应、完全无视 query 和
+        Cache-Control: no-store —— 用 /__tr?q=... 时所有请求拿到的是第一份缓存，
+        实测请求格隆汇英文却返回了川普推文的译文。故采用 /__tr/<token>/<b64url(text)>，
+        token 每请求不同，绝不串数据。"""
+        parsed = urllib.parse.urlparse(self.path)
+        q = ''
+        segs = [s for s in parsed.path.split('/') if s]
+        for s in reversed(segs):
+            if s == '__tr':
+                break
+            cand = _b64d_text(s)
+            if cand:
+                q = cand
+                break
+        if not q:
+            # 兼容 ?q=（仅供本机调试，线上会被网关缓存，勿用）
+            try:
+                q = (urllib.parse.parse_qs(parsed.query).get('q', ['']) or [''])[0]
+            except Exception:
+                q = ''
+        q = str(q).strip()[:1500]
         if not q:
             return self._send_json(400, {'err': 'no q'})
-        q = q[:1500]
         with _TR_LOCK:
             hit = _TR_CACHE.get(q)
         if hit:
