@@ -6312,7 +6312,12 @@
     for (const r of raw) {
       if (!r || !r.title) continue;
       const t = String(r.title);
-      if (!Z.isEn(t) || seen.has(t)) continue;
+      /* v552【修「标题中文+正文英文」整条漏翻】原筛选只看标题是否英文，
+       * 格隆汇「中文标题 + 英文摘要」、金十「中文标题 + 英文正文」这类全被跳过，
+       * 用户点开详情页看到的就是英文原文。改为标题或正文任一英文都进翻译队列。 */
+      const enTitle = Z.isEn(t);
+      const enBrief = !!(r.brief && Z.isEn(String(r.brief).slice(0, 120)));
+      if ((!enTitle && !enBrief) || seen.has(t)) continue;
       seen.add(t);
       todo.push(r);
       if (todo.length >= ZH_CAP) break;
@@ -6320,13 +6325,15 @@
     if (!todo.length) return 0;
     const work = Promise.all(todo.map(async (r) => {
       const src = String(r.title);
-      const zh = await zhOne(Z, src);
-      if (zh && cjkCount(zh) >= 2) {
-        /* 订阅源（推文）抓下来时 titleEn 已经是**整段原文**，而这里拿来翻的是
-         * 截到 90 字带「…」的标题。若无条件覆盖，中英对照的英文那半边就只剩开头
-         * 一句了 —— 用户要看的就是完整原话。所以已有 titleEn 时保留不覆盖。 */
-        if (!r.titleEn) r.titleEn = src;
-        r.title = zh;
+      if (Z.isEn(src)) {
+        const zh = await zhOne(Z, src);
+        if (zh && cjkCount(zh) >= 2) {
+          /* 订阅源（推文）抓下来时 titleEn 已经是**整段原文**，而这里拿来翻的是
+           * 截到 90 字带「…」的标题。若无条件覆盖，中英对照的英文那半边就只剩开头
+           * 一句了 —— 用户要看的就是完整原话。所以已有 titleEn 时保留不覆盖。 */
+          if (!r.titleEn) r.titleEn = src;
+          r.title = zh;
+        }
       }
       if (r.brief && Z.isEn(String(r.brief).slice(0, 120))) {
         const zb = await zhOne(Z, String(r.brief));

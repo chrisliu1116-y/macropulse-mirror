@@ -5146,6 +5146,30 @@
       + `<div class="ns-foot">${esc(n.src)} · ${hhmm(n.ts)} 发布 · 共 ${S.news.length} 条在库</div>`
     );
 
+    /* v552【点开即译】存量条目（翻译上线前抓的、或标题中文但正文英文的）brief 还是英文原文。
+     * 打开详情页时按需翻一次，翻完就地替换正文并写回池子 —— 否则用户只能对着英文正文看。
+     * 只处理「汉字 < 4 且确有英文」的条目，纯中文零开销；翻译结果走服务端智谱缓存。 */
+    try {
+      const _b = String(body || '');
+      const _cjk = (_b.match(/[\u4e00-\u9fa5]/g) || []).length;
+      if (_b && _cjk < 4 && /[A-Za-z]{4}/.test(_b) && w.NewsZH && w.NewsZH.toZh) {
+        w.NewsZH.toZh(_b.slice(0, 1500)).then(zh => {
+          if (!zh) return;
+          if ((String(zh).match(/[\u4e00-\u9fa5]/g) || []).length < 6) return;
+          if (n.brief !== _b) return;            // 期间已被别的流程改过，不覆盖
+          n.briefEn = n.briefEn || _b;
+          n.brief = zh;
+          try {
+            if (box.className === 'nsheet on' && S.curNews === n) {
+              const el = box.querySelector('.ns-text');
+              if (el && el.textContent.trim() === _b.trim()) el.textContent = zh;
+            }
+          } catch (e) {}
+          try { poolSync(); } catch (e) {}
+        }).catch(() => {});
+      }
+    } catch (e) {}
+
     /* v411【走势异步补插】正文已秒开，这里才慢慢拉走势。
      * 用户口径：只有「触发该品种异动」（violent/clear，即 hit>0）才显示走势区；
      * flat / 几乎没动 → 整块不显示，不再占版面。 */
@@ -9744,6 +9768,42 @@
         localStorage.setItem('mm_trump_shell_clean_v546', '1');
         console.log('[v546] 已清除川普空壳快讯 ' + removedT + ' 条');
       }
+    } catch (e) {}
+    /* v552【存量英文正文后台补翻】新抓的条目在 collect 里（zhPass）入池前就翻了；
+     * 但池子里「翻译上线前抓到的」条目 brief 仍是英文原文。这里后台小批量补翻：
+     * 每 60 秒最多 3 条、不重绘列表（列表只看标题，标题本来就中文），不打扰阅读。
+     * 详情页另有「点开即译」兜底，用户不必等这批。 */
+    let _zhBfBusy = false;
+    async function backfillZhPool() {
+      if (_zhBfBusy) return;
+      const Z = w.NewsZH;
+      if (!Z || typeof Z.toZh !== 'function') return;
+      _zhBfBusy = true;
+      try {
+        const todo = (S.news || []).filter(x => {
+          if (!x || !x.brief) return false;
+          const b = String(x.brief);
+          return !x.briefEn
+            && (b.match(/[\u4e00-\u9fa5]/g) || []).length < 4
+            && /[A-Za-z]{4}/.test(b);
+        }).slice(0, 3);
+        let changed = 0;
+        for (const it of todo) {
+          try {
+            const zh = await Z.toZh(String(it.brief).slice(0, 1500));
+            if (zh && (zh.match(/[\u4e00-\u9fa5]/g) || []).length >= 6) {
+              it.briefEn = it.brief;
+              it.brief = zh;
+              changed++;
+            }
+          } catch (e) {}
+        }
+        if (changed) { try { poolSync(); } catch (e) {} }
+      } finally { _zhBfBusy = false; }
+    }
+    try {
+      setTimeout(backfillZhPool, 8000);
+      setInterval(backfillZhPool, 60000);
     } catch (e) {}
     try { initAlertEngine(); } catch (e) {}
     try { loadLlmChannel(); setInterval(loadLlmChannel, 10 * 60 * 1000); } catch (e) {}
