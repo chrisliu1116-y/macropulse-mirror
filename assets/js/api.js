@@ -3749,12 +3749,11 @@
       if (a && a.sinaf) tasks.push(wrap(sinaFutDaily(key, a, m), 'sina'));
       const code = txStockCode(key);
       if (code) tasks.push(wrap(txDaily(code, m), 'tencent'));
-      /* v378【通用源序·用户定】日K竞速 = 腾讯 + 同花顺（两者 `/01/` 前复权口径
-       * 已逐字段验证一致），先到先用；新浪仅商品期货（sinaFut，同花顺不覆盖
-       * 商品）、OKX 仅币安兜底，维持原位。竞速后的旧同花顺兜底块删除（已入竞速）。 */
-      try {
-        if (thsSymbolOf(key)) tasks.push(wrap(thsDaily(key, m), 'ths'));
-      } catch (eT) { /* 同花顺不覆盖的品类自动跳过 */ }
+      /* v543【同花顺日K已移出竞速】实测 `line/<sym>/01/last.js` 只返回 140 根（≈7 个月；
+       * 它内部 year 字段有 2010 年至今的全量，但这个接口不返回），作为竞速源会抢先给出
+       * 残缺历史 —— 创业板指「拉不到 2026/07 之前」就是这个原因。影响面覆盖全部 6 位
+       * A股/ETF 与 上证/深成/创业板 三大指数，故从竞速移除，降为最后兜底（见下方）。
+       * 新浪仅商品期货、OKX 仅币安兜底，维持原位。 */
       /* v373→v378：Yahoo 不进并行竞速 —— 它质量差但常先返回，会把腾讯/同花顺挤掉。 */
       const ys = yahooSymbolFor(key, a);
       if (tasks.length) {
@@ -3763,7 +3762,7 @@
           return finalize({ points: dedupe(got.p.slice(-m)), synthetic: false, src: got.src });
         } catch (e4) { /* 全挂 */ }
       }
-      /* v378：同花顺日K已入并行竞速（与腾讯先到先用），不再单独兜底。 */
+      /* v378：同花顺日K已移出竞速（v543，见上），改在此处做最后兜底。 */
       /* v373：Yahoo 降为最后一道（腾讯/新浪/东财/同花顺全挂才用） */
       if (ys) {
         try {
@@ -3774,6 +3773,17 @@
           }
         } catch (e6) { /* 全挂 */ }
       }
+      /* v543【同花顺最后兜底】东财/腾讯/Yahoo 全挂时才用。它只给约 140 根（7 个月），
+       * 属于「有总比空白好」的保命数据；UI 数据源会如实标注「同花顺」，
+       * 不会冒充全历史（正常路径永不走到这里）。分时 thsMinute 不受影响。 */
+      try {
+        if (thsSymbolOf(key)) {
+          const tp = await thsDaily(key, m);
+          if (tp && tp.length >= 20) {
+            return finalize({ points: dedupe(tp.slice(-m)), synthetic: false, src: 'ths' });
+          }
+        }
+      } catch (eT) { /* 同花顺不覆盖的品类自动跳过 */ }
       return failedRes(e && e.message);
     }
   }
