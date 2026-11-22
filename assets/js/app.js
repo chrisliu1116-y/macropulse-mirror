@@ -7673,7 +7673,7 @@
    * 只作用在配了 autoProgress 的事件上，其它卡片完全不受影响。
    * 规则按优先级从高到低匹配；neg 是防误判闸门（「不会同意停火」不算达成）。
    * 返回浅拷贝，绝不污染 events.js 里的原始数据。 */
-  const EV_STAGE_KEY = 'mm_xu_guful_e9';   /* v558:伊朗事件 P1 规则修正（要求完成态表述），bump 作废含「封锁解除」误判的旧锁 */
+  const EV_STAGE_KEY = 'mm_me_odmgl_b3';   /* v559:再收紧 P1（「达成协议」限核/停火/和平 + neg 补「没有/无迹象」），bump 作废旧锁 */
   let _evStage = null;
   function evStageMap() {
     if (!_evStage) {
