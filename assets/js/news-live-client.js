@@ -6128,14 +6128,18 @@
      * 分段反而更准；串行是因为并发会被限流。 */
     const P = w.NewsZH;
     if (P && typeof P.toZh === 'function') {
-      for (const it of out.slice(0, 6)) {
+      /* v541 提速②：原来翻前 6 条、每条最多 5 段（180 字/段）串行 = 最多 30 次翻译请求，
+       * 是川普源在 6s 软超时里必然超时的主因（代理取 RSS 还要几秒）。
+       * 收到前 4 条、每条最多 3 段（540 字）→ 最多 12 次，省约 60%；
+       * 540 字覆盖绝大多数 Truth Social 推文，超长推文详情页仍有 titleEn 原文。 */
+      for (const it of out.slice(0, 4)) {
         const src = String(it.titleEn || '');
         if (!src || cjkCount(src) >= 6) continue;
-        const cap = Math.min(src.length, 900);
+        const cap = Math.min(src.length, 540);
         const segs = [];
         for (let i = 0; i < cap; i += 180) segs.push(src.slice(i, i + 180));
         const zhParts = [];
-        for (const seg of segs.slice(0, 5)) {
+        for (const seg of segs.slice(0, 3)) {
           try {
             const zh = await P.toZh(seg);
             zhParts.push(zh && cjkCount(zh) >= 4 ? zh : seg);
@@ -6177,7 +6181,7 @@
    * 每条约 1~2 秒，并行跑，整轮多花 2 秒左右。没翻到的下一轮继续。 */
   const ZH_CAP = 16;
 
-  async function zhPass(raw) {
+  async function zhPass(raw, budgetMs) {
     const Z = w.NewsZH;
     if (!Z || typeof Z.isEn !== 'function' || !Array.isArray(raw) || !raw.length) return 0;
     const todo = [], seen = new Set();
@@ -6190,7 +6194,7 @@
       if (todo.length >= ZH_CAP) break;
     }
     if (!todo.length) return 0;
-    await Promise.all(todo.map(async (r) => {
+    const work = Promise.all(todo.map(async (r) => {
       const src = String(r.title);
       const zh = await Z.toZh(src);
       if (zh && cjkCount(zh) >= 2) {
@@ -6205,6 +6209,20 @@
         if (zb && cjkCount(zb) >= 2) { r.briefEn = r.brief; r.brief = zb; }
       }
     }));
+    /* v541 提速①（安全版）：给整轮翻译加时间预算，超时就先返回让 enrich 继续跑，
+     * 未翻完的条目保留原文（英文），**并且跳过下面的「英文主导即删除」闸** ——
+     * 否则超时会把还没翻到的英文条目误删，直接造成条数骤降（用户最敏感的回归）。
+     * 未翻完的下轮 25s 轮询会补翻（翻译成功即变中文）。budgetMs 不传=老行为（无限等）。 */
+    let timedOut = false;
+    if (budgetMs > 0) {
+      timedOut = await Promise.race([
+        work.then(() => false),
+        new Promise(res => setTimeout(() => res(true), budgetMs)),
+      ]);
+    } else {
+      await work;
+    }
+    if (timedOut) return todo.length;
     /* 翻译后仍是英文主导的条目直接丢弃 —— 用户明确「不要英文新闻」，
      * 与其显示「morning session close, 中国's...」这种半吊子译文，不如不显示。
      * 判定同 isEn：汉字 < 4 且英文占比高 → 视作没翻好。在线翻译在哪一轮成功了，
@@ -6420,8 +6438,10 @@
     /* ---- 英文快讯中文化 ----
      * 必须放在 enrich / dedupe **之前**：
      *   ① 英文标题翻成中文后，才能和中文源的同一件事按标题相似度合并；
-     *   ② 分级用的关键词、品种映射表都是中文的，不翻就全落空。 */
-    await zhPass(raw);
+     *   ② 分级用的关键词、品种映射表都是中文的，不翻就全落空。
+     * v541 提速①：给翻译 2s 时间预算——绝大多数轮次 2s 内翻完（并发 ZH_CAP 条），
+     * 只有翻译服务变慢时才会超时；超时后保留原文继续 enrich，不阻塞首屏、不误删。 */
+    await zhPass(raw, 2000);
 
     const enriched = [];
     raw.forEach(r => {
