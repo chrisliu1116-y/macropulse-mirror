@@ -613,14 +613,13 @@
     '2303':   { sym: 'UMC',  label: 'ADR 1:5', ratio: 5 },
     '9984':   { sym: 'SOFTBANK', label: 'ADR', ratio: null },
     '285A':   { sym: 'KIOXIA',   label: 'ADR', ratio: null },
-    '4062':   { sym: 'IBIDEN',   label: 'ADR', ratio: null },
-    /* v530【补齐港/A股暗盘参考价】HL xyz 池里这几个有同名 RWA 永续，
-     * 但均为美元计价、与原股币种/换算比例不同（实测腾讯344HKD≈44USD vs RWA 49.74USD），
-     * 只作参考价+自身24h涨跌，ratio:null→不算基差（避免假基差）。
-     * 港股指数/A股指数在 HL 池无对应标的，无法补，不硬配。 */
-    '00700':  { sym: 'TENCENT',   label: 'RWA(美元)', ratio: null },
-    '09988':  { sym: 'BABA',      label: 'RWA(美元)', ratio: null },
-    '300750': { sym: 'CATL',      label: 'RWA(美元)', ratio: null },
+    /* v534：移除 '4062'→IBIDEN——IBIDEN 在 HL 已 isDelisted（冻结价），
+     * 且 4062 是日股、会被 synthTW 误合成台股；保留只会展示错误暗盘。2303→UMC 保留（台股合成会用到、UMC 未退市）。 */
+    /* v534【撤回错误映射】v530 曾配 00700→TENCENT / 09988→BABA / 300750→CATL，
+     * 映射复核实测发现：TENCENT/CATL 在 HL 已 isDelisted（markPx=prevDayPx 冻结价，
+     * 无 midPx），BABA 是美股 ADR（1 ADS=8股港股，$82 vs 港股≈$10/股，8倍错配）——
+     * 三个全是错误数据，撤回。港股指数/A股指数 HL 无对应标的，不硬配。
+     * 保留 688256→CAMBRICON（未退市、寒武纪688256标的正确、价132.98）。 */
     '688256': { sym: 'CAMBRICON', label: 'RWA(美元)', ratio: null },
     /* v533【补漏·标的身份已核实】CXMT=长鑫科技(SHE:688825,Gate/HyperAcademy资料确认
      * xyz:CXMT跟踪该股,RMB折算USD,现价35.16元≈4.9美元 vs RWA 4.97≈1:1);

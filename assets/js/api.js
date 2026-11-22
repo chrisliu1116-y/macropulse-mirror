@@ -2217,7 +2217,11 @@
      * 「链上价」摆上去，所以只放开美股。 */
     const guess = (!a.dex && (a.grp === 'usstock' || a.grp === 'us')) ? key : null;
     if (!a.dex && !guess) throw new Error('no dex');
-    const STABLE = /^(USDC|USDT|DAI|USDC\.E|FDUSD|TUSD|USDD|PYUSD)$/i;
+    /* v534【USDG 纳入稳定币白名单】实测 robinhood RWA 主报价是 USDG 池：
+     * AAPL/USDG=$349.71(真价) vs AAPL/WETH=$162.21(错一半)、
+     * NVDA/USDG=$129.60(真价) vs NVDA/WETH=$109.17。旧正则不含 USDG，
+     * 无 USDC 池时回退取 WETH 池 → 抓到陈旧/错误价。USDG 是合规稳定币，纳入。 */
+    const STABLE = /^(USDC|USDT|DAI|USDC\.E|FDUSD|TUSD|USDD|PYUSD|USDG)$/i;
     const q0 = a.dex || guess;
     // 优先按合约地址取（结果集干净），否则退回关键词搜索
     const url = a.dexAddr
@@ -2636,9 +2640,14 @@
         const uni = (d && d[0] && d[0].universe) || [];
         const ctxs = (d && d[1]) || [];
         uni.forEach((u, i) => {
+          /* v534【排除退市合约】实测 CATL/TENCENT/INNOLIGHT/IBIDEN 的 isDelisted=true、
+           * midPx=null、markPx==prevDayPx==冻结价——旧代码用 markPx 当活价展示，
+           * 还会算出假「24h 0.00%」。退市合约一律跳过，宁可不显示暗盘。 */
+          if (u.isDelisted) return;
           const name = String(u.name || '').split(':').pop().toUpperCase();
           const c = ctxs[i] || {};
-          const px = parseFloat(c.markPx ?? c.midPx);
+          // 优先 midPx（真实中间价）；无 midPx 时不用 markPx（可能是结算冻结价）
+          const px = parseFloat(c.midPx ?? c.markPx);
           if (!name || !isFinite(px) || px <= 0) return;
           map[name] = px;
           const prev = parseFloat(c.prevDayPx);
