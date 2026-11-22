@@ -6064,24 +6064,9 @@
       });
       if (out.length >= 10) break;
     }
-    /* factba.se 的标题全是英文（「Remarks: Donald Trump Discusses…」），
-     * 直接显示等于用不了。这里批量翻成中文，翻译失败的保留英文原文
-     * （详情页 titleEn 还在）。只翻前 6 条，避免一轮抓取被翻译拖死。 */
-    const Z = w.NewsZH;
-    if (Z && typeof Z.toZh === 'function') {
-      /* 串行翻前 5 条：并发 6 个请求会被公共翻译接口限流，
-       * 结果就是全部返回空、标题仍是英文（实测踩过）。 */
-      for (const it of out.slice(0, 5)) {
-        const raw = String(it.titleEn || '');
-        if (!raw || cjkCount(raw) >= 6) continue;
-        try {
-          const zh = await Z.toZh(raw.slice(0, 160));
-          if (zh && cjkCount(zh) >= 6) {
-            it.title = it.title.split('｜')[0] + '｜' + zh;
-          }
-        } catch (e) { /* 翻译失败就用英文原文 */ }
-      }
-    }
+    /* v553【同 trumpstruth 的修复】这里原来也串行翻前 5 条（5 × 2~7 秒 = 10~35 秒），
+     * 远超 collect 的 6 秒软超时 —— 川普源的另一个实现同样被判「超时/红色」。
+     * 翻译统一交给 collect 的 zhPass（8s 预算 + 缓存），这里只抓 + 解析。 */
     if (!out.length) throw new Error('川普言论解析后为空');
     if (trVia && out[0]) out[0]._via = '代理·' + trVia;
     return out;
@@ -6227,34 +6212,12 @@
      * 详情页永远只有开头一小段。
      * 分段翻（每段 180 字，最多 5 段 ≈ 900 字）：公共翻译接口对长文本质量差，
      * 分段反而更准；串行是因为并发会被限流。 */
-    const P = w.NewsZH;
-    if (P && typeof P.toZh === 'function') {
-      /* v541 提速②：原来翻前 6 条、每条最多 5 段（180 字/段）串行 = 最多 30 次翻译请求，
-       * 是川普源在 6s 软超时里必然超时的主因（代理取 RSS 还要几秒）。
-       * 收到前 4 条、每条最多 3 段（540 字）→ 最多 12 次，省约 60%；
-       * 540 字覆盖绝大多数 Truth Social 推文，超长推文详情页仍有 titleEn 原文。 */
-      /* v551：翻译改走服务端智谱（单段 2~7s），3 条 × 2 段 = 最多 6 次串行，
-       * 比原来的 4 条 × 3 段更稳；抓取阶段不再被翻译拖到 6s 软超时之外。 */
-      for (const it of out.slice(0, 3)) {
-        const src = String(it.titleEn || '');
-        if (!src || cjkCount(src) >= 6) continue;
-        const cap = Math.min(src.length, 540);
-        const segs = [];
-        for (let i = 0; i < cap; i += 180) segs.push(src.slice(i, i + 180));
-        const zhParts = [];
-        for (const seg of segs.slice(0, 2)) {
-          try {
-            const zh = await P.toZh(seg);
-            zhParts.push(zh && cjkCount(zh) >= 4 ? zh : seg);
-          } catch (e) { zhParts.push(seg); }
-        }
-        const fullZh = zhParts.join('').replace(/\s+\n/g, '\n').trim();
-        if (fullZh && cjkCount(fullZh) >= 6) {
-          it.title = fullZh.length > 90 ? fullZh.slice(0, 90) + '…' : fullZh;
-          it.brief = fullZh;             // 详情页看完整中文
-        }
-      }
-    }
+    /* v553【修「川普源一直红色」】这里原来在**源函数内部**串行调翻译
+     * （3 条 × 2 段 = 最多 6 次；服务端智谱单次 2~7 秒 → 12~42 秒），
+     * 而 collect 对每个源只有 6 秒软超时 —— 川普源每轮都被判超时、永远显示红色，
+     * 哪怕 RSS 早已成功抓到。翻译改由 collect 里的 zhPass 统一处理（8s 预算 + 缓存 +
+     * 前端 dict 缓存），这里只负责「抓 + 解析」，保证在 6 秒内返回。
+     * 标题与正文的中文化、titleEn 原文保留，均由 zhPass 完成。 */
     if (trVia && out[0]) out[0]._via = '代理·' + trVia;
     return out;
   }
