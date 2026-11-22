@@ -64,7 +64,8 @@
      * 东财没有 VIX 现货，走 Yahoo（^VIX）。CBOE 计算，指数本身是
      * 「市场对未来30天预期波动率」的报价，不是可交易标的。
      * 方向特殊：VIX 上涨 = 市场恐慌 = 风险事件 → invert=true。 */
-    VIX:   { name: 'VIX恐慌指数', short: 'VIX',    ord: 5, sess: 'vix', src: 'cboe', dec: 2, grp: 'us', kind: 'index', unit: '', tv: 'CBOE:VIX', invert: true , hl: 'VIX',
+    /* v534：移除 hl:'VIX'——HL xyz:VIX 已 isDelisted(冻结价20.0、量0)。 */
+    VIX:   { name: 'VIX恐慌指数', short: 'VIX',    ord: 5, sess: 'vix', src: 'cboe', dec: 2, grp: 'us', kind: 'index', unit: '', tv: 'CBOE:VIX', invert: true ,
              /* rt:'cnbc' —— CBOE 官方端点（cdn-api/delayed_quotes）是延时 15 分钟的，
               * 实测 Yahoo ^VIX 滞后 912 秒、TradingView CBOE:VIX 是 delayed_streaming_900，
               * 只有 CNBC 的 quote.cnbc.com 是**真实时**（last_time 与当前时刻一致），
@@ -88,7 +89,8 @@
     /* 用户口径：「这几个汇率改成中文，如美元指数、美元兑离岸人民币」。
      * name 给行情页（宽）用全称，short 给异动格子（窄）用短名——
      * 两边都不再出现 USDCNH 这种代码。 */
-    DXY:   { name: '美元指数',         short: '美元指数',   src: 'em', secid: '100.UDI',   dec: 3, grp: 'fx', kind: 'fx', unit: '', tv: 'TVC:DXY',    hl: 'DXY' },
+    /* v534：移除 hl:'DXY'——HL xyz:DXY 已 isDelisted(冻结价、量0)。 */
+    DXY:   { name: '美元指数',         short: '美元指数',   src: 'em', secid: '100.UDI',   dec: 3, grp: 'fx', kind: 'fx', unit: '', tv: 'TVC:DXY' },
     USDCNH:{ name: '美元兑离岸人民币', short: '离岸人民币', src: 'em', secid: '133.USDCNH', dec: 4, grp: 'fx', kind: 'fx', unit: '', tv: 'FX:USDCNH' },
     USDJPY:{ name: '美元兑日元',       short: '美元日元',   src: 'em', secid: '119.USDJPY', dec: 3, grp: 'fx', kind: 'fx', unit: '', tv: 'FX:USDJPY', hl: 'JPY' },
     EURUSD:{ name: '欧元兑美元',       short: '欧元美元',   src: 'em', secid: '119.EURUSD', dec: 4, grp: 'fx', kind: 'fx', unit: '', tv: 'FX:EURUSD', hl: 'EUR' },
@@ -607,12 +609,15 @@
    * 所以只作为「暗盘参考价」展示，标注 ADR/GDR 与代码，不计算基差。
    * 只收录已核过标的身份、比例明确的；不确定的一律不放，宁可少显示。 */
   const ADR_MAP = {
-    '000660': { sym: 'SKHX', label: 'ADR 1:1', ratio: 1 },
-    '005930': { sym: 'SMSN', label: 'GDR', ratio: null },
-    '2330':   { sym: 'TSM',  label: 'ADR 1:5', ratio: 5 },
-    '2303':   { sym: 'UMC',  label: 'ADR 1:5', ratio: 5 },
-    '9984':   { sym: 'SOFTBANK', label: 'ADR', ratio: null },
-    '285A':   { sym: 'KIOXIA',   label: 'ADR', ratio: null },
+    /* v534【标签订正】映射复核确认：这些 HL 合约是本地交易所普通股按汇率折美元，
+     * 并非 ADR/GDR（如 xyz:SKHX 跟踪 KRX:000660 普通股 1:1，真 ADR 是 SKHY=1/10）。
+     * 旧标签"ADR/GDR"会误导标的性质；只改文字，ratio 数值不变（仍不参与计算）。 */
+    '000660': { sym: 'SKHX', label: 'RWA(美元)', ratio: 1 },
+    '005930': { sym: 'SMSN', label: 'RWA(美元)', ratio: null },
+    '2330':   { sym: 'TSM',  label: 'ADR 1:5', ratio: 5 },   // TSM 确为美股 ADR，保留
+    '2303':   { sym: 'UMC',  label: 'ADR 1:5', ratio: 5 },   // UMC 确为美股 ADR，保留
+    '9984':   { sym: 'SOFTBANK', label: 'RWA(美元)', ratio: null },
+    '285A':   { sym: 'KIOXIA',   label: 'RWA(美元)', ratio: null },
     /* v534：移除 '4062'→IBIDEN——IBIDEN 在 HL 已 isDelisted（冻结价），
      * 且 4062 是日股、会被 synthTW 误合成台股；保留只会展示错误暗盘。2303→UMC 保留（台股合成会用到、UMC 未退市）。 */
     /* v534【撤回错误映射】v530 曾配 00700→TENCENT / 09988→BABA / 300750→CATL，
