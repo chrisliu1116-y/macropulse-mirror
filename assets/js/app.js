@@ -59,7 +59,6 @@
    *   ③ 动态合成的美股品种简称不再截断到 4 字（SK海力士 曾被截成「SK海力」）；
    *   ④ 新闻去重补「地缘实体 + 动作类别」判据（也门空袭 / 霍尔木兹油轮起火 那几对）。 */
   const DATA_VER = '315';
-  const gradeVerOf = () => String((w.LiveNews && w.LiveNews.GRADE_VER) || 0);
 
   /* ---------------- 标级纠错（用户手工改判） ----------------
    * 用户口径（11-05）：「如果设置成我可以在 app 上改，把错误标级的自己改对，
@@ -7106,23 +7105,25 @@
 
   let bfStarted = false;
 
-  /** 首屏之后做一次「过去 24 小时回溯」，补齐没打开页面时漏掉的暴涨暴跌 */
+  /** 首屏之后做一次「过去 72 小时回溯」，补齐没打开页面时漏掉的暴涨暴跌 */
   function startBackfill() {
     if (bfStarted) return;
-    /* v453：恢复 H5 原本的 24h 历史回溯（用户正常访问行为）。v452 误关，已撤回。 */
+    /* v453：恢复 H5 原本的历史回溯（用户正常访问行为）。v452 误关，已撤回。
+     * v540：回溯窗口 24h→72h，配合「版本清池只挂钩 DATA_VER」——清池/断档后
+     * 一次把近 72h 拉回来，避免池子长时间处于低位。 */
     if (!w.LiveNews || !w.LiveNews.backfill) return;
 
     let st = null;
     try { st = w.NewsPool ? w.NewsPool.stats() : null; } catch (e) { st = null; }
     let lastAt = 0;
     try { lastAt = Number(store.get('mm_bfAt', 0)) || 0; } catch (e) { lastAt = 0; }
-    // 池子已经覆盖满 24 小时、且 6 小时内回溯过 → 跳过，别每次刷新都去翻页
-    if (st && st.total >= 20 && st.spanH >= 23 && Date.now() - lastAt < 6 * 3600 * 1000) return;
+    // 池子已经覆盖满 72 小时、且 6 小时内回溯过 → 跳过，别每次刷新都去翻页
+    if (st && st.total >= 20 && st.spanH >= 71 && Date.now() - lastAt < 6 * 3600 * 1000) return;
 
     bfStarted = true;
     try { store.set('mm_bfAt', Date.now()); } catch (e) {}
 
-    w.LiveNews.backfill(24, items => {
+    w.LiveNews.backfill(72, items => {
       if (!items || !items.length) return;
       let added = 0, merged = 0;
       items.forEach(it => {
@@ -9711,13 +9712,15 @@
      *   还存在的问题，我现在每次都要手动到 app 后台清除数据，很麻烦，
      *   而且这样操作我的设置也会被重置」。
      *
-     * 为什么必须整池清掉、而不是只是重算分级：
-     * 池子里存的是**已经合并过的结果**（重复条目早已被并成一条、其余被丢弃），
-     * 去重规则改好以后，重新 enrich 也变不回那些被扔掉的原文。
-     * 所以口径变了（DATA_VER 或 GRADE_VER 任一变化）就整池清空、重新抓一轮。
+     * v540（2026-11-22 快讯在库 700-800→167 排查）：清池只挂钩 DATA_VER（挂载映射
+     *   规则），**不再挂钩 GRADE_VER**。原因：池子里每条已存 gv，hydrateFromPool 对
+     *   gv 不匹配的条目会按当前口径重算，且判 C / 失败都保留原级不丢（见 hydrateFromPool），
+     *   分级微调本就不需要清池；而纠错单制度让 GRADE_VER 高频 +1，若继续清池，
+     *   每台设备的 72h 池会被反复归零、永远攒不满（用户原话「以前 700-800 条，现在 167」）。
+     *   去重规则变更的「旧合并残留」由 72h 自然滚动兜底，最坏只残留 72h。
      * 只删 mm_pool_v2 这一个键：主题、档位、标红开关、标级纠错全部原样保留。 */
     try {
-      const dv = DATA_VER + '|' + gradeVerOf();
+      const dv = DATA_VER;
       const prev = store.get('mm_data_ver', null);
       if (prev !== null && prev !== dv) {
         if (w.NewsPool && typeof w.NewsPool.clear === 'function') w.NewsPool.clear();

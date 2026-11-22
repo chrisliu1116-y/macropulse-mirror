@@ -6482,7 +6482,11 @@
    * 首屏冷启动会把这些请求和 collect 的 11 个源一起灌进服务端代理，实测把整页拖 1~2 分钟、
    * 用户体感「卡住 / 源一直不接入」。收敛到 10/6/6（约 22 页）足够覆盖 24 小时，
    * 且 backfill 整体加了 55s 熔断，绝不会无限挂。 */
-  const BF_PAGES = { wscn: 10, sina: 6, ths: 6 };
+  /* v540：回溯窗口 24h→72h，并补财联社(cls，签名 URL 翻页)/格隆汇(glh，单页)。
+   * 页数按 72h 上调：见闻 ~40 条/页 ≈ 1.2h/页 → 16 页；新浪/同花顺 50 条/页 ≈ 2h/页 → 10 页；
+   * 财联社 50 条/页 ≈ 1.5h/页 → 12 页。backfill 是启动后 1.2s 异步后台跑(不阻塞首屏)，
+   * 且有 70s 熔断兜底，翻页上限提高不会拖慢首屏。 */
+  const BF_PAGES = { wscn: 16, sina: 10, ths: 10, cls: 12 };
   const BF_MAX = 600;              // 回溯后保留的条目上限（按 ts 取最新）
 
   function bfOldest(list) {
@@ -6541,26 +6545,101 @@
     return out;
   }
 
+  /* v540：财联社回溯 —— 复用 fetchCls 的签名 URL 翻页，但不碰 cursor，
+   * 按 cut(毫秒) 往回翻，翻满 BF_PAGES.cls 页或翻过 cut 就停。 */
+  async function bfCls(cut) {
+    const out = [];
+    const floor = Math.floor(cut / 1000);          // 财联社 ctime 是秒级 epoch
+    const seen = new Set();
+    let last = Math.floor(Date.now() / 1000);
+    for (let p = 0; p < BF_PAGES.cls; p++) {
+      let raw;
+      try {
+        raw = await viaProxy(clsSignedUrl(last, 50), {
+          timeout: 22000,
+          check: b => String(b).indexOf('"roll_data"') >= 0 || String(b).indexOf('"errno"') >= 0,
+        });
+      } catch (e) { break; }
+      const i = raw.indexOf('{');
+      if (i < 0) break;
+      let data;
+      try { data = JSON.parse(raw.slice(i)); } catch (e) { break; }
+      if (data && data.errno !== 0 && data.errno !== undefined) break;
+      const list = (data && data.data && data.data.roll_data) || [];
+      if (!list.length) break;
+      let oldest = last;
+      for (const it of list) {
+        const ct = Number(it.ctime || 0);
+        if (!ct) continue;
+        if (ct < oldest) oldest = ct;
+        const id = 'cls-' + String(it.id || Math.abs(hashStr(it.content || '')));
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const content = clean(it.content || '');
+        if (!content) continue;
+        let title = clean(it.title || '');
+        let brief = content;
+        if (!title) {
+          const m = /^【(.+?)】\s*([\s\S]*)$/.exec(content);
+          if (m) { title = clean(m[1]); brief = clean(m[2]) || content; }
+          else title = firstSentence(content, 60);
+        }
+        if (!title) continue;
+        out.push({
+          id: id,
+          ts: ct * 1000,
+          title: title,
+          brief: brief,
+          src: '财联社',
+          url: it.id ? 'https://www.cls.cn/detail/' + it.id : '',
+          important: /^[AB]$/.test(String(it.level || '').toUpperCase())
+            || Number(it.recommend) === 1,
+          impIdx: /^[AB]$/.test(String(it.level || '').toUpperCase()) ? 2 : 0,
+          stocks: (it.stock_list || []).map(s => {
+            const code = String(s).split('.')[0].replace(/\D/g, '');
+            return /^\d{6}$/.test(code) ? code : null;
+          }).filter(Boolean),
+        });
+      }
+      if (!oldest || oldest <= floor) break;
+      last = oldest - 1;
+    }
+    return out;
+  }
+
+  /* v540：格隆汇回溯 —— 单页 SSR（无翻页接口），parseGlh 内部已按 24h 过滤。 */
+  async function bfGlh(cut) {
+    try {
+      const raw = await viaProxy('https://m.gelonghui.com/live', {
+        timeout: 22000, needRaw: true,
+        check: b => String(b).indexOf('live-card') >= 0,
+      });
+      return parseGlh(raw);
+    } catch (e) { return []; }
+  }
+
   /**
-   * 回溯过去 hours 小时的快讯（默认 24）。
+   * 回溯过去 hours 小时的快讯（默认 72）。
    * @param {number}   hours
    * @param {function} onBatch 拿到已富化、已去重的条目数组（可能为空数组）
    * @returns {Promise<{items:Array, stats:Object}>}
    */
   async function backfill(hours, onBatch) {
     const t0 = Date.now();
-    const h = (hours == null || !isFinite(hours)) ? 24 : Number(hours);
+    const h = (hours == null || !isFinite(hours)) ? 72 : Number(hours);
     const cut = t0 - h * 3600 * 1000;
 
-    /* 55s 熔断：三个回溯任务（各自已串行翻页）整体再套一层超时，
+    /* 70s 熔断：五个回溯任务（各自已串行翻页）整体再套一层超时，
      * 万一某个外站卡死，到点直接拿已抓到的部分返回，不让回溯无限挂、拖慢整页。 */
     const settled = await Promise.race([
       Promise.all([
         bfWSCN(cut).catch(() => []),
         bfSina(cut).catch(() => []),
         bfTHS(cut).catch(() => []),
+        bfCls(cut).catch(() => []),
+        bfGlh(cut).catch(() => []),
       ]),
-      new Promise(res => setTimeout(() => res([[], [], []]), 55000)),
+      new Promise(res => setTimeout(() => res([[], [], [], [], []]), 70000)),
     ]);
 
     let raw = [];
@@ -6609,7 +6688,7 @@
         hours: h,
         raw: raw.length,
         kept: kept.length,
-        bySource: { wscn: settled[0].length, sina: settled[1].length, ths: settled[2].length },
+        bySource: { wscn: settled[0].length, sina: settled[1].length, ths: settled[2].length, cls: settled[3].length, glh: settled[4].length },
         ms: Date.now() - t0,
       },
     };
