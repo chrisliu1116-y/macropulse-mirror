@@ -513,6 +513,9 @@ body.light .eff-idx-menu button.on{background:#e8efff;color:#1f5cc0}
 .snr{font-size:10.5px;color:var(--tx3);margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .snr b{color:var(--tx2);font-family:var(--mono)}
 .snr-note{color:var(--tx3);border-left:1px solid var(--line2);padding-left:6px}
+/* v541：刷新中的状态字轻微呼吸，强化「正在刷新」的进行中感；刷新结束该节点整体消失 */
+.snr-note.refreshing{color:var(--accent);animation:snrPulse 1.1s ease-in-out infinite}
+@keyframes snrPulse{0%,100%{opacity:.45}50%{opacity:1}}
 
 /* ---------------- 逐源状态 ---------------- */
 /* 逐源状态：不再折行堆两排，改成单行横滑，首屏高度让给快讯本身 */

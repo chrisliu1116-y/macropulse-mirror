@@ -472,6 +472,7 @@
     demoIdx: 0,
     lastAlarm: null,
     flashState: 'off',
+    refreshing: false,    // v541：用户主动下拉刷新中（顶部显示「刷新中…」，结束即消失）
     liveStats: null,
     activeAlerts: {},     // key → 异动结果（未归因/已归因）
     alt: {},              // key → 链上/延展时段替代价
@@ -1977,10 +1978,18 @@
     }
     const live = S.news.filter(n => n.live === true).length;
     const other = S.news.length - live;
-      box.innerHTML = live
-      ? `<b>${live}</b> 条在库${other ? ` · <b>${other}</b> 条示例/演示` : ''}
-         <span class="snr-note">${S.flashState === 'live' ? '实时抓取中' : (S.flashState === 'connecting' ? '正在接入新闻源…' : '快讯源当前未接入，保留上次抓到的内容')}</span>`
-      : `<b>0</b> 条 · <span class="snr-note">${S.flashState === 'connecting' ? '正在接入新闻源…' : '未接入真实快讯源 · 本终端不提供任何伪造新闻兜底'}</span>`;
+    /* v541：状态文案只在「真在刷」或「没接入」时出现。
+     *   - 用户主动下拉刷新中 → 「刷新中…」，刷新结束即消失（给用户明确的完成信号）
+     *   - 首屏接入中 → 「正在接入新闻源…」
+     *   - 已接入且空闲 → 不显示任何状态字（原「实时抓取中」是常驻说明，容易被误读成
+     *     一直在加载/卡住，用户明确要求删掉）
+     *   - 未接入 → 保留提示 */
+    const note = S.refreshing ? '刷新中…'
+      : S.flashState === 'connecting' ? '正在接入新闻源…'
+      : S.flashState === 'live' ? '' : '快讯源当前未接入，保留上次抓到的内容';
+    box.innerHTML = live
+      ? `<b>${live}</b> 条在库${other ? ` · <b>${other}</b> 条示例/演示` : ''}${note ? ` <span class="snr-note${S.refreshing ? ' refreshing' : ''}">${note}</span>` : ''}`
+      : `<b>0</b> 条 · <span class="snr-note${S.refreshing ? ' refreshing' : ''}">${note || '未接入真实快讯源 · 本终端不提供任何伪造新闻兜底'}</span>`;
   }
 
   /* ---------------- 逐源状态 ----------------
@@ -7367,6 +7376,11 @@
     if (pullBusy) return;
     pullBusy = true;
     pullHintSet(46, false, '正在拉取最新快讯…');
+    /* v541：顶部状态行显示「刷新中…」，刷新结束（成功/失败）立刻消失 ——
+     * 给用户一个明确的「刷新完成」信号（原来那行是常驻的「实时抓取中」，
+     * 从界面上看不出到底刷没刷完，用户反馈「一直显示抓取中」）。 */
+    S.refreshing = true;
+    try { renderSNR(); } catch (e) {}
     const before = S.news.length;
     try {
       await pollFlash(true);
@@ -7374,9 +7388,12 @@
       pullToast(delta > 0 ? '已拉取最新快讯 · 新增 ' + delta + ' 条' : '已是最新 · 无新增快讯');
     } catch (e) {
       pullToast('刷新未完成，25 秒后会自动重试');
+    } finally {
+      S.refreshing = false;
+      try { renderSNR(); } catch (e) {}
+      pullHintSet(0, false, '下拉刷新快讯');
+      pullBusy = false;
     }
-    pullHintSet(0, false, '下拉刷新快讯');
-    pullBusy = false;
   }
   /* ---------------- 重载后恢复滚动位置 ----------------
    * 微信 X5/XWeb 等 webview 的下拉刷新是 webview 层实现的（不走浏览器的
