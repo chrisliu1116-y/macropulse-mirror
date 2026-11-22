@@ -9386,6 +9386,36 @@
     if (bell) bell.hidden = n <= 0;
     if (bellN) bellN.textContent = n > 99 ? '99+' : String(n);
   }
+  /* v538【末位淘汰APP确认】GHA 标记 _archive_candidate 的卡，由用户勾选确认归档。 */
+  const ARCHIVE_KEY = 'mm_archive_candidates';
+  function askArchiveConfirm(cands) {
+    const mask = document.getElementById('archiveAsk');
+    if (!mask || !cands || !cands.length) return;
+    mask.hidden = false;
+    const list = document.getElementById('acaArList');
+    if (list) {
+      list.innerHTML = cands.map(x =>
+        '<label class="aca-ar-item"><input type="checkbox" value="' + esc(x.cid) + '">' +
+        '<span>' + esc(x.title || x.cid) + '</span></label>').join('');
+    }
+    const yes = document.getElementById('acaArYes'), later = document.getElementById('acaArLater');
+    const cleanup = () => { mask.hidden = true; if (yes) yes.onclick = null; if (later) later.onclick = null; };
+    if (yes) yes.onclick = () => {
+      const picked = Array.from((list || {}).querySelectorAll ? list.querySelectorAll('input:checked') : [])
+        .map(x => x.value);
+      if (picked.length) {
+        try {
+          fetch('https://macropulse-api.pages.dev/__card-archive-confirm', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: picked.map(cid => ({ cid,
+              title: (cands.find(c => c.cid === cid) || {}).title || '', ts: Date.now() })) })
+          }).catch(() => {});
+        } catch (e) {}
+      }
+      cleanup();
+    };
+    if (later) later.onclick = cleanup;
+  }
   function queueAutoCardConfirm(items) {
     const pending = getPendingCards();
     let added = 0;
@@ -9404,10 +9434,21 @@
     mask.hidden = false;
     const item = pending[0];
     const c = item.c, cid = item.cid;
-    const t = document.getElementById('acaTitle'), s = document.getElementById('acaSum'), ic = document.getElementById('acaIcon');
-    if (t) t.textContent = c.title || '新事件';
-    if (s) s.textContent = c.summary || 'LLM 聚合到一组新快讯，建议建卡跟踪。';
+    const nm = document.getElementById('acaName'), s = document.getElementById('acaSum'), ic = document.getElementById('acaIcon');
+    if (nm) nm.value = (c.proposed_name || c.title || '新事件').slice(0, 16);
+    if (s) s.textContent = c.proposed_desc || c.summary || 'LLM 聚合到一组新快讯，建议建卡跟踪。';
     if (ic) ic.textContent = c.icon || '📌';
+    /* v538：展示预整理详情——Polymarket链接 + 关联新闻 + 关注看点 */
+    const detail = document.getElementById('acaDetail');
+    if (detail) {
+      const parts = [];
+      if (c.poly_url) parts.push('<a href="' + esc(c.poly_url) + '" target="_blank" rel="noopener">🔗 Polymarket 盘口</a>');
+      if (c.polymarket && c.polymarket.volume) parts.push('24h成交额 <b>$' + Number(c.polymarket.volume).toLocaleString() + '</b>');
+      if (c.scope && c.scope.stage_focus && c.scope.stage_focus.length) parts.push('看点：' + esc(c.scope.stage_focus.slice(0,3).join(' / ')));
+      if (c.related_news && c.related_news.length) parts.push('<span class="aca-nws">关联新闻：' + c.related_news.map(n => '<i>· ' + esc(String(n).slice(0,50)) + '</i>').join('') + '</span>');
+      detail.innerHTML = parts.join(' · ');
+      detail.hidden = !parts.length;
+    }
     const yes = document.getElementById('acaYes'), no = document.getElementById('acaToggle');
     const later = document.getElementById('acaLater'), opts = document.getElementById('acaRejectOpts');
     if (opts) opts.hidden = true;
@@ -9422,14 +9463,18 @@
       nextAutoCardAsk();
     };
     if (yes) yes.onclick = () => {
-      if (!(w.EVENTS || []).some(ev => ev.id === cid)) w.EVENTS.push(item.ev);
+      /* v538：用户在APP改的名——本地卡片立即用改后的名，并回传GHA供下班Gemini写内容用 */
+      const newName = (document.getElementById('acaName') || {}).value;
+      const finalEv = item.ev;
+      if (finalEv && newName && newName.trim()) finalEv.title = newName.trim().slice(0, 16);
+      if (!(w.EVENTS || []).some(ev => ev.id === cid)) w.EVENTS.push(finalEv);
       /* v526【Phase3·确认回执】点「加入」才回传 GHA：未确认前 GHA 绝不调 Gemini。
-       * POST 到 CF /__card-confirm（幂等 cid 去重），失败静默（不阻断本地入卡）。 */
+       * v538：回执带 name（用户改名）。POST CF /__card-confirm，失败静默。 */
       try {
         fetch('https://macropulse-api.pages.dev/__card-confirm', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ items: [{ cid: cid, title: item.c && item.c.title || '',
-            source: 'polyradar', ts: Date.now() }] })
+            name: (newName || '').trim().slice(0, 16), source: 'polyradar', ts: Date.now() }] })
         }).catch(() => {});
       } catch (e) {}
       try { renderEvent && renderEvent(); } catch (e) {}
@@ -9549,7 +9594,12 @@
             return !x.until || x.until > now;
           });
           const pending = [];
+          const archiveCands = [];   // v538：末位淘汰候选，推APP确认
           Object.keys(cards).forEach(cid => {
+            // v538：GHA 标记的淘汰候选 → 收集（不管是不是 auto_ 卡）
+            if (cards[cid] && cards[cid]._archive_candidate) {
+              archiveCands.push({ cid, title: cards[cid].title || cid });
+            }
             if (cid.indexOf('auto_') !== 0) return;
             if ((w.EVENTS || []).some(ev => ev.id === cid)) return;
             const c = cards[cid];
@@ -9563,6 +9613,14 @@
                 _dormant: !!c.dormant, _archived: !!c.archived } });
           });
           if (pending.length) queueAutoCardConfirm(pending);
+          // v538：末位淘汰候选——避免每班次重复弹，用 sessionStorage 记录已提示过的批次
+          if (archiveCands.length) {
+            try {
+              const sig = archiveCands.map(x => x.cid).sort().join(',');
+              const shown = sessionStorage.getItem('mm_archive_shown');
+              if (shown !== sig) { askArchiveConfirm(archiveCands); sessionStorage.setItem('mm_archive_shown', sig); }
+            } catch (e) { askArchiveConfirm(archiveCands); }
+          }
           // 排序：活跃卡在前，休眠/归档下沉
           w.EVENTS.sort((a, b) => {
             const rank = e => (e._archived ? 2 : e._dormant ? 1 : 0);

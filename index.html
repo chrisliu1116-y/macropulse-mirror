@@ -7,10 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>异动看板 · MACRO PULSE</title>
-<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=535">
-<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=535">
-<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=535">
-<link rel="stylesheet" href="assets/css/app.css?v=535">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png?v=536">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png?v=536">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png?v=536">
+<link rel="stylesheet" href="assets/css/app.css?v=536">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="apple-mobile-web-app-title" content="异动看板">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -37,16 +37,27 @@
 
 <div id="aiAlert" class="ai-alert" hidden>🚨 AI已断开·规则兜底</div>
 <div id="autoCardAsk" class="aca-mask" hidden><div class="aca-box">
-  <div class="aca-h">发现新事件</div>
-  <div class="aca-body"><div class="aca-ic" id="acaIcon">📌</div><div><b id="acaTitle">—</b><p id="acaSum">—</p></div></div>
-  <div class="aca-tip">LLM 聚合到这个新事件，是否加入事件卡片？</div>
+  <div class="aca-h">发现新事件 · 确认加入</div>
+  <div class="aca-body"><div class="aca-ic" id="acaIcon">📌</div><div style="flex:1">
+    <label class="aca-namelabel" for="acaName">卡片名称（可修改）</label>
+    <input id="acaName" class="aca-name" maxlength="16" placeholder="输入卡片名称">
+    <p id="acaSum">—</p>
+  </div></div>
+  <div class="aca-detail" id="acaDetail" hidden></div>
+  <div class="aca-tip" id="acaTip">确认后将在下一班次由 Gemini 撰写完整内容。名称可改。</div>
   <div class="aca-reject-opts" id="acaRejectOpts" hidden>
     <span>拒绝后本事件不再提示：</span>
     <label><input type="radio" name="acaTerm" value="7">7天</label>
     <label><input type="radio" name="acaTerm" value="30" checked>30天</label>
     <label><input type="radio" name="acaTerm" value="forever">永远</label>
   </div>
-  <div class="aca-btns"><button id="acaLater" class="aca-later">稍后再说</button><button id="acaToggle" class="aca-no">不加入</button><button id="acaYes" class="aca-yes">加入卡片</button></div>
+  <div class="aca-btns"><button id="acaLater" class="aca-later">稍后再说</button><button id="acaToggle" class="aca-no">不加入</button><button id="acaYes" class="aca-yes">确认加入</button></div>
+</div></div>
+<div id="archiveAsk" class="aca-mask" hidden><div class="aca-box">
+  <div class="aca-h">卡片容量已满 · 确认归档</div>
+  <div class="aca-tip">活跃卡片超过上限，请选择要归档的卡片（可在APP确认）。未确认的卡片会保留。</div>
+  <div class="aca-ar-list" id="acaArList"></div>
+  <div class="aca-btns"><button id="acaArLater" class="aca-later">稍后处理</button><button id="acaArYes" class="aca-yes">确认归档所选</button></div>
 </div></div>
 <div class="topbar">
   <header class="hdr">
@@ -205,35 +216,35 @@
 
 <!-- v237：23 个同步脚本原本串行阻塞解析。preload 只提前并行下载、
      不改变原有的按序执行，零行为风险；挑体积最大的几个收益最高。 -->
-  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=535">
-  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=535">
-  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=535">
-  <link rel="preload" as="script" href="assets/js/app.js?v=535">
-  <link rel="preload" as="script" href="assets/js/api.js?v=535">
-<script src="vendor/lightweight-charts.standalone.production.js?v=535"></script>
-<script src="assets/js/cn-stocks.js?v=535"></script>
-<script src="assets/js/universe.js?v=535"></script>
-<script src="assets/js/session.js?v=535"></script>
-<script src="assets/js/topics.js?v=535"></script>
-<script src="assets/js/news-crypto.js?v=535"></script>
-<script src="assets/js/news-zh.js?v=535"></script>
-<script src="assets/js/pool.js?v=535"></script>
-<script src="assets/js/news-live-client.js?v=535"></script>
-<script src="assets/js/api.js?v=535"></script>
-<script src="assets/js/alert.js?v=535"></script>
-<script src="assets/js/indicator.js?v=535"></script>
-<script src="assets/js/drawing.js?v=535"></script>
-<script src="assets/js/charts.js?v=535"></script>
-<script src="assets/js/news-spike.js?v=535"></script>
-<script src="assets/js/anomaly.js?v=535"></script>
-<script src="assets/js/volprofile.js?v=535"></script>
-<script src="assets/js/verify.js?v=535"></script>
-<script src="assets/js/predict.js?v=535"></script>
-<script src="assets/js/hot-events.js?v=535"></script>
-<script src="assets/js/events.js?v=535"></script>
-<script src="assets/js/account.js?v=535"></script>
-<script src="assets/js/app.js?v=535"></script>
-<script src="assets/js/coverage-probe.js?v=535"></script>
+  <link rel="preload" as="script" href="vendor/lightweight-charts.standalone.production.js?v=536">
+  <link rel="preload" as="script" href="assets/js/cn-stocks.js?v=536">
+  <link rel="preload" as="script" href="assets/js/news-live-client.js?v=536">
+  <link rel="preload" as="script" href="assets/js/app.js?v=536">
+  <link rel="preload" as="script" href="assets/js/api.js?v=536">
+<script src="vendor/lightweight-charts.standalone.production.js?v=536"></script>
+<script src="assets/js/cn-stocks.js?v=536"></script>
+<script src="assets/js/universe.js?v=536"></script>
+<script src="assets/js/session.js?v=536"></script>
+<script src="assets/js/topics.js?v=536"></script>
+<script src="assets/js/news-crypto.js?v=536"></script>
+<script src="assets/js/news-zh.js?v=536"></script>
+<script src="assets/js/pool.js?v=536"></script>
+<script src="assets/js/news-live-client.js?v=536"></script>
+<script src="assets/js/api.js?v=536"></script>
+<script src="assets/js/alert.js?v=536"></script>
+<script src="assets/js/indicator.js?v=536"></script>
+<script src="assets/js/drawing.js?v=536"></script>
+<script src="assets/js/charts.js?v=536"></script>
+<script src="assets/js/news-spike.js?v=536"></script>
+<script src="assets/js/anomaly.js?v=536"></script>
+<script src="assets/js/volprofile.js?v=536"></script>
+<script src="assets/js/verify.js?v=536"></script>
+<script src="assets/js/predict.js?v=536"></script>
+<script src="assets/js/hot-events.js?v=536"></script>
+<script src="assets/js/events.js?v=536"></script>
+<script src="assets/js/account.js?v=536"></script>
+<script src="assets/js/app.js?v=536"></script>
+<script src="assets/js/coverage-probe.js?v=536"></script>
 <!-- v287：账号 SDK 改为 async 且排在 app.js 之后。它此前是同步脚本，
      会让整个 HTML 解析停下等 CDN（实测 0.35~1.24s），而 boot() 挂在
      DOMContentLoaded 上，等于每段首屏都被外部 SDK 拖住。async 后
