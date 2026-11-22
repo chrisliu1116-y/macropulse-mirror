@@ -9718,6 +9718,33 @@
         console.log('[v505] 已清除模拟测试假新闻 ' + removed + ' 条');
       }
     } catch (e) {}
+    /* v546【清存量川普空壳帖】v73 抓取端已把纯媒体/RT 空壳帖整条过滤；
+     * 但设备池里之前抓到的空壳卡不会自动消失（用户报「点进去都是没正文的链接」）。
+     * 一次性清洗：川普源里 title 为 RT 链接 / Quoted 占位 / 模板式标题的条目直接移除。 */
+    try {
+      if (!localStorage.getItem('mm_trump_shell_clean_v546')) {
+        const isShell = (x) => {
+          if (!x || !/川普/.test(String(x.src || ''))) return false;
+          const t = String(x.title || '');
+          return /truthsocial\.com/i.test(t) || /^\s*RT\s*[:：]/i.test(t)
+            || /\bQuoted\s+/i.test(t) || /^(Image|Video|Quote)\s+post\s+from/i.test(t);
+        };
+        let removedT = 0;
+        const raw3 = localStorage.getItem('mm_pool_v2');
+        if (raw3) {
+          const pd3 = JSON.parse(raw3);
+          if (pd3 && Array.isArray(pd3.items)) {
+            const before = pd3.items.length;
+            pd3.items = pd3.items.filter(x => !isShell(x));
+            removedT = before - pd3.items.length;
+            localStorage.setItem('mm_pool_v2', JSON.stringify(pd3));
+          }
+        }
+        try { S.news = (S.news || []).filter(x => !isShell(x)); } catch (e) {}
+        localStorage.setItem('mm_trump_shell_clean_v546', '1');
+        console.log('[v546] 已清除川普空壳快讯 ' + removedT + ' 条');
+      }
+    } catch (e) {}
     try { initAlertEngine(); } catch (e) {}
     try { loadLlmChannel(); setInterval(loadLlmChannel, 10 * 60 * 1000); } catch (e) {}
     /* 自动化/调试抓手：闭包读模块级 chart，任何时候调用都指向「当前真正在用的」图表 */

@@ -6160,11 +6160,35 @@
         const el = it.querySelector(tag);
         return el ? clean(el.textContent) : '';
       };
-      let body = q('description') || q('title');
-      body = stripHtml(body) || q('title');
-      body = String(body).replace(/View image|View video|\s+/g, ' ').trim();
-      if (!body || body.length < 8) continue;
-      if (/^Image post from/i.test(body)) continue;   // 纯图片帖，无信息量
+      const rawTitle = q('title');
+      /* v73【修「川普源点进去没正文」·主判据】上游约 2/3 帖子的 title 是模板式
+       * 「Quote post from … / Video post from … / Image post from …」——这类帖本身
+       * 只有图/视频或一条转发链接，没有文字正文（description 清掉 URL/媒体后
+       * 只剩一个孤立人名）。这类空壳整条跳过，不进池。
+       * 有正文的帖子 title 就是正文开头（「OPEN BORDERS DESTROY NATIONS!…」），不受影响。 */
+      if (/^(Image|Video|Quote)\s+post\s+from/i.test(rawTitle)) continue;
+      let body = q('description') || rawTitle;
+      body = stripHtml(body) || rawTitle;
+      /* v73【修「川普源点进去没正文」】上游 RSS 约 2/3 是纯媒体/RT 空壳帖：
+       * description 只有「RT: https://truthsocial.com/… View image Quoted XXX View video」，
+       * 没有任何文字。原代码只删 View image/video，把 URL 当正文留下 ——
+       * 用户点进去就只看到一串链接 + Quoted 占位符。
+       * 这里剥掉 URL / 媒体占位 / RT 前缀 / Quoted 尾巴，剩余实质文字 <8 字直接跳过；
+       * 「Quote post from … / Image post from …」这类标题占位符也跳过，不再进池。 */
+      body = String(body)
+        .replace(/View image|View video/gi, '')
+        .replace(/https?:\/\/[^\s<>\]]+/gi, '')
+        .replace(/^\s*RT\s*[:：]?\s*/i, '')
+        .replace(/\bQuoted\s+.+$/i, '')
+        .replace(/[>\]]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (body.length < 8) continue;
+      /* 源站把人名/机构做了 {{PERSON_xxx}} 脱敏；剥掉占位符后没剩实质文字的
+       * 仍是空壳（前面 5 条就只剩 Donald J. Trump），同样不进池。
+       * 正文里夹着占位符的（「work with {{PERSON_xxx}} should he…」）剥掉后仍有内容，保留。 */
+      if (body.replace(/\{\{[^}]+\}\}/g, '').trim().length < 8) continue;
+      if (/^(Image post from|Quote post from)/i.test(body)) continue;   // 纯图片/引用帖占位，无信息量
       const link = q('link');
       out.push({
         id: 'trump-' + Math.abs(hashStr(link || body)),
