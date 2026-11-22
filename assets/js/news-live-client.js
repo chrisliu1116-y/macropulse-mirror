@@ -6233,14 +6233,16 @@
        * 是川普源在 6s 软超时里必然超时的主因（代理取 RSS 还要几秒）。
        * 收到前 4 条、每条最多 3 段（540 字）→ 最多 12 次，省约 60%；
        * 540 字覆盖绝大多数 Truth Social 推文，超长推文详情页仍有 titleEn 原文。 */
-      for (const it of out.slice(0, 4)) {
+      /* v551：翻译改走服务端智谱（单段 2~7s），3 条 × 2 段 = 最多 6 次串行，
+       * 比原来的 4 条 × 3 段更稳；抓取阶段不再被翻译拖到 6s 软超时之外。 */
+      for (const it of out.slice(0, 3)) {
         const src = String(it.titleEn || '');
         if (!src || cjkCount(src) >= 6) continue;
         const cap = Math.min(src.length, 540);
         const segs = [];
         for (let i = 0; i < cap; i += 180) segs.push(src.slice(i, i + 180));
         const zhParts = [];
-        for (const seg of segs.slice(0, 3)) {
+        for (const seg of segs.slice(0, 2)) {
           try {
             const zh = await P.toZh(seg);
             zhParts.push(zh && cjkCount(zh) >= 4 ? zh : seg);
@@ -6565,7 +6567,10 @@
      * 只有翻译服务变慢时才会超时；超时后保留原文继续 enrich，不阻塞首屏、不误删。 */
     /* v72：预算 2s→4s（配合翻译缓存：命中缓存的条目 0 延迟，真正需要翻译的更少，
      * 4s 足够翻完一批；2s 太紧会把慢一点的翻译整批放弃 → 英文稿长期显示原文）。 */
-    await zhPass(raw, 4000);
+    /* v551：预算 4s→8s。翻译改走服务端智谱后，实测首次 2~7s（智谱波动），
+     * 4s 会把慢的那批整批放弃 → 英文稿继续显示原文（用户截图就是这个问题）。
+     * 服务端有内存缓存 + 前端 dict 缓存，同一文本只慢一次，后续轮次瞬时。 */
+    await zhPass(raw, 8000);
 
     const enriched = [];
     raw.forEach(r => {
