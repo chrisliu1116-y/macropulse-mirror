@@ -214,7 +214,7 @@
   function fixPrompt() {
     const json = fixJson();
     if (!json) return '';
-    return '请严格按《误判台账》的四桶归因法处理以下纠错单，严禁突破 tools/test_grade.js 的反补丁棘轮锁上限（gradeCoreRules ≤ 107 / Gates ≤ 29 / 总和 ≤ 136）：\n\n'
+    return '请严格按《误判台账》的四桶归因法处理以下纠错单，严禁突破 tools/test_grade.js 的反补丁棘轮锁现行 v2.0 上限（gradeCoreRules ≤ 118 / Gates ≤ 35 / 总和 ≤ 153，只准下调不准上调）：\n\n'
       + '【客户端纠错单导出数据】：\n' + json + '\n\n'
       + '【强制执行要求】：\n'
       + '1. 第 0 步（读诊断与原因）：读取每条记录的 `ruleId`、`stage` 以及我在 `reason` 字段填写的业务定级口径。\n'
