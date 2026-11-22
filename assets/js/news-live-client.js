@@ -6244,8 +6244,9 @@
   const srcOk = new Map();
 
   /* 一轮最多翻这么多条，避免首屏被外部翻译接口拖住；
-   * 每条约 1~2 秒，并行跑，整轮多花 2 秒左右。没翻到的下一轮继续。 */
-  const ZH_CAP = 16;
+   * v554：16→6。翻译改走服务端智谱后，16 条并发会触发智谱限流（实测整批超时、
+   * 标题仍是英文）；6 条并发约 5 秒可翻完，剩余下轮继续（有缓存，越翻越快）。 */
+  const ZH_CAP = 6;
 
   /* v72【修「详情页没翻译」】翻译缓存（原文 → 中文）。此前每轮都把同一批英文条目
    * 重新翻一遍：翻译服务一慢就整批超时，英文条目持续显示原文（用户报的
@@ -6283,9 +6284,19 @@
       if ((!enTitle && !enBrief) || seen.has(t)) continue;
       seen.add(t);
       todo.push(r);
-      if (todo.length >= ZH_CAP) break;
     }
     if (!todo.length) return 0;
+    /* v554：配额有限时优先「订阅源 + 标题仍英文」的 —— 标题是列表第一眼看到的东西，
+     * 比正文更影响阅读；川普/口罩哥是用户点名要看的源，排最前。 */
+    todo.sort((a, b) => {
+      const sa = /川普|口罩哥/.test(String(a.src || '')) ? 0 : 1;
+      const sb = /川普|口罩哥/.test(String(b.src || '')) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      const ta = Z.isEn(String(a.title || '')) ? 0 : 1;
+      const tb = Z.isEn(String(b.title || '')) ? 0 : 1;
+      return ta - tb;
+    });
+    if (todo.length > ZH_CAP) todo.length = ZH_CAP;
     const work = Promise.all(todo.map(async (r) => {
       const src = String(r.title);
       if (Z.isEn(src)) {
