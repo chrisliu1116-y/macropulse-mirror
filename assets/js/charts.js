@@ -365,7 +365,14 @@
             /* total 在后面的 try 块才算，这里分支提前 return 必须自己算
              * （v377 首版引用了未赋值的 total，want=0 → 轴缩到 2 分钟，实测抓到） */
             const full = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sr) : 1380;
-            return { want: full, n: pts.length, fixed: true };
+            /* v72【休市后铺满】原来固定 1380 格锁轴，但源给的商品分时常常只有
+             * 18~20 小时（首点晚于开盘 / 源截断），收盘后仍按 1380 格 → 右侧留一大块
+             * 空白（用户截图：黄金/白银/原油/铜/NYMEX天然气休市后线不到最右）。
+             * 收盘后（Session phase=closed）标 covered，交给 _pinMin 用 fitContent
+             * 铺满、线尾贴右边；盘中仍保持固定开收盘轴，右侧留白表示「今天走到哪」。 */
+            let phase = null;
+            try { phase = (w.Session && w.Session.state) ? ((w.Session.state(key) || {}).phase || null) : null; } catch (eP) {}
+            return { want: full, n: pts.length, fixed: true, covered: phase === 'closed' };
           }
           /* v397【美债也必须固定开收盘】用户口径：10Y / 5Y / 30Y 的分时不能按实际
            * 点数铺满，必须「最左=开盘、最右=收盘」，且**按品种固定、与数据源无关**。
@@ -374,7 +381,11 @@
            * 判定用 sr==='rate'（品种 session 属性），东财/CNBC 哪个源给数都一样。 */
           if (sr === 'rate') {
             const full = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sr) : 1380;
-            return { want: full, n: pts.length, fixed: true };
+            /* v72：与 cmdty 同型问题（源数据不足整场 → 休市后右侧留白），
+             * 收盘后同样标 covered 让 _pinMin fitContent 铺满。 */
+            let phaseR = null;
+            try { phaseR = (w.Session && w.Session.state) ? ((w.Session.state(key) || {}).phase || null) : null; } catch (ePR) {}
+            return { want: full, n: pts.length, fixed: true, covered: phaseR === 'closed' };
           }
           /* v388【用户口径纠正：外汇分时轴要像缩略图一样「固定开收盘时段、
            * 线只走当前进度、右侧留白」，不是铺满全屏】。
