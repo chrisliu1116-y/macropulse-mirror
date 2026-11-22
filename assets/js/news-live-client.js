@@ -6287,11 +6287,18 @@
     }
     if (!todo.length) return 0;
     /* v554：配额有限时优先「订阅源 + 标题仍英文」的 —— 标题是列表第一眼看到的东西，
-     * 比正文更影响阅读；川普/口罩哥是用户点名要看的源，排最前。 */
+     * 比正文更影响阅读；川普/口罩哥是用户点名要看的源，排最前。
+     * v555【关键修正】每轮 collect 都从 RSS 重新解析出新对象，标题又变回英文，
+     * 如果只按「是否英文」排序，前 6 条永远霸占配额、后 6 条永远轮不到
+     * （实测：12 条川普每轮都是同样 6 条中文、6 条英文，永远不变）。
+     * 所以把「已进 ZH_CACHE（翻过）」的排到后面，让配额优先给真正没翻的。 */
     todo.sort((a, b) => {
       const sa = /川普|口罩哥/.test(String(a.src || '')) ? 0 : 1;
       const sb = /川普|口罩哥/.test(String(b.src || '')) ? 0 : 1;
       if (sa !== sb) return sa - sb;
+      const ca = ZH_CACHE.has(String(a.title || '')) ? 1 : 0;
+      const cb = ZH_CACHE.has(String(b.title || '')) ? 1 : 0;
+      if (ca !== cb) return ca - cb;
       const ta = Z.isEn(String(a.title || '')) ? 0 : 1;
       const tb = Z.isEn(String(b.title || '')) ? 0 : 1;
       return ta - tb;
