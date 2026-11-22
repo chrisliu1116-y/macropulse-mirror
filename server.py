@@ -11,6 +11,7 @@ CORS，浏览器直连取不到。以前靠 r.jina.ai / microlink 这类公共�
 """
 import os
 import gzip
+import json
 import base64
 import socket
 import time
@@ -163,11 +164,52 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             pass
 
+    def _send_json(self, code, obj):
+        data = json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except Exception:
+            pass
+
+    def _translate(self):
+        """v548：服务端智谱翻译。免费源(GTX/MyMemory)2026-11 起大面积 429/额度耗尽，
+        浏览器端已不可用；这里用智谱 GLM 翻译并做内存缓存，前端 /__tr 优先调用。"""
+        try:
+            qs = urllib.parse.urlparse(self.path).query
+            q = (urllib.parse.parse_qs(qs).get('q', ['']) or [''])[0].strip()
+        except Exception:
+            q = ''
+        if not q:
+            return self._send_json(400, {'err': 'no q'})
+        q = q[:1500]
+        with _TR_LOCK:
+            hit = _TR_CACHE.get(q)
+        if hit:
+            return self._send_json(200, {'zh': hit, 'cached': True})
+        try:
+            zh = _zhipu_translate(q)
+        except Exception as e:
+            return self._send_json(502, {'err': str(e)[:120]})
+        if zh:
+            with _TR_LOCK:
+                if len(_TR_CACHE) > 1200:
+                    _TR_CACHE.clear()
+                _TR_CACHE[q] = zh
+        return self._send_json(200, {'zh': zh})
+
     def do_GET(self):
         if self.path.startswith('/__proxy'):
             return self._proxy()
         if self.path.startswith('/__trump'):
             return self._trump_feed()
+        if self.path.startswith('/__tr'):
+            return self._translate()
         return super().do_GET()
 
 
@@ -204,6 +246,47 @@ def _trump_loop():
     while True:
         _fetch_trump()
         time.sleep(TRUMP_TTL)
+
+
+# v548【服务端翻译】智谱 GLM。key 只放在服务端（.tr_key 或环境变量），
+# 不进公开仓库；前端 /__tr 调用，命中内存缓存直接返回。
+_TR_CACHE = {}
+_TR_LOCK = threading.Lock()
+
+
+def _zhipu_key():
+    k = os.environ.get('ZHIPU_KEY', '').strip()
+    if k:
+        return k
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.tr_key')
+        with open(p, encoding='utf-8') as f:
+            return f.read().strip()
+    except Exception:
+        return ''
+
+
+def _zhipu_translate(text):
+    key = _zhipu_key()
+    if not key:
+        raise RuntimeError('no zhipu key')
+    payload = json.dumps({
+        'model': 'glm-4-flash',
+        'messages': [{
+            'role': 'user',
+            'content': '把下面英文翻译成简体中文，只输出译文，不要解释、不要加引号：\n' + text,
+        }],
+        'temperature': 0.1,
+    }).encode('utf-8')
+    req = urllib.request.Request(
+        'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+        data=payload,
+        headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        d = json.loads(r.read().decode('utf-8', 'ignore'))
+    ch = (d.get('choices') or [{}])[0]
+    return str((ch.get('message') or {}).get('content') or '').strip()
 
 
 if __name__ == '__main__':

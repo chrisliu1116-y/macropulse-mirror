@@ -245,7 +245,16 @@
     });
   }
 
-  /** 异步翻译：缓存 → 双通道竞速 → 词表 */
+  /* v548【服务端智谱翻译】免费源（GTX / MyMemory）2026-11 起大面积 429 / 当日额度耗尽，
+   * 浏览器端已无法稳定翻译 —— 用户截图里川普推文、格隆汇英文摘要全是英文。
+   * 主站 /__tr 用智谱 GLM 翻译并缓存（key 只在服务端），优先走它；失败再回退原双通道。 */
+  async function viaServer(text) {
+    const u = '/__tr?q=' + encodeURIComponent(String(text).slice(0, 1500));
+    const j = await (await withTimeout(u, 12000)).json();
+    return String((j && j.zh) || '').trim();
+  }
+
+  /** 异步翻译：缓存 → 服务端智谱 → 双通道竞速 → 词表 */
   async function toZh(text) {
     const src = String(text || '').trim();
     if (!src) return '';
@@ -254,7 +263,10 @@
 
     const job = (async () => {
       let out = '';
-      try { out = await raceTranslate(src); } catch (e) { out = ''; }
+      try { out = await viaServer(src); } catch (e) { out = ''; }
+      if (!usable(src, out)) {
+        try { out = await raceTranslate(src); } catch (e) { out = ''; }
+      }
       if (!usable(src, out)) {
         const g = glossary(src);
         // 词表回退也必须「基本是中文」才接受 —— 否则宁可返回空（调用方据此丢弃），
