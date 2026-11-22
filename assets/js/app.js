@@ -9397,6 +9397,13 @@
       list.innerHTML = cands.map(x =>
         '<label class="aca-ar-item"><input type="checkbox" value="' + esc(x.cid) + '">' +
         '<span>' + esc(x.title || x.cid) + '</span></label>').join('');
+      /* v538b：勾选高亮走 class（:has() 在旧 WebView 不支持，双保险） */
+      Array.from(list.querySelectorAll('input[type=checkbox]')).forEach(cb => {
+        cb.addEventListener('change', () => {
+          const lab = cb.closest('.aca-ar-item');
+          if (lab) lab.classList.toggle('on', cb.checked);
+        });
+      });
     }
     const yes = document.getElementById('acaArYes'), later = document.getElementById('acaArLater');
     const cleanup = () => { mask.hidden = true; if (yes) yes.onclick = null; if (later) later.onclick = null; };

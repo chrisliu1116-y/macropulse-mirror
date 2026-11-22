@@ -2826,40 +2826,75 @@ button[data-tab="event"] i{position:relative;display:inline-block}
 .bell-n{position:absolute;top:-6px;right:-8px;min-width:15px;height:15px;padding:0 3px;border-radius:8px;
   background:#e03131;color:#fff;font-size:9px;font-weight:700;line-height:15px;text-align:center}
 .bell-n[hidden]{display:none}
-/* v442：新事件卡确认弹窗 */
-.aca-mask{position:fixed;inset:0;z-index:120;background:rgba(0,0,0,.6);display:grid;place-items:center;padding:24px}
+/* ============ v538b 新卡/归档确认弹窗 · 精修版（深浅色自适应） ============ */
+/* 弹窗容器：入场动画 + 毛玻璃质感遮罩 */
+.aca-mask{position:fixed;inset:0;z-index:120;display:grid;place-items:center;padding:24px;
+  background:rgba(4,7,12,.62);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
 .aca-mask[hidden]{display:none}
-.aca-box{width:min(360px,100%);background:var(--panel);border:1px solid var(--hair);border-radius:16px;
-  padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
-.aca-h{font-size:15px;font-weight:700;margin-bottom:12px;color:var(--accent-tx)}
-.aca-body{display:flex;gap:12px;align-items:flex-start}
-.aca-ic{font-size:28px;flex:0 0 auto}
+.aca-box{width:min(380px,100%);background:var(--panel);border:1px solid var(--hair2);border-radius:18px;
+  padding:0;box-shadow:var(--shadow,0 24px 64px -20px rgba(0,0,0,.55));
+  animation:acaPop .26s cubic-bezier(.22,1.15,.36,1)}
+@keyframes acaPop{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+/* 头部：渐隐分隔的标题带 */
+.aca-h{font-size:14px;font-weight:700;letter-spacing:.4px;color:var(--accent-tx);
+  padding:15px 18px 12px;margin:0;border-bottom:1px solid var(--hair);
+  display:flex;align-items:center;gap:7px}
+.aca-h::before{content:'';flex:0 0 auto;width:4px;height:15px;border-radius:2px;
+  background:linear-gradient(180deg,var(--accent),var(--a));box-shadow:0 0 8px var(--glow1)}
+.aca-box>*:not(.aca-h){margin-left:18px;margin-right:18px}
+.aca-body{display:flex;gap:12px;align-items:flex-start;margin-top:14px}
+.aca-ic{font-size:30px;flex:0 0 auto;filter:drop-shadow(0 4px 10px rgba(0,0,0,.25))}
 .aca-body b{font-size:14px;display:block;margin-bottom:4px}
-.aca-body p{font-size:12px;color:var(--tx2);line-height:1.6;margin:0;display:-webkit-box;
+.aca-body p{font-size:12px;color:var(--tx2);line-height:1.65;margin:0;display:-webkit-box;
   -webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
-.aca-tip{font-size:11px;color:var(--tx3);line-height:1.5;margin:14px 0}
+/* 改名输入框：聚焦发光环 */
+.aca-namelabel{display:block;font-size:10px;font-weight:600;letter-spacing:.5px;color:var(--tx3);
+  text-transform:uppercase;margin-bottom:5px}
+.aca-name{width:100%;box-sizing:border-box;padding:9px 11px;border-radius:10px;
+  border:1px solid var(--hair2);background:var(--bg2);color:var(--tx);
+  font-size:14px;font-weight:700;outline:none;transition:border-color .18s,box-shadow .18s}
+.aca-name:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--glow1)}
+.aca-name::placeholder{color:var(--tx3);font-weight:400}
+/* 预整理详情卡：内嵌浅层，成交额/链接/看点分区 */
+.aca-detail{margin-top:11px;padding:10px 12px;border-radius:11px;background:var(--wash);
+  border:1px solid var(--hair);font-size:11px;color:var(--tx2);line-height:1.65;
+  max-height:170px;overflow:auto;overscroll-behavior:contain}
+.aca-detail b{color:var(--tint-a);font-variant-numeric:tabular-nums}
+.aca-detail a{color:var(--accent-tx);text-decoration:none;font-weight:600;
+  border-bottom:1px dotted var(--accent-tx);padding-bottom:1px}
+.aca-detail .aca-nws{display:block;margin-top:7px;padding-top:7px;border-top:1px dashed var(--hair2)}
+.aca-detail .aca-nws i{display:block;font-style:normal;color:var(--tx3);margin-top:4px;
+  padding-left:9px;position:relative}
+.aca-detail .aca-nws i::before{content:'·';position:absolute;left:0;color:var(--accent);font-weight:700}
+.aca-tip{font-size:11px;color:var(--tx3);line-height:1.55;margin:12px 0 0}
 .aca-reject-opts{display:flex;gap:10px;align-items:center;font-size:11px;color:var(--tx2);
-  margin:10px 0;padding:9px;border-radius:8px;background:var(--wash);flex-wrap:wrap}
+  margin:10px 0 0;padding:9px 11px;border-radius:10px;background:var(--wash);
+  border:1px solid var(--hair);flex-wrap:wrap}
 .aca-reject-opts label{cursor:pointer;white-space:nowrap}
 .aca-reject-opts input{accent-color:var(--a);margin-right:2px}
-.aca-btns{display:flex;gap:10px}
-.aca-btns button{flex:1;padding:10px;border-radius:9px;font-size:12px;font-weight:600;border:1px solid var(--hair)}
+/* 按钮组：主按钮强调 + 按压反馈 */
+.aca-btns{display:flex;gap:9px;margin:15px 0 17px}
+.aca-btns button{flex:1;padding:11px 8px;border-radius:11px;font-size:12.5px;font-weight:700;
+  border:1px solid var(--hair2);cursor:pointer;transition:transform .12s,filter .15s,background .15s}
+.aca-btns button:active{transform:scale(.965)}
 .aca-later{background:transparent;color:var(--tx3)}
-.aca-no{background:var(--hair);color:var(--tx2)}
-.aca-yes{background:var(--a);color:#fff;border-color:var(--a)!important}
-/* v538：新卡确认——改名输入 + 预整理详情 + 关联新闻 */
-.aca-namelabel{display:block;font-size:10px;color:var(--tx3);margin-bottom:3px}
-.aca-name{width:100%;box-sizing:border-box;padding:7px 9px;border-radius:8px;
-  border:1px solid var(--hair);background:var(--bg2);color:var(--tx1);font-size:14px;font-weight:700}
-.aca-detail{margin-top:10px;padding:9px 10px;border-radius:8px;background:var(--bg2);
-  border:1px solid var(--hair);font-size:11px;color:var(--tx2);line-height:1.6;max-height:150px;overflow:auto}
-.aca-detail a{color:var(--a);text-decoration:none}
-.aca-detail .aca-nws{display:block;margin-top:5px;padding-top:5px;border-top:1px dashed var(--hair)}
-.aca-detail .aca-nws i{display:block;font-style:normal;color:var(--tx3);margin-top:2px}
-/* v538：末位淘汰确认列表 */
-.aca-ar-list{margin:10px 0;max-height:180px;overflow:auto}
-.aca-ar-item{display:flex;align-items:center;gap:8px;padding:8px 4px;font-size:12px;color:var(--tx1)}
-.aca-ar-item input{accent-color:var(--a)}
+.aca-no{background:var(--wash);color:var(--tx2)}
+.aca-no:hover,.aca-later:hover{filter:brightness(1.15)}
+.aca-yes{background:var(--a);color:#fff;border-color:transparent!important;box-shadow:0 6px 18px -8px var(--a)}
+@supports (background:color-mix(in srgb,red,blue)){
+  .aca-yes{background:linear-gradient(135deg,var(--a),color-mix(in srgb,var(--a) 76%,var(--s)))}
+}
+.aca-yes:hover{filter:brightness(1.08)}
+/* 末位淘汰确认：卡片式勾选列表 */
+.aca-ar-list{margin:13px 0 0;max-height:200px;overflow:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;gap:7px}
+.aca-ar-item{display:flex;align-items:center;gap:10px;padding:10px 12px;font-size:12.5px;
+  font-weight:600;color:var(--tx);border-radius:11px;background:var(--wash);
+  border:1px solid var(--hair);cursor:pointer;transition:border-color .15s,background .15s}
+.aca-ar-item.on{border-color:var(--a);background:var(--glow1)}
+.aca-ar-item:has(input:checked){border-color:var(--a);background:var(--glow1)}
+.aca-ar-item input{accent-color:var(--a);width:16px;height:16px;flex:0 0 auto}
+.aca-ar-item span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* v441：AI 全断红灯告警（两路LLM都挂→回退本地规则） */
 .ai-alert.ai-down{background:linear-gradient(90deg,#b71c1c,#d32f2f);animation:aiPulse 1.6s ease-in-out infinite}
 @keyframes aiPulse{0%,100%{opacity:1}50%{opacity:.72}}
