@@ -6138,11 +6138,27 @@
   async function fetchTrumpTruth() {
     const target = 'https://www.trumpstruth.org/feed';
     let trVia = '';
-    const xml = await viaProxy(target, {
-      timeout: 22000,
-      check: b => String(b).indexOf('<item') >= 0,
-      onVia: id => { trVia = id; },
-    });
+    /* v547【川普源可靠性】优先读主站后台预抓缓存 /__trump —— 服务端直连源站
+     * 不受浏览器 CORS / 6s 软超时影响（此前云端代理转发实测要 13 秒，必挂）。
+     * 缓存未就绪（刚启动/服务端抓失败）才回退原来的浏览器代理通道。 */
+    let xml = '';
+    try {
+      const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      const tm = ctl ? setTimeout(() => { try { ctl.abort(); } catch (e) {} }, 4000) : null;
+      const lr = await fetch('/__trump', { cache: 'no-store', signal: ctl ? ctl.signal : undefined });
+      if (tm) clearTimeout(tm);
+      if (lr.ok) {
+        const t = await lr.text();
+        if (String(t).indexOf('<item') >= 0) { xml = t; trVia = '服务端预抓缓存'; }
+      }
+    } catch (e) { /* 回退浏览器代理 */ }
+    if (!xml) {
+      xml = await viaProxy(target, {
+        timeout: 22000,
+        check: b => String(b).indexOf('<item') >= 0,
+        onVia: id => { trVia = id; },
+      });
+    }
 
     // 代理会把 XML 包在「Title: … Markdown Content:」里，先剥壳
     let raw = String(xml);

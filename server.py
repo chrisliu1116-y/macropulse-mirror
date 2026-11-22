@@ -13,6 +13,8 @@ import os
 import gzip
 import base64
 import socket
+import time
+import threading
 import urllib.request
 import urllib.parse
 import http.server
@@ -133,9 +135,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _trump_feed(self):
+        """返回后台预抓的川普 RSS 缓存 —— 浏览器直连经主站代理要 13 秒、
+        前端 6 秒硬超时必挂；改为服务端每 5 分钟抓一次，前端读缓存瞬时返回。"""
+        with _TRUMP_LOCK:
+            xml = _TRUMP_CACHE['xml']
+            err = _TRUMP_CACHE['err']
+        if not xml:
+            msg = ('trump feed warming up: ' + err).encode('utf-8', 'ignore')[:200]
+            self.send_response(503)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(msg)))
+            self.end_headers()
+            try:
+                self.wfile.write(msg)
+            except Exception:
+                pass
+            return
+        data = xml.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/xml; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except Exception:
+            pass
+
     def do_GET(self):
         if self.path.startswith('/__proxy'):
             return self._proxy()
+        if self.path.startswith('/__trump'):
+            return self._trump_feed()
         return super().do_GET()
 
 
@@ -144,7 +176,38 @@ class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 
+# v547【川普源预抓缓存】服务端直连 trumpstruth.org（无浏览器跨域、无 6s 超时），
+# 每 5 分钟刷新一次；抓取失败保留上一份缓存，不会让前端看到空窗。
+TRUMP_FEED = 'https://www.trumpstruth.org/feed'
+TRUMP_TTL = 300
+_TRUMP_CACHE = {'t': 0.0, 'xml': '', 'err': ''}
+_TRUMP_LOCK = threading.Lock()
+
+
+def _fetch_trump():
+    try:
+        req = urllib.request.Request(TRUMP_FEED, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            xml = r.read().decode('utf-8', 'ignore')
+        if xml.find('<item') < 0:
+            raise ValueError('no <item> in feed')
+        with _TRUMP_LOCK:
+            _TRUMP_CACHE.update(t=time.time(), xml=xml, err='')
+        return True
+    except Exception as e:
+        with _TRUMP_LOCK:
+            _TRUMP_CACHE['err'] = str(e)[:200]
+        return False
+
+
+def _trump_loop():
+    while True:
+        _fetch_trump()
+        time.sleep(TRUMP_TTL)
+
+
 if __name__ == '__main__':
+    threading.Thread(target=_trump_loop, daemon=True).start()
     with ThreadingServer(('0.0.0.0', PORT), Handler) as s:
         print('macro-pulse publish server on', PORT)
         s.serve_forever()
