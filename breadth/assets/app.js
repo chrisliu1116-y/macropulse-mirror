@@ -850,7 +850,13 @@
         return;
       }
       if (S.ptrs.size === 1) {
-        S.drag = { x: e.clientX, y: e.clientY, from: S.from, to: S.to, moved: false };
+        S.drag = { x: e.clientX, y: e.clientY, from: S.from, to: S.to, moved: false,
+          /* v562【单指上下滑缩放】对齐 K 线 charts.js:_bindVerticalZoom：
+           * 记录起始 span/中心，后续每帧基于起点绝对计算，避免累积误差。
+           * dir 在 onMove 首次判定：'v'=垂直缩放 / 'h'=水平平移 / null=未定。 */
+          vz: null,
+          span0: S.to - S.from, center0: (S.from + S.to) / 2,
+          dataN: S.d ? (S.d.dates ? S.d.dates.length : 0) : 0 };
         if (e.pointerType !== 'mouse') {
           /* 长按 280ms 出十字游标（拖动会取消） */
           cancelLP();
@@ -900,7 +906,7 @@
         return;
       }
 
-      /* 拖动平移 */
+      /* 拖动平移 / 单指垂直缩放 */
       if (S.drag && S.ptrs.size === 1) {
         var dx = e.clientX - S.drag.x;
         var dy = e.clientY - S.drag.y;
@@ -908,8 +914,23 @@
           S.drag.moved = true;
           S.userMoved = true;
           cancelLP();
+          /* 首次移动定方向：垂直占主导 → 缩放；水平占主导 → 平移（原行为） */
+          S.drag.vz = (Math.abs(dy) > 6 && Math.abs(dy) > Math.abs(dx)) ? 'v' : 'h';
         }
         if (!S.drag.moved) return;
+        if (S.drag.vz === 'v') {
+          /* v562：上滑(dy<0)放大、下滑(dy>0)缩小；与 K 线同系数 0.008/px。
+           * 中心固定在手势起点 center0，缩放后由 clampView 收进 [0, N-1]。 */
+          var scale = Math.exp(0.008 * dy);
+          var maxSpan = Math.max(MIN_BARS - 1, (S.drag.dataN || 1) - 1);
+          var span = Math.max(MIN_BARS - 1, Math.min(maxSpan, S.drag.span0 * scale));
+          S.from = S.drag.center0 - span / 2;
+          S.to = S.drag.center0 + span / 2;
+          clampView();
+          clearRangeBtns();
+          draw();
+          return;
+        }
         var geo = S.geo;
         if (!geo) return;
         var dIdx = -dx / geo.step;
