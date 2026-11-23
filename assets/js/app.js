@@ -9623,18 +9623,28 @@
       toast('已触发云端单卡更新，约 1-3 分钟');
       const gen0 = __cardLoadedAt;
       const t0 = Date.now();
+      const up0 = ((w.EVENTS || []).find(x => x.id === cid) || {}).updated || '';
       const timer = setInterval(() => {
         loadLlmChannel();                     /* 幂等：generated 更新才落地 */
-        if (__cardLoadedAt !== gen0) {
-          clearInterval(timer);
-          _evLastCheck = Date.now();
-          const st = (w.EVENTS || []).find(x => x.id === cid);
-          finish('已更新' + (st && st.status ? '：' + st.status : ''));
-          renderEvent();
-        } else if (Date.now() - t0 > 6 * 60e3) {
-          clearInterval(timer);
-          finish('云端更新超时，稍后会自动同步');
+        if (__cardLoadedAt === gen0) {        /* 云端产物未刷新：继续等 */
+          if (Date.now() - t0 > 6 * 60e3) {
+            clearInterval(timer);
+            finish('云端更新超时，稍后会自动同步');
+          }
+          return;
         }
+        clearInterval(timer);
+        _evLastCheck = Date.now();
+        const st = (w.EVENTS || []).find(x => x.id === cid);
+        const up1 = (st && st.updated) || '';
+        /* v565：以该卡自身 updated 是否前进为准。顶层 generated 变只代表整批产物
+         * 刷新了，不代表这张卡真的重写成功（LLM 全 429 时会保留旧文案）。 */
+        if (up1 && up0 && up1 === up0) {
+          finish('本轮未产出新内容，已保留原文');
+        } else {
+          finish('已更新' + (st && st.status ? '：' + st.status : ''));
+        }
+        renderEvent();
       }, 15000);
     }).catch(e => finish('网络异常 ' + (e && e.message || '')));
   }
@@ -9674,7 +9684,11 @@
             if (c.statusCls) ev.statusCls = c.statusCls;
             if (!ev.phase || ev._cloud) ev.phase = c.status || ev.phase;
             if (c.progress_line) ev.progress_line = c.progress_line;
-            if (c.updated || d.generated) ev.updated = String(d.generated || c.updated || '').replace(' ', ' ');
+            /* v565【每卡独立更新时间】原写法永远取顶层 d.generated，导致所有卡
+             * 显示同一个"更新于 X 分钟前"，既看不出单卡更新效果，也掩盖某卡掉了
+             * fallback（内容没变但时间被刷新）。改为 per-card c.updated 优先，
+             * 仅老数据缺该字段时回落 generated。 */
+            if (c.updated || d.generated) ev.updated = String(c.updated || d.generated || '');
             if (c.icon && ev._cloud) ev.icon = c.icon;
             if (c.title && ev._cloud) ev.title = c.title;
             if (c.assets && ev._cloud) ev.assets = c.assets;
