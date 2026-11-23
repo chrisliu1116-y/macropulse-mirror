@@ -1849,11 +1849,16 @@
         cache.set('anc:' + k, { t: Date.now(), d: { price: price } });
         return;
       }
+      /* v563：收益率品种的东财 f3 偶发异常（美债5Y 曾给 -34% → prev 反算成 7.19，
+       * 真实昨收约 4.74）。pct 本身不可信时也别拿它反算 prev —— 直接置 null，
+       * 让下游（图例/异动矩阵）回退到分时前一日收盘或 TV 的实时 pct。 */
+      let emPrev = pct != null ? price / (1 + pct / 100) : null;
+      emPrev = sanePrev(k, emPrev, price) || null;
       out[k] = {
         price: price,
         pct: pct == null ? 0 : pct,
         chg: typeof r.f4 === 'number' ? r.f4 : null,
-        prev: pct != null ? price / (1 + pct / 100) : null,
+        prev: emPrev,
         high: typeof r.f15 === 'number' ? r.f15 : null,
         low: typeof r.f16 === 'number' ? r.f16 : null,
         open: typeof r.f17 === 'number' ? r.f17 : null,
@@ -4356,7 +4361,9 @@
            * 首版误写 cb.length → undefined>10 恒 false → 每次都落 Yahoo 周五旧线。 */
           const cbPts = (cb && cb.points) || [];
           if (cbPts.length > 10) {
-            return { points: cbPts, preClose: (cachedQuote(key) || {}).prev || cbPts[0].close,
+            /* v563：脏 prev 校验（美债5Y 曾拿 7.192 当昨收算出 -34.23%） */
+            return { points: cbPts,
+              preClose: sanePrev(key, (cachedQuote(key) || {}).prev, cbPts[cbPts.length - 1].close) || cbPts[0].close,
               synthetic: false, src: 'cnbc' };
           }
         } catch (e) { /* 落 Yahoo 兜底 */ }
@@ -4408,7 +4415,9 @@
               }
             } catch (eF) { /* 取不到就用首根 */ }
             const preFallback = prevDayClose > 0 ? prevDayClose : pts[0].close;
-            return { points: pts, preClose: (q0.prev > 0 ? q0.prev : preFallback),
+            /* v563：v398 已禁 yb.prevClose，但 q0.prev 仍可能脏（串品种/陈旧），同样校验 */
+            const qPrev = sanePrev(key, q0.prev, pts[pts.length - 1].close);
+            return { points: pts, preClose: (qPrev > 0 ? qPrev : preFallback),
               synthetic: false, src: 'yahoo' };
           }
         }
@@ -4430,9 +4439,11 @@
              * 少一个请求就少一次空包/断流的机会（冷启动那个坑很致命）。 */
             let pre = r.points[0].close;
             const cq = cachedQuote(key);
-            if (cq && cq.prev) pre = cq.prev;
+            /* v563：v398 同类问题的 CNBC 分支——脏 prev 直接拒绝 */
+            const cqPrev = cq ? sanePrev(key, cq.prev, r.points[r.points.length - 1].close) : 0;
+            if (cqPrev) pre = cqPrev;
             else {
-              try { const q = await cnbcQuoteOne(sym); if (q.prev) pre = q.prev; } catch (e) {}
+              try { const q = await cnbcQuoteOne(sym); if (q.prev) pre = sanePrev(key, q.prev, r.points[r.points.length - 1].close) || pre; } catch (e) {}
             }
             return { points: r.points, preClose: pre, synthetic: false, src: 'cnbc' };
           }
@@ -4918,6 +4929,22 @@
   function cachedQuote(key) {
     const hit = cache.get('q:' + key);
     return hit ? hit.d : null;
+  }
+
+  /* v563【修美债5Y「全天 -34.23%」】收益率品种的昨收必须落在合理区间：
+   * US5Y 正常在 3~6，若 cachedQuote.prev 给到 7.192（陈旧/串品种/单位错），
+   * (4.730-7.192)/7.192 = -34.2%，与头部真实 +0.57% 直接打架，
+   * 且会被异动矩阵当成「当日异动 -34%」上报。
+   * 口径：昨收与当前价的偏离超过 ±20%（收益率品种日内极少如此）即判脏，
+   * 回退给调用方自己算的前一日收盘。非收益率品种不拦（涨跌停可超 20%）。 */
+  function sanePrev(key, prev, last) {
+    if (!(prev > 0) || !(last > 0)) return 0;
+    const a = U.get(key);
+    if (a && a.kind === 'yield') {
+      const dev = Math.abs(prev - last) / last;
+      if (dev > 0.20) return 0;      // 脏值：让调用方回退分时前一日收盘
+    }
+    return prev;
   }
 
   // 单品种报价（走批量接口，保证与行情页同一口径）

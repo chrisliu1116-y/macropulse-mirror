@@ -780,7 +780,14 @@
            */
           let dayPct = 0, dayFrom = 'prev', dayPrev = 0;
           const q0 = (w.API && w.API.cachedQuote) ? w.API.cachedQuote(t.k) : null;
-          if (q0 && q0.prev > 0) {
+          /* v563【收益率品种优先用报价自带的 pct】美债5Y 的 q.prev 曾被污染成 7.192
+           * （真实昨收 4.74），反算得 -34% 假异动；而 TV 实时报价的 pct(+0.57%) 是对的。
+           * 对 kind==='yield' 且 |pct| 温和（<20%）时直接采信 pct，不拿脏 prev 反算。 */
+          const isYield = a && a.kind === 'yield';
+          if (isYield && q0 && isFinite(q0.pct) && Math.abs(q0.pct) < 20) {
+            dayPct = q0.pct;
+            dayPrev = q0.prev > 0 ? q0.prev : (q0.price - q0.price * q0.pct / 100);
+          } else if (q0 && q0.prev > 0) {
             dayPrev = q0.prev;
             dayPct = (last - dayPrev) / dayPrev * 100;
           } else if (a.src === 'cboe' && w.API && w.API.cboeQuote) {

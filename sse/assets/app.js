@@ -1388,8 +1388,24 @@
       applyTheme(next);
     });
 
-    loadJSON('data/breadth.json')
+    /* v563【首屏直落最新】原来先用本地 data/breadth.json（可能停在前一交易日），
+     * 再靠 startRemoteRefresh() 异步竞速云端才有最新 —— 用户打开头几秒看到的
+     * 是昨天那根（截图 11-20），要等一会才跳到最新。现在反过来：
+     * 先给远程 2.5s 窗口拿最新，拿到直接用；超时/失败再落本地快照，不阻塞首屏太久。 */
+    var localB = loadJSON('data/breadth.json');
+    var remoteFirst = new Promise(function (resolve) {
+      var done = false;
+      var t = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 2500);
+      remoteBreadth().then(function (rb) {
+        if (!done) { done = true; clearTimeout(t); resolve(rb || null); }
+      }, function () { if (!done) { done = true; clearTimeout(t); resolve(null); } });
+    });
+    var firstB = remoteFirst.then(function (rb) {
+      return rb || localB;   // 远程拿到（已按末日选最优源）→ 直接用；否则本地
+    }).catch(function () { return localB; });
+    firstB
       .then(function (b) {
+        if (!b || !b.dates || !b.dates.length) throw new Error('breadth empty');
         S.B = b;
         S.bIndex = new Map();
         for (var i = 0; i < b.dates.length; i++) S.bIndex.set(b.dates[i], i);

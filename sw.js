@@ -9,7 +9,7 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v562';
+const CACHE = 'macro-pulse-v563';
 /* VER 从 CACHE 名推导，升版只改上面一行即可；
  * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
 const VER = CACHE.replace('macro-pulse-v', '');
@@ -178,7 +178,7 @@ self.addEventListener('fetch', e => {
   /* 上证同期对比子页（/sse/）：数据 JSON 同样每天更新，必须直连网络。 */
   if (p.indexOf('sse/data/') === 0) return;
   /* v265【用户实测「链接没变化」的根因】matchCache 用 ignoreSearch:true，
-   * /sse/assets/app.js?v=3 / ?v=4 / ?v=5 会被当成同一个缓存键，
+   * /sse/assets/app.js?v=563 / ?v=4 / ?v=5 会被当成同一个缓存键，
    * staleWhileRevalidate 一直回吐旧脚本，升版本号也换不掉。
    * /sse/ 整条子页（含 index / assets / data）一律绕过 SW 直连网络。 */
   if (p.indexOf('sse/') === 0) return;
