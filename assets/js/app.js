@@ -8039,6 +8039,9 @@
       ${themes ? `<div class="ev-sec"><div class="ev-sec-h">主题</div><div class="ev-chips">${themes}</div></div>` : ''}
       ${assets ? `<div class="ev-sec"><div class="ev-sec-h">相关标的</div><div class="ev-assets">${assets}</div></div>` : ''}
       ${(liveAt || view.src) ? `<div class="ev-src">${liveAt ? '<b>最近报价</b> ' + liveAt : ''}${liveAt && view.src ? ' · ' : ''}${view.src ? '参考来源：' + esc(view.src) : ''}</div>` : ''}
+      ${ev.id && !ev._archived && !ev._dormant
+        ? `<div class="ev-foot"><button class="ev-refresh ev-arch" data-evarchive="${esc(ev.id)}" type="button" title="归档后云端每日班次将不再更新此卡（可保留历史内容）"><i class="ev-rf-ic">▣</i><span>归档此卡</span></button></div>`
+        : ''}
       <div class="ev-tapback">轻点页面任意处返回事件列表</div>
     </div>`;
   }
@@ -8866,6 +8869,9 @@
       /* ---- v564 详情页「更新」按钮：触发云端单卡重写 ---- */
       const rf = e.target.closest('[data-evrefresh]');
       if (rf) { evManualRefresh(rf.dataset.evrefresh, rf); return; }
+      /* ---- v565b 详情页底部「归档」按钮：两段确认 → dispatch card-archive.yml ---- */
+      const ab = e.target.closest('[data-evarchive]');
+      if (ab) { evManualArchive(ab.dataset.evarchive, ab); return; }
       /* ---- 编辑模式的操作（v61）---- */
       if (e.target.closest('[data-ev-edit]')) {
         S.evEdit = !S.evEdit;
@@ -9645,6 +9651,56 @@
           finish('已更新' + (st && st.status ? '：' + st.status : ''));
         }
         renderEvent();
+      }, 15000);
+    }).catch(e => finish('网络异常 ' + (e && e.message || '')));
+  }
+
+  /* v565b【单卡手动归档】详情页底部「归档」按钮 → CF /__card-archive
+   * （worker dispatch card-archive.yml，无 LLM 几秒提交）→ 每 15s 轮询该卡
+   * archived 状态，落地后重绘（卡进折叠区、按钮消失）。
+   * 归档是终态操作，用两段确认防误触：首点变「确认归档？」，5 秒内再点才执行。 */
+  function evManualArchive(cid, btn) {
+    if (!cid || !btn || btn.dataset.busy) return;
+    const old = btn.innerHTML;
+    const finish = (msg) => { btn.innerHTML = old; delete btn.dataset.busy; btn.classList.remove('is-confirm'); if (msg) toast(msg); };
+    if (!btn.dataset.confirming) {          /* 第一段：进入确认态 */
+      btn.dataset.confirming = '1';
+      btn.classList.add('is-confirm');
+      btn.innerHTML = '<i class="ev-rf-ic">!</i><span>确认归档？再点一次</span>';
+      btn._confirmTimer = setTimeout(() => {  /* 5 秒不点自动还原 */
+        delete btn.dataset.confirming;
+        btn.classList.remove('is-confirm');
+        btn.innerHTML = old;
+      }, 5000);
+      return;
+    }
+    clearTimeout(btn._confirmTimer);
+    delete btn.dataset.confirming;
+    btn.dataset.busy = '1';
+    btn.innerHTML = '<i class="ev-rf-ic is-busy">⟳</i><span>归档中…</span>';
+    fetch('https://macropulse-api.pages.dev/__card-archive', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card: cid })
+    }).then(r => r.json()).then(d => {
+      if (!d.ok) {
+        finish(d.err === 'cooldown'
+          ? '刚操作过，' + Math.ceil((d.retry_after || 60)) + ' 秒后可再触发'
+          : '归档失败 ' + (d.err || d.status || ''));
+        return;
+      }
+      toast('已触发云端归档，约 1 分钟');
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        loadLlmChannel();                   /* 幂等：云端 archived=true 落地才重绘 */
+        const st = (w.EVENTS || []).find(x => x.id === cid);
+        if (st && (st._archived || st.archived)) {
+          clearInterval(timer);
+          finish('已归档：此卡不再随每日班次更新');
+          renderEvent();
+        } else if (Date.now() - t0 > 5 * 60e3) {
+          clearInterval(timer);
+          finish('归档指令已提交，状态稍后自动同步');
+        }
       }, 15000);
     }).catch(e => finish('网络异常 ' + (e && e.message || '')));
   }
