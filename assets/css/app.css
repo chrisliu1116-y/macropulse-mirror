@@ -2940,6 +2940,25 @@ body.light .ai-alert{background:linear-gradient(90deg,#c92a2a,#e03131)}
 .ev-detail{padding-bottom:20px}
 .ev-hd{display:flex;gap:12px;align-items:center;padding:6px 4px 2px}
 .ev-hdt{flex:1;min-width:0}
+/* v564 详情页「更新」按钮：语义变量适配深浅；右对齐补齐 ev-hd 空白 */
+.ev-refresh{
+  flex:none;display:inline-flex;align-items:center;gap:5px;
+  padding:5px 12px;border-radius:20px;cursor:pointer;
+  font-size:11.5px;font-weight:600;letter-spacing:.2px;
+  color:var(--accent-tx);
+  border:1px solid rgba(79,157,255,.45);
+  background:rgba(79,157,255,.10);
+  transition:background .18s,border-color .18s,transform .12s;
+  -webkit-tap-highlight-color:transparent;
+}
+.ev-refresh:hover{background:rgba(79,157,255,.20)}
+.ev-refresh:active{transform:scale(.94)}
+.ev-refresh[disabled]{opacity:.5;cursor:default}
+.ev-rf-ic{display:inline-block;font-style:normal;font-size:13px;line-height:1}
+.ev-rf-ic.is-busy{animation:evRfSpin 1s linear infinite}
+@keyframes evRfSpin{to{transform:rotate(360deg)}}
+body.light .ev-refresh{color:#1d4fd8;border-color:rgba(29,79,216,.4);background:rgba(29,79,216,.08)}
+body.light .ev-refresh:hover{background:rgba(29,79,216,.16)}
 .ev-sum{font-size:13px;color:var(--tx2);line-height:1.7;margin:10px 4px;padding:12px;
   border-radius:12px;background:var(--wash);border:1px solid var(--hair)}
 .ev-hl{margin:10px 4px;padding:14px;border-radius:14px;border:1px solid var(--hair2);

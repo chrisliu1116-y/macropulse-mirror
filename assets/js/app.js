@@ -8026,6 +8026,9 @@
           <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
           <div class="ev-cat">${esc(view.cat || '')} · 更新于 ${evNarrativeHTML(view)}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
+        ${ev.id && !ev._archived && !ev._dormant
+          ? `<button class="ev-refresh" data-evrefresh="${esc(ev.id)}" type="button" title="立即触发云端单卡更新（约1-3分钟）"><i class="ev-rf-ic">⟳</i><span>更新</span></button>`
+          : ''}
       </div>
       <div class="ev-sum">${esc(plain(ev.summary))}</div>
       ${metrics ? `<div class="ev-sec"><div class="ev-sec-h">关键指标</div>${metrics}</div>` : ''}
@@ -8860,6 +8863,9 @@
     }
 
     evBody.onclick = (e) => {
+      /* ---- v564 详情页「更新」按钮：触发云端单卡重写 ---- */
+      const rf = e.target.closest('[data-evrefresh]');
+      if (rf) { evManualRefresh(rf.dataset.evrefresh, rf); return; }
       /* ---- 编辑模式的操作（v61）---- */
       if (e.target.closest('[data-ev-edit]')) {
         S.evEdit = !S.evEdit;
@@ -9593,8 +9599,47 @@
       })
       .catch(() => { /* 全挂：保留现有卡，不影响展示 */ });
   }
-  function applyCardData(d) {
-          const gen = String(d.generated || '');
+  /* v564【单卡手动更新】详情页「更新」按钮 → CF /__card-refresh（worker 用
+   * secret token dispatch GHA evolve-events.yml inputs.card）→ GHA 云端跑单卡
+   * LLM 重写并 commit → 这里每 15s 调 loadLlmChannel()（三源竞速+幂等落地），
+   * generated 变化即重绘详情。全程前端零凭据；worker 侧每卡 5 分钟冷却。 */
+  function evManualRefresh(cid, btn) {
+    if (!cid || !btn || btn.dataset.busy) return;
+    btn.dataset.busy = '1';
+    const old = btn.innerHTML;
+    const finish = (msg) => { btn.innerHTML = old; delete btn.dataset.busy; if (msg) toast(msg); };
+    btn.innerHTML = '<i class="ev-rf-ic is-busy">⟳</i><span>触发中…</span>';
+    fetch('https://macropulse-api.pages.dev/__card-refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ card: cid })
+    }).then(r => r.json()).then(d => {
+      if (!d.ok) {
+        finish(d.err === 'cooldown'
+          ? '刚更新过，约 ' + Math.ceil((d.retry_after || 300) / 60) + ' 分钟后可再触发'
+          : '触发失败 ' + (d.err || d.status || ''));
+        return;
+      }
+      btn.innerHTML = '<i class="ev-rf-ic is-busy">⟳</i><span>云端更新中…</span>';
+      toast('已触发云端单卡更新，约 1-3 分钟');
+      const gen0 = __cardLoadedAt;
+      const t0 = Date.now();
+      const timer = setInterval(() => {
+        loadLlmChannel();                     /* 幂等：generated 更新才落地 */
+        if (__cardLoadedAt !== gen0) {
+          clearInterval(timer);
+          _evLastCheck = Date.now();
+          const st = (w.EVENTS || []).find(x => x.id === cid);
+          finish('已更新' + (st && st.status ? '：' + st.status : ''));
+          renderEvent();
+        } else if (Date.now() - t0 > 6 * 60e3) {
+          clearInterval(timer);
+          finish('云端更新超时，稍后会自动同步');
+        }
+      }, 15000);
+    }).catch(e => finish('网络异常 ' + (e && e.message || '')));
+  }
+
+  function applyCardData(d) {          const gen = String(d.generated || '');
           // 新鲜度校验：云端产物不比已加载的更新 → 幂等跳过（本地旧档永不回退新档）
           if (__cardLoadedAt && gen && gen <= __cardLoadedAt) return;
           if (gen) __cardLoadedAt = gen;
