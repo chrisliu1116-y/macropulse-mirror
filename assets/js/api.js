@@ -3558,11 +3558,12 @@
         try {
           const num = String(a.opSina || key).replace(/^CON_OP_/, '');
           const ep = await klineFast(emKline('10.' + num, 101, m, 1), 1200);
-          if (ep && ep.length >= 5) return finalize({ points: dedupe(ep), synthetic: false, src: 'em' });
+          /* v557：emKline 固定 klt=101 日线，周/月必须客户端聚合 */
+          if (ep && ep.length >= 5) return finalize({ points: dedupe(toMode(ep, mode, m)), synthetic: false, src: 'em' });
         } catch (e) { /* 落新浪 */ }
         try {
           const sd = await sinaOptionDaily(a.opSina || key, m);
-          if (sd.length >= 5) return finalize({ points: dedupe(sd), synthetic: false, src: 'sina' });
+          if (sd.length >= 5) return finalize({ points: dedupe(toMode(sd, mode, m)), synthetic: false, src: 'sina' });
         } catch (e) { /* 如实失败，绝不合成 */ }
       }
       /* v311【美股期权日K 硬直达】动态 OCC 合约此前落 em 只回 1 根；
@@ -3571,7 +3572,8 @@
         const oy = await yahooBars(a.sym || key, '1d', '6mo');
         const op = yahooScale(oy && oy.points, a.sym || key);
         if (op && op.length >= 5) {
-          return finalize({ points: dedupe(op), synthetic: false, src: 'yahoo' });
+          /* v557：yahoo v8 固定 '1d'，周/月必须客户端聚合 */
+          return finalize({ points: dedupe(toMode(op, mode, m)), synthetic: false, src: 'yahoo' });
         }
       }
       /* v311【新浪外盘日K】A50 2594 根（2016 起）；CL/GC/NG/HG 同接口。
@@ -3649,7 +3651,8 @@
             const yRange = (a && a.grp === 'option') ? (mode === 'd' ? '6mo' : '1mo') : 'epoch';
             const y = await yahooBars(ysd, ivd, yRange);
             const p = yahooScale(y && y.points, ysd);
-            if (p && p.length >= 20) return finalize({ points: dedupe(p), synthetic: false, src: 'yahoo' });
+            /* v557：yahooScale 内部可能按日线重建（见其实现），统一过 toMode 兜粒度 */
+            if (p && p.length >= 20) return finalize({ points: dedupe(toMode(p, mode, m)), synthetic: false, src: 'yahoo' });
           }
         }
       } catch (eD) { /* 落原链路兜底 */ }
@@ -3726,8 +3729,17 @@
         }
       }
       if (!pts.length) throw new Error('empty');
+      /* v557【出口粒度保险】东财主源虽按 klt=102/103 请求周/月，但实测部分 secid
+       * 会忽略 klt 仍回日线（尤其指数段）。若相邻点间隔仍是日级（<5 天），
+       * 说明拿到的是日线，强制按 mode 聚合 —— 覆盖全部品种，不依赖单个源的行为。 */
+      let outPts = dedupe(pts);
+      if (mode === 'w' || mode === 'm') {
+        const needGap = mode === 'm' ? 20 : 5;
+        const span = outPts.length >= 2 ? (outPts[outPts.length - 1].time - outPts[0].time) / (outPts.length - 1) / 86400 : 0;
+        if (span > 0 && span < needGap) outPts = toMode(outPts, mode, m);
+      }
       /* v359：VIX 日K 以前被统一标成 'em'（东财），与真实来源不符；按实际取数通道标注 */
-      return finalize({ points: dedupe(pts), synthetic: false,
+      return finalize({ points: outPts, synthetic: false,
         src: a.src === 'cboe' ? _vixDailySrc : (a.src === 'binance' ? 'binance' : 'em') });
     } catch (e) {
       /* v284：东财 kline 挂了 → 腾讯日K 补一次（实测 A股/港股给满 320 天；
@@ -3759,7 +3771,12 @@
       if (tasks.length) {
         try {
           const got = await Promise.any(tasks);
-          return finalize({ points: dedupe(got.p.slice(-m)), synthetic: false, src: got.src });
+          /* v557【修「周/月K 显示日线」】tasks 里全是**日线源**
+           * （txDaily / sinaFutDaily / okxCandles / thsDaily…），ivd/iv 变量
+           * 在这里根本没传给它们。原来直接 got.p.slice(-m) 返回 —— 只要东财
+           * 周/月线失败走兜底，周K/月K 就拿日线硬凑（用户截图：创业板指点月K
+           * 却是 100+ 根日线、x轴到 2026/11/09）。这里统一按 mode 聚合。 */
+          return finalize({ points: dedupe(toMode(got.p, mode, m)), synthetic: false, src: got.src });
         } catch (e4) { /* 全挂 */ }
       }
       /* v378：同花顺日K已移出竞速（v543，见上），改在此处做最后兜底。 */
@@ -3769,7 +3786,9 @@
           const y = await yahooBars(ys, iv, 'epoch');
           const yp = yahooScale(y && y.points, ys);
           if (yp && yp.length >= 20) {
-            return finalize({ points: dedupe(yp.slice(-m)), synthetic: false, src: 'yahoo' });
+            /* v557：yahooBars 虽按 iv='1wk'/'1mo' 请求，但 yahooScale 可能回落到
+             * 日线序列；统一再过 toMode，保证周/月粒度（日线时 toMode 原样返回）。 */
+            return finalize({ points: dedupe(toMode(yp, mode, m)), synthetic: false, src: 'yahoo' });
           }
         } catch (e6) { /* 全挂 */ }
       }
@@ -3780,7 +3799,8 @@
         if (thsSymbolOf(key)) {
           const tp = await thsDaily(key, m);
           if (tp && tp.length >= 20) {
-            return finalize({ points: dedupe(tp.slice(-m)), synthetic: false, src: 'ths' });
+            /* v557：thsDaily 只给日线，必须按 mode 聚合成周/月 */
+            return finalize({ points: dedupe(toMode(tp, mode, m)), synthetic: false, src: 'ths' });
           }
         }
       } catch (eT) { /* 同花顺不覆盖的品类自动跳过 */ }
