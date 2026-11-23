@@ -7620,6 +7620,17 @@
     if (!ts) return esc(String((ev && ev.updated) || '--').slice(5, 16) || '--');
     return esc(short) + ' · <span data-age-ts="' + ts + '">' + ageText(ts) + '</span>';
   }
+  /* v568【归档/休眠卡不显示"更新于"】内容已冻结，但云端归档/其它落盘会 bump
+   * 顶层 generated，而归档卡没有 per-card updated → 旧逻辑回落 generated，
+   * 把归档卡误刷成"48 分钟前更新"（2026-11-24 01:29 用户实测踩中）。
+   * 归档卡显示「已归档 · 归档日期」，休眠卡显示「休眠观察」。 */
+  function evUpdatedLabel(ev) {
+    if (ev && (ev._archived || ev._dormant)) {
+      const d = String((ev && ev._archivedAt) || (ev && ev.updated) || '').slice(5, 10);
+      return (ev._archived ? '已归档' : '休眠观察') + (d ? ' · ' + esc(d) : '');
+    }
+    return '更新于 ' + evNarrativeHTML(ev);
+  }
   let _evLastCheck = 0;
   function evTouch() { _evLastCheck = Date.now(); }
   function evStageAt(id) {
@@ -8024,7 +8035,7 @@
         <div class="ev-icon">${esc(ev.icon || '◉')}</div>
         <div class="ev-hdt">
           <div class="ev-tit">${esc(view.title)}<span class="ev-st ${esc(view.statusCls || 'watch')}">${esc(view.status || '')}</span></div>
-          <div class="ev-cat">${esc(view.cat || '')} · 更新于 ${evNarrativeHTML(view)}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
+          <div class="ev-cat">${esc(view.cat || '')} · ${evUpdatedLabel(ev)}<span class="ev-hint-inline">最近检查 <span data-rel-ts="${_evLastCheck || Date.now()}">${relTime(_evLastCheck || Date.now())}</span></span>${view.hot ? ' · 热度 ' + '★'.repeat(view.hot) : ''}</div>
         </div>
         ${ev.id && !ev._archived && !ev._dormant
           ? `<button class="ev-refresh" data-evrefresh="${esc(ev.id)}" type="button" title="立即触发云端单卡更新（约1-3分钟）"><i class="ev-rf-ic">⟳</i><span>更新</span></button>`
@@ -8092,7 +8103,7 @@
     const newsTag = (liveNews.length === news.length)
       ? `实时快讯 ${liveNews.length} 条`
       : `实时快讯 ${liveNews.length} 条 · 人工核实 ${news.length - liveNews.length} 条`;
-    const ft = `${esc(view.cat || '')} · 更新于 ${narrative}`
+    const ft = `${esc(view.cat || '')} · ${evUpdatedLabel(ev)}`
       + ` · ${newsTag}`
       + ` · 最近检查 <span data-rel-ts="${checkTs}">${relTime(checkTs)}</span>`;
     return `<button class="ev-card" data-evid="${esc(ev.id)}">
@@ -9743,13 +9754,19 @@
             /* v565【每卡独立更新时间】原写法永远取顶层 d.generated，导致所有卡
              * 显示同一个"更新于 X 分钟前"，既看不出单卡更新效果，也掩盖某卡掉了
              * fallback（内容没变但时间被刷新）。改为 per-card c.updated 优先，
-             * 仅老数据缺该字段时回落 generated。 */
-            if (c.updated || d.generated) ev.updated = String(c.updated || d.generated || '');
+             * 仅老数据缺该字段时回落 generated。
+             * v568：归档/休眠卡绝不回落 generated——云端归档等落盘会 bump
+             * generated，回落会把冻结卡的时间假刷新（01:29 用户实测踩中）。 */
+            if (c.updated || ((c.archived || ev._archived || c.dormant || ev._dormant) ? '' : d.generated)) {
+              ev.updated = String(c.updated || d.generated || '');
+            }
             if (c.icon && ev._cloud) ev.icon = c.icon;
             if (c.title && ev._cloud) ev.title = c.title;
             if (c.assets && ev._cloud) ev.assets = c.assets;
             ev._archived = !!c.archived;
             ev._dormant = !!c.dormant;
+            if (c.archived_at) ev._archivedAt = String(c.archived_at);
+            else if (!ev._archived) ev._archivedAt = '';
           });
           // v442 自动建卡：不再静默追加——新 auto_ 卡先进待确认队列并弹窗问用户。
           // 用户拒绝的主题写入 mm_card_rejected 黑名单，以后同类事件不再弹/不再建。
