@@ -2811,21 +2811,37 @@
     const target = 'https://fchart.stock.naver.com/sise.nhn?symbol=' + code
       + '&timeframe=minute&count=700&requestType=0';
     let txt = '';
+    /* v574【可观测】把失败阶段记到 window.__krMinDbg，详情页 note 会带出来，
+     * 下次「没有盘后按钮」时能一眼看出断在代理还是解析，不再靠猜。 */
+    const dbg = (err, extra) => {
+      try { w.__krMinDbg = Object.assign({ code: code, err: String(err || ''), at: Date.now() }, extra || {}); } catch (e) {}
+    };
     try {
-      const r = await proxyFetch(target);
-      if (r.ok) {
-        const t = await r.text();
-        if (t && t.indexOf('data="') >= 0) txt = t;
-      }
-    } catch (e) { /* 走兜底 */ }
+      /* v574：先试直连（个别 WebView/原生通道会放行），失败再走代理。 */
+      try {
+        const rd = await fetch(target, { cache: 'no-store' });
+        if (rd.ok) {
+          const td = await rd.text();
+          if (td && td.indexOf('data="') >= 0) txt = td;
+        }
+      } catch (e0) { /* 预期内：无 CORS 头 */ }
+      if (!txt) {
+        const r = await proxyFetch(target);
+        if (r.ok) {
+          const t = await r.text();
+          if (t && t.indexOf('data="') >= 0) txt = t;
+          else dbg('proxy body no data attr', { len: t ? t.length : 0, head: t ? String(t).slice(0, 60) : '' });
+        } else dbg('proxy HTTP ' + r.status);
+      } else dbg('', { via: 'direct' });
+    } catch (e) { dbg('proxyFetch ' + (e && e.name || 'err') + ': ' + String(e && e.message || e).slice(0, 60)); }
     if (!txt) {
       const P = w.LiveNews && w.LiveNews.proxy;
-      if (typeof P !== 'function') return null;
+      if (typeof P !== 'function') { dbg('no proxy channel'); return null; }
       try {
         /* v573：check 从 `data="` 放宽到 `data=` —— 代理池通道（allorigins 等）会把
          * 引号转义成 data=&quot; / data=\"，原校验直接判假 200 → 韩股盘后分时永远拿不到。 */
         txt = String(await P(target, { timeout: 15000, raw: true, check: b => String(b).indexOf('data=') >= 0 }));
-      } catch (e) { return null; }
+      } catch (e) { dbg('live proxy ' + (e && e.name || 'err')); return null; }
     }
     /* v573：统一还原被包装通道转义的引号，否则下面的 data="..." 正则匹配不到。 */
     txt = String(txt).replace(/&quot;/g, '"').replace(/\\"/g, '"');
