@@ -3028,7 +3028,11 @@
     }
 
     // 3) 俄乌/三方会谈实质进展 → A；地缘封顶 Gate；S_RE 匹配循环
-    const GEO_TALK = /(俄乌|乌美俄|美俄|俄美|乌克兰|俄罗斯).{0,14}(会谈|谈判|磋商|会晤|对话)|(会谈|谈判|磋商|会晤|对话).{0,14}(俄乌|乌美俄|美俄|俄美|乌克兰|俄罗斯)/;
+    /* v73【台账纠错单 ths-5747195·桶C】常态化地缘双方的「谈判」与俄乌同型：
+     * 「卡塔尔试图推动美伊重启谈判」是斡旋/意向，不是海峡正式封锁或开战。
+     * 只扩既有 GEO_TALK 的双方组合词表，不新增 gradeCoreRules 早退出口；
+     * 真·开战/正式封锁仍由 S_PAT 在后续阶段判 S。 */
+    const GEO_TALK = /(俄乌|乌美俄|美俄|俄美|美伊|伊美|美以|伊以|以伊|乌克兰|俄罗斯).{0,14}(会谈|谈判|磋商|会晤|对话)|(会谈|谈判|磋商|会晤|对话).{0,14}(俄乌|乌美俄|美俄|俄美|美伊|伊美|美以|伊以|以伊|乌克兰|俄罗斯)/;
     const GEO_TALK_REAL = /将率|率.{0,4}代表团|率团|参加|出席|举行|恢复|重启|启动|达成|确认|透露|安排|筹备|同意|推进|新一轮|三方/;
     if (GEO_TALK.test(head) && GEO_TALK_REAL.test(head)
       && !/破裂|失败|终止|取消|推迟|搁置|拒绝|暂无|尚未|未达成|不愿|僵局/.test(head)) {
@@ -3252,7 +3256,7 @@
    *    大规模战争终结；油轮/设施/单边打击全部下放 A；其余七科目同步收紧；
    *    新增 isRecapOrCommentary 在 S_RE 入口拦“复盘综述/盘面归因”；
    *    ACT_WORD 补宣战/关闭/中断。GRADE_VER 64→65 让存量池重算。 */
-  const GRADE_VER = 72;
+  const GRADE_VER = 73;
 
   /* ---------------- 关于「C 级要不要进信息流」 ----------------
    * 11-05 曾试过把 C 级里「带硬信息」的那部分（小国数据 / 边缘板块 / 网络安全…）
@@ -4992,6 +4996,9 @@
       build: u => '/__proxy/' + Date.now().toString(36)
         + Math.random().toString(36).slice(2, 7) + '/' + b64url(u),
     }] : []),
+    /* v577【国内可达网关】pages.dev 与卡片接口同域名，国内可达；转发 edge-v2 /__proxy。
+     * 不再让见闻这类「直连 CORS 失败」的源只靠 jina / microlink 碰运气。 */
+    { id: 'pages', build: u => 'https://macropulse-api.pages.dev/__px?u=' + encodeURIComponent(u) },
     { id: 'jina', wrap: true, build: u => 'https://r.jina.ai/' + u },
     {
       id: 'microlink',
@@ -5027,7 +5034,7 @@
     if (h.until && Date.now() < h.until) return -1000;
     /* 同源转发 / 原生通道永远优先：不受第三方额度限制，最稳。
      * 第三方（jina / microlink）只当兜底，健康分再高也排在它们后面。 */
-    const base = (id === 'self' || id === 'native') ? 1000 : 0;
+    const base = (id === 'self' || id === 'native') ? 1000 : (id === 'pages' ? 500 : 0);
     return base + (h.ok || 0) - (h.fail || 0) * 1.5;
   }
   function pMark(id, good, why) {
@@ -5737,18 +5744,63 @@
     return out;
   }
 
+  /* v577/v578：见闻快讯接口已从 api-one.wallstcn.com 迁到 api-one-wscn.awtmt.com；
+   * 旧域名 DNS 失效（Cloudflare 530），且 CORS 只放行 Origin:null。
+   * 线上改为「新官方域名优先 → 旧域名兜底」，每条 URL 仍走
+   * 直连 → 国内可达代理 → 官方 JSONP 三级，不拿别家源冒充。 */
+  const WSCN_HOSTS = ['api-one-wscn.awtmt.com', 'api-one.wallstcn.com'];
+  function loadWSCNJsonp(url) {
+    return new Promise((resolve, reject) => {
+      const cb = '__wscn_cb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+      let done = false;
+      const s = document.createElement('script');
+      const finish = (ok, val) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try { delete w[cb]; } catch (e) { w[cb] = null; }
+        if (s.parentNode) s.parentNode.removeChild(s);
+        ok ? resolve(val) : reject(val);
+      };
+      const timer = setTimeout(() => finish(false, new Error('JSONP 超时')), 12000);
+      w[cb] = (d) => finish(true, d);
+      s.onerror = () => finish(false, new Error('JSONP 脚本加载失败'));
+      s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + encodeURIComponent(cb);
+      document.head.appendChild(s);
+    });
+  }
+
+  async function fetchWSCNJson(url, timeout) {
+    try { return await fetchJSON(url, timeout || 9000); } catch (e) {}
+    try {
+      const raw = await viaProxy(url, {
+        timeout: 12000, needRaw: true,
+        check: b => String(b).indexOf('"items"') >= 0,
+      });
+      const k = String(raw).indexOf('{');
+      if (k >= 0) return JSON.parse(String(raw).slice(k));
+    } catch (e) {}
+    /* 官方 API 支持 callback 时，<script> 不受 CORS 限制；
+     * 这是浏览器侧最后一条路，失败才如实把该源标红。 */
+    return await loadWSCNJsonp(url);
+  }
+
   async function fetchWSCN() {
     /* v103：只拉 global-channel 会漏掉 A 股/美股专属的重要稿（实测
      * a-stock-channel 的 score=3 稿在 global 里根本不出）。这里并行拉两个频道，
      * 按 id 去重；任一频道失败不影响另一个。 */
     const chans = ['global-channel', 'a-stock-channel'];
     const packs = await Promise.all(chans.map(async (ch) => {
-      const url = 'https://api-one.wallstcn.com/apiv1/content/lives'
-        + '?channel=' + ch + '&client=pc&limit=50';
-      try {
-        const d = await fetchJSON(url, 9000);
-        return (d && d.data && d.data.items) || [];
-      } catch (e) { return []; }
+      for (const host of WSCN_HOSTS) {
+        const url = 'https://' + host + '/apiv1/content/lives'
+          + '?channel=' + ch + '&client=pc&limit=50';
+        try {
+          const d = await fetchWSCNJson(url, 9000);
+          const list = (d && d.data && d.data.items) || [];
+          if (list.length) return list;
+        } catch (e) { /* 试下一个官方域名 */ }
+      }
+      return [];
     }));
     const seen = new Set();
     const items = [];
@@ -6650,10 +6702,15 @@
     const out = [];
     let cursor = '';
     for (let p = 0; p < BF_PAGES.wscn; p++) {
-      const u = 'https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&client=pc&limit=40'
-        + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-      let d;
-      try { d = await fetchJSON(u, 9000); } catch (e) { break; }
+      let d = null;
+      for (const host of WSCN_HOSTS) {
+        const u = 'https://' + host + '/apiv1/content/lives?channel=global-channel&client=pc&limit=40'
+          + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+        try {
+          d = await fetchWSCNJson(u, 9000);
+          if (d && d.data && d.data.items && d.data.items.length) break;
+        } catch (e) { /* 试下一个官方域名 */ }
+      }
       const list = (d && d.data && d.data.items) || [];
       if (!list.length) break;
       const got = mapWSCN(list);
