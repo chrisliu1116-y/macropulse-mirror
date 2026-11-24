@@ -4484,8 +4484,27 @@
             const preFallback = prevDayClose > 0 ? prevDayClose : pts[0].close;
             /* v563：v398 已禁 yb.prevClose，但 q0.prev 仍可能脏（串品种/陈旧），同样校验 */
             const qPrev = sanePrev(key, q0.prev, pts[pts.length - 1].close);
-            return { points: pts, preClose: (qPrev > 0 ? qPrev : preFallback),
-              synthetic: false, src: 'yahoo' };
+            /* v574b【韩股盘后段真正接入点】directKind(krstock)='yahoo'（见本函数
+             * L4452 注释），韩股分时走的是这条 Yahoo 分支并在下面 return —— 于是
+             * 函数尾部 L4623 的 krstock 盘后附加逻辑成了**永远执行不到的死代码**，
+             * 这正是「韩股一直没有盘后按钮/分时」的真因（data.ext 恒缺、extAvailable
+             * 恒 false、按钮不显示）。盘后段必须在这里、return 之前拼接：
+             * Nextrade 애프터마켓 15:40–20:00 真实分钟（Naver fchart 源，
+             * krNaverMinutes 内 time 同为「北京墙上时间装 UTC」，时间轴与 Yahoo 段连续）。 */
+            let extSeg = false, finalPts = pts;
+            if (a.grp === 'krstock') {
+              try {
+                const nx = await krNaverMinutes(key);
+                const post = (nx && nx.points) ? nx.points.filter(p => p.seg === 'post') : [];
+                if (post.length > 5) {
+                  finalPts = pts.map(p => Object.assign({}, p, { seg: 'reg' })).concat(post);
+                  extSeg = true;
+                }
+              } catch (eKr) { /* 拿不到就保持纯常规段，宁缺勿假 */ }
+            }
+            return { points: finalPts, preClose: (qPrev > 0 ? qPrev : preFallback),
+              regClose: (extSeg ? pts[pts.length - 1].close : undefined),
+              synthetic: false, src: 'yahoo', ext: extSeg };
           }
         }
       }
@@ -4678,6 +4697,9 @@
         /* v65：韩股盘后接上 Nextrade 애프터마켓 的真实分钟（Naver fchart 源）。
          * 15:40–15:59 是收盘定价（单一价，标 auction），16:00–19:59 是连续成交。
          * 盘前 08:00–08:50 该源没有，所以 pre 段仍然为空 —— 有就有、没有就不画。 */
+        /* v574b【死代码标注】韩股已在上方 Yahoo 分支 return 前拼接盘后段
+         * （directKind(krstock)='yahoo'，永远走不到这里）。此分支仅台股仍会进入，
+         * 但台股盘后是定盘单一价（v63 结论），不再合成。保留以防未来 directKind 调整。 */
         let hasExt = false;
         if (a.grp === 'krstock') {
           try {
