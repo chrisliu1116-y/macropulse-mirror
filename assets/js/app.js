@@ -3107,13 +3107,17 @@
       return !!j.open || j.phase === 'pre' || j.phase === 'post';
     } catch (e) { return false; }
   }
-  /* v572【盘前优于盘后】用户口径（11-24 18:07）：美股正处盘前、韩股正处盘后，
-   * 原 v209 规则"盘前/盘后都算交易中 rank 0"使韩股盘后（地区序 kr 在 us 前）
-   * 压住美股盘前。改为分层权重：交易中 0 > 盘前 1 > 盘后 2 > 休市 3。
-   * 组级 sessionLive 仍优先（v237：apac 并集 judge 会把交易中成员误判休市），
-   * live 时再按 judge 的 phase 细分 pre/post。 */
+  /* v573【修复 v572 排序回退】v572 把 rank 简化成「交易中0/盘前1/盘后2/休市3」后，
+   * 7×24 市场（外汇/美债/原油金属/加密，phase 恒为 regular）全部跳到最前，
+   * 股票反而被压到后面（19:39 用户截图：外汇/美债/原油排在美股盘前之前）。
+   * 恢复 v571 的「股票类优先」骨架，只在股票类内部再分 盘中 > 盘前 > 盘后：
+   *   股票盘中0 > 股票盘前1 > 股票盘后2 > 7×24交易中4 > 股票休市6 > 7×24休市7
+   * 7×24 与休市股票同层时仍按 SESS_PRIORITY 地区序，与上一版观感一致。 */
+  const SESS_24H = { fx: 1, rate: 1, cmdty: 1, crypto: 1 };
   function sessRank(sk) {
-    if (!sessLive(sk)) return 3;
+    const live = sessLive(sk);
+    if (SESS_24H[sk]) return live ? 4 : 7;
+    if (!live) return 6;
     let p = '';
     try {
       const j = w.Session.judge(sk, new Date());
@@ -3121,7 +3125,7 @@
     } catch (e) {}
     if (p === 'pre') return 1;
     if (p === 'post') return 2;
-    return 0;   // regular / 夜盘 / 7×24 / 组级 live 但 phase 不明 → 交易中层
+    return 0;   // 股票类盘中
   }
   function sessPri(sk) { const i = SESS_PRIORITY.indexOf(sk); return i < 0 ? 90 : i; }
 
