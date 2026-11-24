@@ -2508,8 +2508,37 @@
     if (!want.length) return {};
     const now = Date.now();
 
+    /* ---- ⓪ v570【Nasdaq 同源第一优先】用户实测（11-24 17:07）英伟达列表
+     * 「盘前 167.04 · +1.21%」vs 详情盘前分时 159.33 -3.47%，详情是对的。
+     * 根因：盘前刚开始、本时段成交稀少时，TV premarket_close / CNBC ext 是
+     * 「上一场对应时段的残留价」，被当成今天的盘前现价透出。
+     * 修法：pre/post 时段的美股个股一律先用 Nasdaq 官方分时末点（与详情页
+     * 盘前分时**完全同源**，nasdaqMinutes 60s 缓存与详情共享，点过详情的品种
+     * 零额外请求）；TV/CNBC 仅对 Nasdaq 失败的品种兜底（下面各阶段跳过
+     * 已有结果的 key）。查不到/非本场 → 不显示，宁缺勿假。 */
+    const nqKeys = want.filter(k => {
+      const a = U.get(k);
+      if (!a || a.grp !== 'usstock' || a.kind !== 'stock' || !a.extSym) return false;
+      const st = w.Session && w.Session.state ? w.Session.state(k) : null;
+      return !!(st && (st.phase === 'pre' || st.phase === 'post'));
+    }).slice(0, 12);
+    const nqMap = {};   // v570：Nasdaq 同源结果（TV/CNBC 都不得覆盖）
+    if (nqKeys.length) {
+      const got = await Promise.all(nqKeys.map(async k => {
+        const st = w.Session.state(k);
+        return [k, await nasdaqExtOf(U.get(k).extSym, st.phase)];
+      }));
+      let okN = 0;
+      got.forEach(([k, rec]) => {
+        if (rec) { nqMap[k] = rec; extCache.set(k, { at: now, d: rec }); okN++; }
+        else extCache.delete(k);   // Nasdaq 失败：清缓存让下一轮重试，不用残留值
+      });
+      status.nq = okN ? 'ok' : 'fail';
+    }
+
     // ---- ① TradingView：盘前/盘后（覆盖 CNBC 盲区）----
     const tvKeys = want.filter(k => {
+      if (nqMap[k]) return false;                     // v570：Nasdaq 已命中，不再让 TV 覆盖
       const a = U.get(k);
       return a && a.tv && TV_EXT_GRPS.indexOf(a.grp) >= 0
         && (!extCache.get(k) || now - extCache.get(k).at > 45000);
@@ -2531,6 +2560,7 @@
       if (s) byKey.set(k, s);
     });
     const stale = want.filter(k => {
+      if (nqMap[k]) return false;                     // v570：Nasdaq 已命中，不让 CNBC 覆盖
       const h = extCache.get(k);
       return !h || now - h.at > 45000;
     });
@@ -2549,6 +2579,7 @@
         const bySym = {};
         arr.forEach(x => { if (x && x.symbol) bySym[String(x.symbol).toUpperCase()] = x; });
         byKey.forEach((sym, k) => {
+          if (nqMap[k]) return;                 // v570：Nasdaq 已命中，CNBC 不得覆盖缓存
           const rec = parseCnbcExt(bySym[String(sym).toUpperCase()]);
           // TV 已经给了这个品种就别删（CNBC 偶发抽风返回空时，保留 TV 的命中）
           const tvHit = extCache.get(k) && extCache.get(k).d && extCache.get(k).d.src === 'tv';
@@ -2573,6 +2604,9 @@
       if (stp && stp.phase === 'pre' && rec.phase === 'post') return;
       out[k] = rec;
     });
+    /* v570：Nasdaq 同源结果最后覆盖一遍——它的 phase/price 与详情页盘前分时
+     * 完全同源同口径，任何 TV/CNBC 缓存残留都不得抢在它前面。 */
+    Object.keys(nqMap).forEach(k => { out[k] = nqMap[k]; });
 
     /* 【兜底】CNBC 偶发抽风（限流 / 该时段不给 ExtendedMktQuote）时，个股改用
      * 纳斯达克官方分时推一条盘前/盘后价 —— 那份数据本来就要抓来画分时图，
@@ -2595,14 +2629,18 @@
     return out;
   }
 
-  /** 用纳斯达克分时末点推一份延展时段报价（CNBC 失败时的兜底） */
-  async function nasdaqExtOf(sym) {
+  /** 用纳斯达克分时末点推一份延展时段报价（v570 起升为第一优先，CNBC 失败时兜底）。
+   *  expectSeg：当前时段（pre/post）。 Nasdaq 的 chart 有时还是「上一交易日」的
+   *  序列（今天盘前尚无成交时），末点 seg 是昨天 reg/post——不按本场时段过滤的话，
+   *  昨晚盘后价会被当成今天的盘前价透出（与 tvExtFetch 的 v200 残留防御同款）。 */
+  async function nasdaqExtOf(sym, expectSeg) {
     try {
       const n = await nasdaqMinutes(sym);
       const pts = (n && n.points) || [];
       if (!pts.length) return null;
       const last = pts[pts.length - 1];
       if (!last.seg || last.seg === 'reg') return null;   // 还在常规时段，没有「盘后价」可说
+      if (expectSeg && last.seg !== expectSeg) return null;  // v570：非本场时段的点=残留，宁缺勿假
       const base = n.regClose || n.preClose || pts[0].close;
       if (!base || !last.close) return null;
       const price = last.close;
