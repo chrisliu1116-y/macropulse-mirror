@@ -286,6 +286,28 @@
     return arr.slice(-(m || 260));
   }
 
+  /* v579【长历史补全不得吞掉主源当日K】
+   * SOX/PLTR 这类东财日K很短（SOX 89 根），原逻辑用 Nasdaq/Yahoo 的 8000+ 根
+   * **整段替换**，而 Nasdaq historical 最新只到上一交易日 → 用户看到的最后一根
+   * 是昨天（截图 11/23 收 9588.05），东财 APP 的 11/24 当日K被吃掉了。
+   * 正确语义：长历史只负责补「主源没有的旧段」，重叠/更新的周期一律以主源为准。 */
+  function klineSeriesKey(p, mode) {
+    const ms = p.time * 1000;
+    const d = new Date(ms);
+    if (mode === 'm') return d.getUTCFullYear() + '-' + (d.getUTCMonth() + 1);
+    if (mode === 'w') {
+      const wd = (d.getUTCDay() + 6) % 7;   // 周一=0
+      return new Date(ms - wd * 86400000).toISOString().slice(0, 10);
+    }
+    return d.toISOString().slice(0, 10);
+  }
+  function mergeKlineHistory(primary, longHist, mode) {
+    const map = new Map();
+    for (const p of (longHist || [])) map.set(klineSeriesKey(p, mode), p);
+    for (const p of (primary || [])) map.set(klineSeriesKey(p, mode), p);  // 主源最新值覆盖长历史
+    return Array.from(map.values()).sort((a, b) => a.time - b.time);
+  }
+
   function aggregate(pts, mode) {
     const out = [];
     let cur = null, curKey = '';
@@ -3755,7 +3777,9 @@
           try {
             const rows = await nasdaqHistorical(a.ndq.sym, a.ndq.cls);
             if (rows.length > pts.length) {
-              pts = mode === 'd' ? rows : aggregate(rows, mode);
+              /* v579：长历史只补旧段；东财主源最近K（含当日进行中）必须保留 */
+              const longPts = mode === 'd' ? rows : aggregate(rows, mode);
+              pts = mergeKlineHistory(pts, longPts, mode);
             }
           } catch (e) { /* 取不到就维持东财那段 */ }
         }
@@ -3763,7 +3787,11 @@
           try {
             const iv = mode === 'd' ? '1d' : mode === 'w' ? '1wk' : '1mo';
             const y = await yahooBars(a.yh, iv, 'epoch');
-            if (y && y.points.length > pts.length) pts = y.points;
+            if (y && y.points.length > pts.length) {
+              /* v579：同上，Yahoo 只补长历史，不吞掉东财当日K */
+              const longPts = mode === 'd' ? y.points : aggregate(y.points, mode);
+              pts = mergeKlineHistory(pts, longPts, mode);
+            }
           } catch (e) { /* 拿不到就维持现有那段 */ }
         }
         /* v516【全品种前复权校准】东财对所有海外市场的 fqt 基本无效、A股/港股
