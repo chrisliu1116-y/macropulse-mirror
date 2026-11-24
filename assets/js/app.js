@@ -9546,6 +9546,13 @@
       const finalEv = item.ev;
       if (finalEv && newName && newName.trim()) finalEv.title = newName.trim().slice(0, 16);
       if (!(w.EVENTS || []).some(ev => ev.id === cid)) w.EVENTS.push(finalEv);
+      /* v570【审批通过持久化】写 mm_approved_cards：否则下次 applyCardData 又会把
+       * 这张卡当未审批从 EVENTS 剔除（11-24 审批绕过修复的配套）。 */
+      try {
+        const ap = store.get('mm_approved_cards', []);
+        const al = Array.isArray(ap) ? ap : [];
+        if (al.indexOf(cid) < 0) { al.push(cid); store.set('mm_approved_cards', al); }
+      } catch (e) {}
       /* v526【Phase3·确认回执】点「加入」才回传 GHA：未确认前 GHA 绝不调 Gemini。
        * v538：回执带 name（用户改名）。POST CF /__card-confirm，失败静默。 */
       try {
@@ -9731,9 +9738,32 @@
            * 云端新增的卡 → 自动构造 EVENTS 条目,不再需要手动改 events.js 静态列表。
            * 这样新增卡只改云端数据+SCOPES 即可,APP 自动显示。 */
           const _evs = w.EVENTS || (w.EVENTS = []);
+          /* v570【审批绕过修复】原写法无条件把云端所有卡 push 进 _evs，含未审批的
+           * auto_ 卡 → 下面第 9790 行的审批守卫 `some(ev=>ev.id===cid)` 永远命中，
+           * 新卡直接进主列表、铃铛红点永远不亮（11-24 用户实测：黄仁勋
+           * 复职风波没审批早上就在列表里）。改为:auto_ 卡一律不在这里 push，
+           * 只走下面的待审批队列；用户点铃铛「加入」才 push（nextAutoCardAsk）。 */
+          const _approvedSet = new Set((() => {
+            try { const a = store.get('mm_approved_cards', []); return Array.isArray(a) ? a : []; }
+            catch (e) { return []; }
+          })());
+          /* v570 迁移：旧机制下已审批的卡（云端 confirmed_at 或 _radar_pending=false）
+           * 没有本地 approved 记录，补写一次，避免修复后被误踢出主列表。
+           * incubator 建的卡两个字段都没有 → 保持未审批，进铃铛队列。 */
+          Object.keys(cards).forEach(cid => {
+            if (cid.indexOf('auto_') !== 0 || _approvedSet.has(cid)) return;
+            const c = cards[cid] || {};
+            if (c.confirmed_at || c._radar_pending === false) {
+              _approvedSet.add(cid);
+              const ap = store.get('mm_approved_cards', []);
+              const al = Array.isArray(ap) ? ap : [];
+              if (al.indexOf(cid) < 0) { al.push(cid); store.set('mm_approved_cards', al); }
+            }
+          });
           Object.keys(cards).forEach(cid => {
             const c = cards[cid];
             if (!c) return;
+            if (cid.indexOf('auto_') === 0 && !_approvedSet.has(cid)) return;  // 未审批新卡：不进主列表
             let ev = _evs.find(e => e.id === cid);
             if (!ev) {
               ev = { id: cid, icon: c.icon || '📌', title: c.title || c.short || cid,
@@ -9788,7 +9818,9 @@
               archiveCands.push({ cid, title: cards[cid].title || cid });
             }
             if (cid.indexOf('auto_') !== 0) return;
-            if ((w.EVENTS || []).some(ev => ev.id === cid)) return;
+            /* v570：不再因"卡已在 EVENTS"就跳过——未审批的 auto_ 卡现在不会进 EVENTS；
+             * 已审批的走 _approvedSet 判定，也不该再入队。 */
+            if (_approvedSet.has(cid)) return;
             const c = cards[cid];
             if (isRejected(cid, c)) return;   // 用户拒绝过的主题，永久跳过
             pending.push({ cid, c,
