@@ -5733,6 +5733,10 @@
      * 无条件生效，盘中打开 SK 海力士仍画出整段盘前黄线（11-13 22:33 截图）。
      * 盘前/盘后时段：手动偏好优先；没手动选过就自动接上（和富途一致）。 */
     if (phase === 'regular') return false;
+    /* v576【韩股盘后闭市后仍可回看】Nextrade 20:00 KST 收市后 Session 变为 closed，
+     * 但刚结束的 246 根左右真实盘后分钟仍然有效。此时尊重用户点击选择；
+     * 否则按钮即使露出，点击后 syncMinBar 也会立刻把选中态打回「常规分时」。 */
+    if (phase === 'closed' && a.grp === 'krstock') return S.minExt === true;
     if (phase === 'pre' || phase === 'post') {
       if (S.minExt === true || S.minExt === false) return S.minExt;
       /* v394【用户口径纠正】盘前/盘后不再自动接延展段。原 v296 写「没手动选过就
@@ -5783,7 +5787,12 @@
         return (st0 && st0.phase) || '';
       } catch (e) { return ''; }
     })();
-    const show = S.sheetMode === 'min' && hasExt && (phaseNow === 'pre' || phaseNow === 'post');
+    /* v576【用户 20:05 截图根因】韩股盘后 20:00 KST 一结束，phase 就从 post 变 closed；
+     * 旧条件把按钮立刻隐藏，哪怕 Naver 已拿到完整盘后分钟、chart.extAvailable=true。
+     * 韩股闭市后保留「常规分时 / 盘后分时」入口供回看；美股及其它品种门控不变。 */
+    const krPostReview = isKr && phaseNow === 'closed';
+    const show = S.sheetMode === 'min' && hasExt &&
+      (phaseNow === 'pre' || phaseNow === 'post' || krPostReview);
     bar.hidden = !show;
     const note = $('#shMinNote');
     if (note) {
