@@ -5790,7 +5790,12 @@
       let text = '';
       if (S.sheetMode === 'min' && !show && a) {
         if (a.grp === 'twstock') text = '台股没有美股式盘前盘后（盘后仅 14:00–14:30 定盘单一价，与收盘同价），故不提供延展时段分时';
-        else if (a.grp === 'krstock') text = '韩股盘后（Nextrade 애프터마켓 15:40–20:00）分钟数据暂未取到；盘前 08:00–08:50 该源不提供';
+        else if (a.grp === 'krstock') {
+          /* v574：带上取数诊断，下次「没有盘后按钮」时能直接看出断在代理还是解析。 */
+          const dbg0 = w.__krMinDbg;
+          const why = (dbg0 && dbg0.err) ? '（取数失败：' + String(dbg0.err).slice(0, 40) + '）' : '';
+          text = '韩股盘后（Nextrade 애프터마켓 15:40–20:00）分钟数据暂未取到' + why + '；盘前 08:00–08:50 该源不提供';
+        }
         else if (a.grp === 'jpstock') text = '日股东证主板没有盘前盘后；Japannext「夜間PTS」17:00–06:00 有真实成交，但只提供最新价（见行情页「夜盤PTS」行），没有逐笔分时';
         /* v214：美股指数（纳指/费半/标普等）本身没有盘前盘后逐笔 —— 实测东财 trends2、
          * Nasdaq 官方 chart、Yahoo 三个源对指数都只返回常规时段 9:30–16:00 ET。
@@ -10300,7 +10305,14 @@
     // 注册 Service Worker：手机「添加到主屏幕」后能秒开、弱网也不白屏
     // （file:// 协议下浏览器不允许注册，静默跳过即可）
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
+      /* v574【发版即时生效】updateViaCache:'none' 强制浏览器每次走网络检查 sw.js ——
+       * 默认策略下 sw.js 可能被 HTTP 缓存 24h，旧 SW 会持续用旧 CORE 列表，
+       * 这是历次「改了线上没生效、截图还停在旧版本」的系统性根因之一。
+       * 注册后立即 update() 主动拉一次，配合 sw.js 里的 skipWaiting+clients.claim，
+       * 用户下次打开即是最新版。 */
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+        .then(r => { try { r.update(); } catch (e) {} })
+        .catch(() => {});
       /* v151：回到前台就主动查一次新版本。
        * 用户反复报「你说的都没改」，实际是 PWA 从后台恢复时不会自动触发
        * SW 更新检查，页面一直停在旧缓存（截图里版本戳 v148，线上早已 v150）。
