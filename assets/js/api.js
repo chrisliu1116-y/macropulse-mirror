@@ -99,6 +99,15 @@
       if (r.ok) return r;
       firstErr = new Error('same-origin HTTP ' + r.status);
     } catch (e) { firstErr = e; }
+    /* v573【Pages 网关代理·国内可达】workers.dev 被污染（v303：12s 超时+熔断），
+     * 同源又是静态 404 —— 无 CORS 头的源（韩股盘后分时 Naver fchart 实测无 ACAO）
+     * 在国内两条路全断。pages.dev 与卡片接口同域名、国内可达，这里插一条：
+     * 同源 → pages /__px → worker。韩股盘后分时"暂未取到"即由此修复。 */
+    try {
+      const r2 = await fetch('https://macropulse-api.pages.dev/__px?u=' + q, o);
+      if (r2.ok) return r2;
+      if (!firstErr) firstErr = new Error('pages px HTTP ' + r2.status);
+    } catch (e3) { if (!firstErr) firstErr = e3; }
     try {
       return await _workerTry(q);
     } catch (e2) {
@@ -2813,9 +2822,13 @@
       const P = w.LiveNews && w.LiveNews.proxy;
       if (typeof P !== 'function') return null;
       try {
-        txt = String(await P(target, { timeout: 15000, raw: true, check: b => String(b).indexOf('data="') >= 0 }));
+        /* v573：check 从 `data="` 放宽到 `data=` —— 代理池通道（allorigins 等）会把
+         * 引号转义成 data=&quot; / data=\"，原校验直接判假 200 → 韩股盘后分时永远拿不到。 */
+        txt = String(await P(target, { timeout: 15000, raw: true, check: b => String(b).indexOf('data=') >= 0 }));
       } catch (e) { return null; }
     }
+    /* v573：统一还原被包装通道转义的引号，否则下面的 data="..." 正则匹配不到。 */
+    txt = String(txt).replace(/&quot;/g, '"').replace(/\\"/g, '"');
     const raw = [];
     const re = /data="([^"]+)"/g;
     let m;
