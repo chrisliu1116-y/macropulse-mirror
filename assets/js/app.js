@@ -3107,7 +3107,22 @@
       return !!j.open || j.phase === 'pre' || j.phase === 'post';
     } catch (e) { return false; }
   }
-  function sessRank(sk) { return sessLive(sk) ? 0 : 1; }
+  /* v572【盘前优于盘后】用户口径（11-24 18:07）：美股正处盘前、韩股正处盘后，
+   * 原 v209 规则"盘前/盘后都算交易中 rank 0"使韩股盘后（地区序 kr 在 us 前）
+   * 压住美股盘前。改为分层权重：交易中 0 > 盘前 1 > 盘后 2 > 休市 3。
+   * 组级 sessionLive 仍优先（v237：apac 并集 judge 会把交易中成员误判休市），
+   * live 时再按 judge 的 phase 细分 pre/post。 */
+  function sessRank(sk) {
+    if (!sessLive(sk)) return 3;
+    let p = '';
+    try {
+      const j = w.Session.judge(sk, new Date());
+      p = (j && j.phase) || '';
+    } catch (e) {}
+    if (p === 'pre') return 1;
+    if (p === 'post') return 2;
+    return 0;   // regular / 夜盘 / 7×24 / 组级 live 但 phase 不明 → 交易中层
+  }
   function sessPri(sk) { const i = SESS_PRIORITY.indexOf(sk); return i < 0 ? 90 : i; }
 
   // 时段区块的出场顺序：正在交易的顶前、休市的沉底（同层按地区优先序）
