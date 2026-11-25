@@ -271,6 +271,28 @@
     if (!m) return null;
     return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 1000;
   }
+  /* v597【盘中陈旧数据识别】市场处于盘中(reg/regular/pre/post)时，若序列末点的
+   * 交易所当地日期 ≠ 今天，说明源给的是上一交易日整场（东财 trends2 在开盘
+   * 窗口期常如此：昨天满场 240/390 根远超竞速门槛，旧代码直接放行冒充实时）。
+   * 抽成公共函数供：①美股指数东财分支(stale 时不 return，落 CNBC 实时兜底)
+   * ②intraday 出口总防线(stale 时标 failed→缓存)。收盘时段返回 false（显示
+   * 上一交易日本就正确）；24h 品种当地日期恒今天，天然不受影响。 */
+  function isStaleSessionPts(key, a, pts) {
+    try {
+      const _st = (w.Session && w.Session.state) ? w.Session.state(key) : null;
+      const _inPlay = _st && (_st.phase === 'reg' || _st.phase === 'regular'
+        || _st.phase === 'pre' || _st.phase === 'post');
+      if (!_inPlay || !a || !pts || pts.length < 2) return false;
+      const _type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
+      const _cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[_type] : null;
+      const _tz = (_cfg && _cfg.tz) || 'America/New_York';
+      const _fmt = new Intl.DateTimeFormat('en-CA', { timeZone: _tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+      const _today = _fmt.format(new Date());
+      const _last = pts[pts.length - 1].time;
+      if (!(_last > 0)) return false;
+      return _fmt.format(new Date(_last * 1000 - 8 * 3600e3)) !== _today;
+    } catch (e) { return false; }
+  }
   function tDay(s) {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
     if (!m) return null;
@@ -1543,7 +1565,7 @@
    * 改成按「相邻点间隔 >30 分钟视为换场」切段，取点数最多的一段：
    *   · 美股一场（22:30→05:00 连续）完整保留；
    *   · VIX 周末那 3 个孤立平点与主段断开，自动被排除（v359 的坑同样覆盖）。 */
-  function pickDayBars(bars) {
+  function pickDayBars(bars, preferLatest) {
     const rows = [];
     for (const b of bars) {
       let abs = 0;
@@ -1573,6 +1595,14 @@
       else { if (cur.length > best.length) best = cur; cur = [rows[i]]; }
     }
     if (cur.length > best.length) best = cur;
+    /* v598【盘中选最新段而非最长段】旧逻辑取最长段——盘中时今天只走了半场
+     * (如130根)必然短于昨天整场(390根) → CNBC 兜底永远拿到昨天 → 被 v596/v597
+     * 新鲜度防线拦截 → 用户看到的全是"缓存"（11-25 23:41 标普/纳指/道指/VIX/
+     * 铠侠ADR 五图实锤：图例缓存、价是昨天、顶部报价却是今天实时）。
+     * 分时场景（cnbcIntraday/cnbcIdxIntraday）传 preferLatest=true：
+     * 取最后一段（最新交易日），点数 >=5 才认，太短回退最长段。
+     * 美债等日频调用不传，行为完全不变。 */
+    if (preferLatest && cur.length >= 5) return cur.map(x => x.b);
     return best.map(x => x.b);
   }
 
@@ -1660,8 +1690,14 @@
 
   /** CNBC 1D 分钟线：bar 的 tradeTimeinMills 是**真实 epoch**，
    *  而全站时间轴约定是「北京时间墙上时间装进 UTC 分量」，所以要 +8h。 */
-  async function cnbcIntraday(sym) {
-    const ck = 'm:' + sym;
+  /* v598：preferLatest=true 时 pickDayBars 取「最新一段」而非「最长一段」。
+   * 盘中品种（VIX/美股指数/OTC ADR）今天只走半场必然短于昨天整场，
+   * 旧的最长段策略在盘中永远选到昨天 → 被新鲜度防线拦 → 全显示缓存。
+   * 默认 true；唯一例外是美债（rate, 24h）：它的既有行为就是显示
+   * 「上一场完整分时」（24h 品种收盘后才换场），两处调用显式传 false 保持不变。 */
+  async function cnbcIntraday(sym, preferLatest) {
+    const _pl = preferLatest !== false;
+    const ck = 'm:' + sym + (_pl ? '|L' : '');
     const hit = cnbcCache.get(ck);
     /* v358：1D 分钟线缓存 15s→45s（分钟线本身天然慢 0~1 分钟，
      * 线尾由 withLiveTip 用实时报价补点，45s 复用不会造成价格滞后）。 */
@@ -1675,7 +1711,7 @@
        * 只留最后一个交易日的，否则分时图左端会挂一个孤零零的点。 */
       /* v359：不再按「日期最大」硬切，改选最近一个完整交易日（见 pickDayBars） */
       const acc = [];
-      for (const b of pickDayBars(bars)) {
+      for (const b of pickDayBars(bars, _pl)) {
         const ms = +b.tradeTimeinMills;
         if (!(ms > 0)) continue;
         const c = +b.close;
@@ -1713,9 +1749,10 @@
       const d = await cnbcJSON(url);
       const bars = ((d && d.barData) || {}).priceBars || [];
       if (!bars.length) throw new Error('cnbc no bars');
-      /* v359：同 cnbcIntraday，选最近一个完整交易日，避免周末只剩几根平点 */
+      /* v359：同 cnbcIntraday，选最近一个完整交易日，避免周末只剩几根平点。
+       * v598：美股指数永远取最新段（盘中今天半场短于昨天整场，最长段必选错）。 */
       const acc = [];
-      for (const b of pickDayBars(bars)) {
+      for (const b of pickDayBars(bars, true)) {
         const s = String(b.tradeTime || '');
         const hm = +s.slice(8, 12);
         if (!(hm >= 930 && hm <= 1600)) continue;
@@ -4422,7 +4459,8 @@
          * 与详情用同一条数据。只在前面都失败时走，正常情况零额外请求。 */
         if (a && a.grp === 'rate') {
           try {
-            const cb = await cnbcIntraday(a.cnbc || key);
+            /* v598：美债 24h 保持「最长段=上一场完整分时」既有行为，不选最新段 */
+            const cb = await cnbcIntraday(a.cnbc || key, false);
             const cbPts = (cb && cb.points) || [];
             if (cbPts.length >= 15) {
               return { points: cbPts,
@@ -4544,7 +4582,8 @@
          * 改用已封装的 cnbcIntraday()（内部 pickDayBars 只留最近一场 + 45s 缓存）。
          * 昨收优先实时报价 prev（与头部同源），再退 CNBC 首根。 */
         try {
-          const cb = await cnbcIntraday(a.cnbc || key);
+          /* v598：美债 24h 保持「最长段」既有行为 */
+          const cb = await cnbcIntraday(a.cnbc || key, false);
           /* v398：cnbcIntraday 返回 {points:[]} 对象（不是裸数组），必须取 .points。
            * 首版误写 cb.length → undefined>10 恒 false → 每次都落 Yahoo 周五旧线。 */
           const cbPts = (cb && cb.points) || [];
@@ -4773,7 +4812,23 @@
                 ext: true
               };
             }
-          } catch (e) { /* 回退东财 */ }
+          } catch (e) {
+            /* v597【美股 OTC/ADR 分时兜底】KXIAY(铠侠ADR)等 OTC 品种 Nasdaq
+             * 官方 chart 无任何数据(stocks/etf/index 全0根)，旧代码 catch 后
+             * 落 yahoo(5m/1d)只有昨日残缺 → 用户看到缓存。CNBC 实测有 KXIAY
+             * 739 根今日实时(末点 10:37 ET)，这里补一条兜底。
+             * 仅 usstock 且 CNBC 有该符号时走；正常 Nasdaq 品种不会进 catch。 */
+            if (a.grp === 'usstock' && (a.cnbc || /^[A-Z.]{1,8}$/.test(key))) {
+              try {
+                const c = await cnbcIntraday(a.cnbc || key);
+                if (c.points.length > 15) {
+                  return { points: c.points,
+                    preClose: sanePrev(key, (cachedQuote(key) || {}).prev, c.points[c.points.length - 1].close) || c.points[0].close,
+                    synthetic: false, src: 'cnbc' };
+                }
+              } catch (eCnbc) { /* 落原东财/yahoo 链 */ }
+            }
+          }
         }
       }
       /* 韩股 / 台股：东财 trends2 只含常规时段（实测 KRX 到 14:30 北京＝15:30 KST 常规收盘，
@@ -4857,7 +4912,10 @@
           const rem = await emTrend(a.secid, 1);
           /* 阈值保持原口径（>0 点即用）：刚开盘只有几根点时也必须照实画，
            * 不能因为「不够 20 点」就误判失败去兜底（v374 首版写成 >20，测试抓到）。 */
-          if (rem.points.length) {
+          /* v597：东财在开盘窗口期会返回上一交易日整场（用户 11-25 23:31
+           * 截图：开盘2小时标普仍显示昨天7201而实时7009）。stale 就不 return，
+           * 继续走下面 CNBC —— 实测 CNBC .SPX/.DJI/.IXIC 都有今天的实时分钟线。 */
+          if (rem.points.length && !isStaleSessionPts(key, a, rem.points)) {
             return { points: rem.points, preClose: rem.preClose, synthetic: false, src: 'em' };
           }
         } catch (eEm) { /* 东财挂 → 走 CNBC 兜底 */ }
@@ -5038,20 +5096,8 @@
      * 「缓存」)而不是冒充实时。收盘时段不校验（显示上一交易日是正确的）；
      * 24h 品种当地日期恒为今天，天然不受影响。 */
     try {
-      const _sa = U.get(key);
-      const _st = (w.Session && w.Session.state) ? w.Session.state(key) : null;
-      const _inPlay = _st && (_st.phase === 'reg' || _st.phase === 'regular'
-        || _st.phase === 'pre' || _st.phase === 'post');
-      if (!r.failed && !r.synthetic && _inPlay && _sa && r.points && r.points.length >= 2) {
-        const _type = _sa.sess || (U.GROUPS[_sa.grp] && U.GROUPS[_sa.grp].session) || 'cn';
-        const _cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[_type] : null;
-        const _tz = (_cfg && _cfg.tz) || 'America/New_York';
-        const _fmt = new Intl.DateTimeFormat('en-CA', { timeZone: _tz, year: 'numeric', month: '2-digit', day: '2-digit' });
-        const _today = _fmt.format(new Date());
-        const _lastLocal = _fmt.format(new Date(r.points[r.points.length - 1].time * 1000 - 8 * 3600e3));
-        if (_lastLocal !== _today) {
-          r = Object.assign({}, r, { failed: true, error: 'stale session (prev day ' + _lastLocal + ')' });
-        }
+      if (!r.failed && !r.synthetic && isStaleSessionPts(key, U.get(key), r.points)) {
+        r = Object.assign({}, r, { failed: true, error: 'stale session (prev day)' });
       }
     } catch (eStale) { /* 校验异常不拦正常数据 */ }
     /* 实时全挂 → 读缓存兜底（图例标「缓存」，诚实可见） */
