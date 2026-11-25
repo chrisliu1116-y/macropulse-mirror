@@ -361,10 +361,27 @@
     /* v520：精简为一行可容纳（原「全部A股 X 只 · 有效 X 只 · X 个交易日 · 更新…」太长换行） */
     if (S.B) parts.push('全A ' + m.universe + '只 · ' + m.days + '日');
     parts.push(short ? '更新 ' + short : '未更新');
-    if (S.K) {
-      var kLast = S.K.dates[S.K.dates.length - 1];
-      var bLast = S.B ? S.B.dates[S.B.dates.length - 1] : null;
-      if (bLast && kLast < bLast) parts.push('上证 ' + kLast + ' 待补');
+    /* v581【待补品种修正】旧代码写死「上证 X 待补」，但 S.K 会随对比指数切换，
+     * 且只查当前选中指数一条——实测创业板 CYB 停在 11-23、上证已到 11-25 时，
+     * 底部却写「上证 2026-11-23 待补」（错指品种 + 用错日期）。改为遍历全部指数：
+     * 顶层 S.SH_K=上证 + S.ALLIDX=其余 5 个，逐一比末日与 breadth 交易日，
+     * 列出真正落后的品种名与其自身末日。都最新时不显示任何「待补」。 */
+    var bLast = S.B && S.B.dates && S.B.dates.length ? S.B.dates[S.B.dates.length - 1] : null;
+    if (bLast) {
+      var IDX_NAMES = {
+        SH: '上证', SZ: '深证成指', SZ50: '上证50',
+        HS300: '沪深300', CYB: '创业板指', KC50: '科创50'
+      };
+      var pending = [];
+      var chk = function (key, obj) {
+        if (!obj || !obj.dates || !obj.dates.length) return;
+        var last = obj.dates[obj.dates.length - 1];
+        if (last < bLast) pending.push((IDX_NAMES[key] || key) + ' ' + last);
+      };
+      chk('SH', S.SH_K);
+      var all = S.ALLIDX || {};
+      for (var ik in all) if (Object.prototype.hasOwnProperty.call(all, ik)) chk(ik, all[ik]);
+      if (pending.length) parts.push(pending.join('/') + ' 待补');
     }
     /* v519【源名显示在底部】按用户口径，源名跟原来一样放底部那行。
      * 取当前游标所在日期对应段的源（东财段/腾讯段），游标移动时随 footer 刷新。 */
