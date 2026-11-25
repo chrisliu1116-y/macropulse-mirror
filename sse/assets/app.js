@@ -456,9 +456,17 @@
       }
     }
     var insum = { total: [], daycnt: [], willrm: [], newadd: [], sig: [] };
+    /* v582【对比模式"较前日"错位】各指数 K 线可能有缺日（实测沪深300 缺 11-24、
+     * 创业板缺 11-24、科创50 缺 11-23+11-24），主轴相邻索引 i-1 不等于 breadth
+     * 的上一交易日 → 末日 112 的"较前日"被算成 112-114(11-23)=▼2 或 112-116=▼4，
+     * 与上证正确的 ▲+1 打架；冰点/预警角标也用了错误的 prevDay 而不出现。
+     * 这里为每个主轴位置记录它对应的 breadth 索引；updateCards 取"上一交易日"
+     * 时按 breadth 索引回退（跳过指数缺日），保证与上证/单独模式同口径。 */
+    S.axisBi = [];
     var prevTotal = 0, prevDay = 0, prevRm = 0, prevNew = 0;
     for (var i = 0; i < dates.length; i++) {
       var bi = S.bIndex.get(dates[i]);
+      S.axisBi.push(bi == null ? -1 : bi);
       if (bi == null) {
         /* v266：缺日不填 0（会在图上砸出一根假尖峰），沿用前一个有效值 */
         insum.total.push(prevTotal); insum.daycnt.push(prevDay);
@@ -499,7 +507,25 @@
     var d = S.insum;
     if (!d || i < 0 || i >= S.axis.length) return;
     var tot = d.total[i], day = d.daycnt[i], nw = d.newadd[i], rm = d.willrm[i];
-    var p = function (k) { return i > 0 ? d[k][i - 1] : null; };
+    /* v582【对比模式"较前日"错位】指数 K 线可能缺日（沪深300/创业板缺 11-24，
+     * 科创50 缺 11-23+11-24），主轴 i-1 不是 breadth 的上一交易日 → delta 算错、
+     * 冰点/预警角标误判。修复：prev 直接从 breadth 源数组按 bi-1 取（breadth
+     * 本身交易日连续、不缺日），不从主轴序列取。字段名映射 total/daycnt/newadd/willrm
+     * 与 S.B 完全一致，直接索引即可。 */
+    var BF = { total: 'total', daycnt: 'daycnt', newadd: 'newadd', willrm: 'willrm' };
+    var p = function (k) {
+      if (!S.B || !S.axisBi || i < 0 || i >= S.axisBi.length) return null;
+      var bi = S.axisBi[i];
+      if (bi == null || bi < 0) bi = -1;
+      // 往前找当前位置之前最近的有效 breadth 索引（当前本身缺日时）
+      if (bi < 0) {
+        for (var j = i - 1; j >= 0; j--) if (S.axisBi[j] >= 0) { bi = S.axisBi[j]; break; }
+      }
+      if (bi <= 0) return null;
+      // 关键：从 breadth 源直接取 bi-1（真正的上一交易日），绕开指数 K 线缺日
+      var src = S.B[BF[k] || k];
+      return (src && bi - 1 < src.length) ? src[bi - 1] : null;
+    };
 
     $('vTotal').textContent = tot;
     $('vDay').textContent = day;
