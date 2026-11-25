@@ -32,9 +32,14 @@
              grp: 'usstock', kind: 'stock', unit: 'USD', extSym: 'KXIAY', tv: 'OTC:KXIAY' },
     /* v588【LYTE 盘前】Roundhill Photonics & Optics ETF（用户截图"阿斯麦下面那个"），
      * 美股 ETF 在 Nasdaq 同样有盘前盘后交易，v587 的 ETF_RE 把它排除导致无
-     * 盘前价/按钮。美股 ETF 与个股一视同仁给 extSym。 */
-    LYTE: { name: 'Roundhill光子学ETF', short: 'LYTE', src: 'yahoo', sym: 'LYTE', dec: 2,
+     * 盘前价/按钮。美股 ETF 与个股一视同仁给 extSym。
+     * v590：short 从「LYTE」改成中文名，与详情标题一致（用户要求统一）。 */
+    LYTE: { name: 'Roundhill光子学ETF', short: 'Roundhill光子学ETF', src: 'yahoo', sym: 'LYTE', dec: 2,
             grp: 'usstock', kind: 'etf', unit: 'USD', extSym: 'LYTE', tv: 'BTS:LYTE' },
+    /* v590【闪迪中文名】搜索动态加入时 regYahooSym 用代码占位名(SNDK) → 列表/详情
+     * 都显示英文代码；静态注册一条中文名，get() 优先命中 ASSETS，动态注册覆盖不了。 */
+    SNDK: { name: '闪迪', short: '闪迪', src: 'yahoo', sym: 'SNDK', dec: 2,
+            grp: 'usstock', kind: 'stock', unit: 'USD', extSym: 'SNDK', tv: 'NASDAQ:SNDK' },
 
     /* ---------------- A股指数 ----------------
      * ord 只在「同一分组内」决定先后，跨组顺序由时段判断负责 */
