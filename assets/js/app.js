@@ -8504,8 +8504,20 @@
       try {
         const f = $('#effectFrame');
         if (f && f.contentWindow) {
+          /* v585：切回本 tab 时先把 iframe 内容滚回顶部，避免顶部「对比模式/全屏」
+           * 按钮被宿主横栏遮住（iframe 隐藏期间 scrollY 不归零，旧版要杀进程才恢复）。
+           * 同源 iframe 可直接写 scrollTop，双保险再发 mm_effect_show 让子页自己滚。 */
+          const resetScroll = () => {
+            try {
+              const cw = f.contentWindow;
+              if (cw && cw.scrollTo) cw.scrollTo(0, 0);
+              const cd = cw && cw.document;
+              if (cd) { if (cd.documentElement) cd.documentElement.scrollTop = 0; if (cd.body) cd.body.scrollTop = 0; }
+            } catch (e0) {}
+          };
+          resetScroll();
           [0, 600, 1500].forEach(ms => setTimeout(() => {
-            try { f.contentWindow.postMessage({ mm_effect_show: 1 }, location.origin); } catch (e) {}
+            try { resetScroll(); f.contentWindow.postMessage({ mm_effect_show: 1 }, location.origin); } catch (e) {}
           }, ms));
         }
       } catch (e) {}
