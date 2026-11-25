@@ -532,13 +532,23 @@
     const us = mkt === '105' || mkt === '106' || mkt === '107';
     const hk = mkt === '116';
     const nm = String(name || code);
+    /* v586【动态美股个股缺盘前】东财搜索建议里美股个股(105/106/107)与 ETF 同走这里，
+     * 旧版一律标 kind:'etf' → 盘前分时/盘前价门控(usstock&&stock&&extSym)全不满足。
+     * 用名称保守区分：明确带 ETF/Fund/杠杆(2X/3X/ bull/bear)字样的仍按 ETF，
+     * 其余按个股补 extSym/tv，让闪迪这类动态加入的美股与静态注册口径一致。 */
+    const ETF_RE = /(ETF|Fund|基金|杠杆|[23]X|Bull|Bear|Ultra|ProShares|Direxion)/i;
+    const usStock = us && !ETF_RE.test(nm);
     const a = {
       name: nm, short: nm, src: 'em',
       secid: String(secid), dec: us || hk ? 2 : 3,
       grp: us ? 'usstock' : (hk ? 'hkstock' : 'cnstock'),
-      kind: 'etf', unit: us ? 'USD' : (hk ? '港元' : '元'),
+      kind: usStock ? 'stock' : 'etf', unit: us ? 'USD' : (hk ? '港元' : '元'),
       _synth: true
     };
+    if (usStock) {
+      a.extSym = code;
+      a.tv = (mkt === '106') ? ('NASDAQ:' + code) : ('NYSE:' + code);
+    }
     ASSETS[code] = a;
     return a;
   }
@@ -548,11 +558,22 @@
     const c = String(code || sym);
     if (ASSETS[c]) return ASSETS[c];
     const nm = String(name || c);
+    /* v586【动态美股缺盘前分时】搜索页对美股个股传 (grp='usstock', kind='option')，
+     * 导致 regYahooSym 把它注册成 option → 没有 extSym → api.js 的美股盘前分时/
+     * 盘前价全部门控(kind==='stock' && extSym)进不去。用户实测闪迪(SNDK)列表无
+     * 盘前价、详情页无「盘前分时」按钮，而静态注册的美股(英伟达等)都正常。
+     * 美股组一律按个股注册并补 extSym/tv，与静态美股同口径；显式传了其它
+     * kind（如真期权合约）时保持原样不动。 */
+    const isUS = (grp || '') === 'usstock' && (!kind || kind === 'option');
     const a = {
       name: nm, short: nm, src: 'yahoo', sym: String(sym || c),
-      dec: 2, grp: grp || 'option', kind: kind || 'option', unit: 'USD',
+      dec: 2, grp: grp || 'option', kind: isUS ? 'stock' : (kind || 'option'), unit: 'USD',
       _synth: true
     };
+    if (isUS) {
+      a.extSym = c;              // 盘前/盘后报价（CNBC + Nasdaq）
+      a.tv = 'NASDAQ:' + c;      // Nasdaq 官方分时的推导兜底
+    }
     ASSETS[c] = a;
     return a;
   }
