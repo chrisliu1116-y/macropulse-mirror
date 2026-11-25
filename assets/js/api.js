@@ -5029,6 +5029,31 @@
   }
   async function intraday(key) {
     let r = finalize(await withLiveTip(key, await intradayRaw(key)), 'intraday');
+    /* v596【盘中新鲜度防线】用户 11-25 23:04 截图：美股开盘 34 分钟，道指/纳指/
+     * 标普/铠侠ADR 等分时仍是上一交易日整场（图例 05:00=美东昨天16:00收盘，
+     * 顶部报价却是今天实时）——东财 trends2 在开盘头几十分钟会返回上一交易日
+     * 的完整序列，昨天的满场根数远超 minBarsForSession 动态门槛，竞速防线
+     * 挡不住。早上 A股 开盘同样中招。修：市场处于盘中(reg/pre/post)时，序列
+     * 末点的交易所当地日期必须=今天，否则判 failed → 落 minCache(如实标
+     * 「缓存」)而不是冒充实时。收盘时段不校验（显示上一交易日是正确的）；
+     * 24h 品种当地日期恒为今天，天然不受影响。 */
+    try {
+      const _sa = U.get(key);
+      const _st = (w.Session && w.Session.state) ? w.Session.state(key) : null;
+      const _inPlay = _st && (_st.phase === 'reg' || _st.phase === 'regular'
+        || _st.phase === 'pre' || _st.phase === 'post');
+      if (!r.failed && !r.synthetic && _inPlay && _sa && r.points && r.points.length >= 2) {
+        const _type = _sa.sess || (U.GROUPS[_sa.grp] && U.GROUPS[_sa.grp].session) || 'cn';
+        const _cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[_type] : null;
+        const _tz = (_cfg && _cfg.tz) || 'America/New_York';
+        const _fmt = new Intl.DateTimeFormat('en-CA', { timeZone: _tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+        const _today = _fmt.format(new Date());
+        const _lastLocal = _fmt.format(new Date(r.points[r.points.length - 1].time * 1000 - 8 * 3600e3));
+        if (_lastLocal !== _today) {
+          r = Object.assign({}, r, { failed: true, error: 'stale session (prev day ' + _lastLocal + ')' });
+        }
+      }
+    } catch (eStale) { /* 校验异常不拦正常数据 */ }
     /* 实时全挂 → 读缓存兜底（图例标「缓存」，诚实可见） */
     if (r && r.failed) {
       const cached = readMinCache(key);
