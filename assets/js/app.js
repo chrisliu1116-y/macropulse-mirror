@@ -510,6 +510,21 @@
     const i = S.own.indexOf(k);
     if (i >= 0) { S.own.splice(i, 1); store.set('mm_own', S.own); }
   }
+  /* v589【动态自选重载后消失】闪迪(SNDK)等搜索动态加入的品种只注册在
+   * universe 内存 ASSETS 里；APP 内 H5 一重载（热更/切后台回收）内存清空，
+   * 但 mm_own 还留着 SNDK → renderMarket 的 `.filter(k => U.get(k))` 把它过滤掉，
+   * 用户看到「删了重新加又出现、过一会又不见了」。这里启动时按 own 里的
+   * 美股字母代码重建注册（regYahooSym 经 v586 会给 usstock 补 kind/extSym/tv），
+   * 名称先用代码占位，拉到行情后由 Yahoo shortName 回填。只处理确实
+   * U.get() 为空的 key，不影响任何已在静态名录/已正确注册的品种。 */
+  try {
+    S.own.forEach((k) => {
+      const code = String(k || '');
+      if (!code || U.get(code)) return;
+      if (!/^[A-Za-z][A-Za-z.\-]{0,7}$/.test(code)) return;   // 仅美股字母代码
+      if (U.regYahooSym) U.regYahooSym(code, code, code, 'usstock', 'stock');
+    });
+  } catch (eReReg) { /* 重建失败不影响启动，最多该品种仍不显示 */ }
 
   /* ---------------- 主题：深色 / 浅色 ---------------- */
   function applyTheme(t, silent) {
@@ -4027,7 +4042,22 @@
    * 用户点名要求打通。Yahoo search 覆盖全球：把「7203.T / 005930.KS / 2330.TW /
    * ES=F / ^GSPC」映射回我们的 code 与分组；APP 内走 nativeFetch 直连（最快），
    * 浏览器走 proxyFetch（同源失败自动切 Worker）。单次请求，不做同源双打。 */
+  /* v587【中文别名 → 美股 ticker】Yahoo search 对部分中文名直接 400
+   * （实测"铠侠"返回 HTTP400），而东财/腾讯智能搜索的中文"铠侠"只回日股
+   * 285A、不回美股 ADR。这里对已知中文别名先命中，直接给出规范 ticker，
+   * 与 Yahoo 结果走同一合并通道，用户搜"铠侠ADR/铠侠"即可找到 KXIAY。 */
+  const US_ALIAS = [
+    { re: /铠侠\s*(adr|美股)?/i, code: 'KXIAY', name: '铠侠ADR' },
+    /* v588：LYTE = Roundhill Photonics & Optics ETF（BTS），线上三源均不覆盖 */
+    { re: /^(lyte|roundhill.*photonics)/i, code: 'LYTE', name: 'Roundhill光子学ETF' }
+  ];
   function yahooSug(q, cb) {
+    const alias = US_ALIAS.find(a => a.re.test(String(q || '').trim()));
+    if (alias) {
+      cb([{ code: alias.code, name: alias.name, secid: '', type: '美股',
+            yh: alias.code, grp: 'usstock' }]);
+      return;
+    }
     const url = 'https://query1.finance.yahoo.com/v1/finance/search?q='
       + encodeURIComponent(q) + '&quotesCount=10&newsCount=0&listsCount=0';
     const parse = (txt) => {
