@@ -438,50 +438,47 @@
 
   /* ============ 主轴对齐（按日期 Map，不按下标硬对齐） ============ */
   function buildAxis() {
-    var dates = (S.compare && S.K) ? S.K.dates : S.B.dates;
-    /* v491【指标严格跟随 K 线起点】主轴起点 = max(指数首日, breadth 首日)。
-     * 指数起步晚于 breadth(如科创50 2019) → 主轴从 2019 开始，指标同步从那天显示；
-     * 指数起步早于 breadth(如上证/深成 1990) → 主轴从 breadth 2013 开始，
-     * 避免 2013 年前查不到指标而画出 0 假基线。两种方向都不会有"显示问题"。 */
-    S.KV = S.K;   // K线视图默认=完整数据
-    if (S.compare && S.K && S.B && S.B.dates && S.B.dates.length) {
-      var bFirst = S.B.dates[0];
-      var start = 0;
-      while (start < dates.length && dates[start] < bFirst) start++;
-      if (start > 0) {
-        dates = dates.slice(start);
-        /* K线视图同步裁剪，保证 drawSse 的 S.KV.c[gi] 与主轴 S.axis[gi] 一一对应 */
-        S.KV = { dates: S.K.dates.slice(start), o: S.K.o.slice(start), h: S.K.h.slice(start),
-                 l: S.K.l.slice(start), c: S.K.c.slice(start) };
-      }
+    /* v583【统一 Insum 主轴·用户口径】跑批只有一份 Insum（breadth.json），
+     * 所有对比模式指数必须引用同一份、显示完全一致。旧实现把主轴设成各指数 K
+     * 线日期（S.K.dates），再把 breadth 按日期塞进去——K 线缺日（沪深300/创业板
+     * 缺 11-24、科创50 缺 11-23+24）就让 Insum 图少点、箭头/预警缺失、卡片 delta
+     * 与上证不一致。现在主轴恒为 breadth 交易日轴（所有指数相同），K 线按日期
+     * 映射到这条轴上（缺日沿用前值，只影响上窗那根 K，绝不影响 Insum）。 */
+    if (!S.B || !S.B.dates || !S.B.dates.length) {
+      var kd = (S.K && S.K.dates) ? S.K.dates : [];
+      S.axis = kd; S.KV = S.K || null;
+      S.insum = { total: [], daycnt: [], willrm: [], newadd: [], sig: [] };
+      S.axisBi = [];
+      return;
     }
-    var insum = { total: [], daycnt: [], willrm: [], newadd: [], sig: [] };
-    /* v582【对比模式"较前日"错位】各指数 K 线可能有缺日（实测沪深300 缺 11-24、
-     * 创业板缺 11-24、科创50 缺 11-23+11-24），主轴相邻索引 i-1 不等于 breadth
-     * 的上一交易日 → 末日 112 的"较前日"被算成 112-114(11-23)=▼2 或 112-116=▼4，
-     * 与上证正确的 ▲+1 打架；冰点/预警角标也用了错误的 prevDay 而不出现。
-     * 这里为每个主轴位置记录它对应的 breadth 索引；updateCards 取"上一交易日"
-     * 时按 breadth 索引回退（跳过指数缺日），保证与上证/单独模式同口径。 */
-    S.axisBi = [];
-    var prevTotal = 0, prevDay = 0, prevRm = 0, prevNew = 0;
-    for (var i = 0; i < dates.length; i++) {
-      var bi = S.bIndex.get(dates[i]);
-      S.axisBi.push(bi == null ? -1 : bi);
-      if (bi == null) {
-        /* v266：缺日不填 0（会在图上砸出一根假尖峰），沿用前一个有效值 */
-        insum.total.push(prevTotal); insum.daycnt.push(prevDay);
-        insum.willrm.push(prevRm); insum.newadd.push(prevNew); insum.sig.push(0);
-      } else {
-        prevTotal = S.B.total[bi]; prevDay = S.B.daycnt[bi];
-        prevRm = S.B.willrm[bi]; prevNew = S.B.newadd[bi];
-        insum.total.push(prevTotal);
-        insum.daycnt.push(prevDay);
-        insum.willrm.push(prevRm);
-        insum.newadd.push(prevNew);
-        insum.sig.push(S.B.sig[bi]);
+    var dates = S.B.dates.slice();            // 统一轴 = breadth（与是否对比、选哪个指数无关）
+    S.axis = dates;
+    S.insum = {
+      total: S.B.total.slice(), daycnt: S.B.daycnt.slice(),
+      willrm: S.B.willrm.slice(), newadd: S.B.newadd.slice(),
+      sig: S.B.sig ? S.B.sig.slice() : dates.map(function () { return 0; })
+    };
+    S.axisBi = dates.map(function (_, i) { return i; });   // 主轴位置 == breadth 索引
+
+    /* K 线映射到统一轴：breadth 每个交易日 d 找指数 K 线同日那根；
+     * 缺日沿用前一根 K（保持与轴一一对应，drawSse 用 S.KV[gi] 直接索引）。
+     * 指数数据起点晚于 breadth 的日期（如科创50<2019）左侧无 K 线 → 用首根填充，
+     * 只在极早期；用户看的最近区间不受影响。 */
+    if (S.K && S.K.dates && S.K.dates.length) {
+      var kMap = {}, K = S.K;
+      for (var q = 0; q < K.dates.length; q++) kMap[K.dates[q]] = q;
+      var last = null;
+      var kv = { dates: dates.slice(), o: [], h: [], l: [], c: [] };
+      for (var i2 = 0; i2 < dates.length; i2++) {
+        var ki = kMap[dates[i2]];
+        if (ki !== undefined && K.c[ki] > 0) last = { o: K.o[ki], h: K.h[ki], l: K.l[ki], c: K.c[ki] };
+        if (!last) last = { o: K.o[0], h: K.h[0], l: K.l[0], c: K.c[0] };
+        kv.o.push(last.o); kv.h.push(last.h); kv.l.push(last.l); kv.c.push(last.c);
       }
+      S.KV = kv;
+    } else {
+      S.KV = S.K;
     }
-    S.axis = dates; S.insum = insum;
   }
 
   /* v265：日期 → 主轴索引，二分找「不早于该日期」的第一根；
