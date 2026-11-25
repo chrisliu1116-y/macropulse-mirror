@@ -1339,6 +1339,18 @@
     if (/embed=1/.test(location.search)) document.body.classList.add('embed');
     applyTheme(readTheme());
     window.addEventListener('message', function (e) {
+      /* v585【切回赚钱效应 tab 顶部按钮被横栏遮住】iframe 在切走时只是被隐藏、
+       * DOM 保留，内部 scrollY 不会归零；用户滚过一次后再切回来就停在下方，
+       * 顶部的「对比模式/全屏」按钮被宿主横栏盖住，必须杀进程重开才恢复。
+       * 宿主 switchTab('effect') 会发 mm_effect_show，收到即滚回顶部，
+       * 与重开 APP 新建 iframe 的效果一致。只处理来自父窗口的消息。 */
+      if (e.data && e.data.mm_effect_show && e.source === window.parent) {
+        try {
+          window.scrollTo(0, 0);
+          if (document.documentElement) document.documentElement.scrollTop = 0;
+          if (document.body) document.body.scrollTop = 0;
+        } catch (eScroll) {}
+      }
       if (e.data && typeof e.data.mm_theme === 'string' && !isEmbed()) applyTheme(e.data.mm_theme);
       if (e.data && typeof e.data.mm_compare === 'boolean') setCompare(e.data.mm_compare);
       /* v521：主站 eff-bar 下拉切指数 → 本页切换；若数据未就绪则缓存，applySse 后生效 */
