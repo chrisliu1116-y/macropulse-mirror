@@ -452,13 +452,23 @@
       return;
     }
     var dates = S.B.dates.slice();            // 统一轴 = breadth（与是否对比、选哪个指数无关）
+    /* v584【按指数首日裁切前段·用户口径】同一份 Insum 所有指数共用、尾端都一样；
+     * 但指数没有 K 线的年代（创业板 2010 前、科创50 2019 前）不该显示 Insum。
+     * 起点 = max(breadth 首日, 当前指数 K 线首日)，从该日起同步裁切 Insum+K 线。
+     * 只有对比模式且确实选了指数时裁切；上证/单独模式仍从 breadth 首日全量。 */
+    var start = 0;
+    if (S.compare && S.K && S.K.dates && S.K.dates.length) {
+      var kFirst = S.K.dates[0];
+      while (start < dates.length && dates[start] < kFirst) start++;
+    }
+    if (start > 0) dates = dates.slice(start);
     S.axis = dates;
     S.insum = {
-      total: S.B.total.slice(), daycnt: S.B.daycnt.slice(),
-      willrm: S.B.willrm.slice(), newadd: S.B.newadd.slice(),
-      sig: S.B.sig ? S.B.sig.slice() : dates.map(function () { return 0; })
+      total: S.B.total.slice(start), daycnt: S.B.daycnt.slice(start),
+      willrm: S.B.willrm.slice(start), newadd: S.B.newadd.slice(start),
+      sig: (S.B.sig ? S.B.sig.slice(start) : S.B.total.map(function () { return 0; }).slice(start))
     };
-    S.axisBi = dates.map(function (_, i) { return i; });   // 主轴位置 == breadth 索引
+    S.axisBi = dates.map(function (_, i) { return start + i; });   // 主轴位置 → breadth 索引
 
     /* K 线映射到统一轴：breadth 每个交易日 d 找指数 K 线同日那根；
      * 缺日沿用前一根 K（保持与轴一一对应，drawSse 用 S.KV[gi] 直接索引）。
@@ -1400,6 +1410,13 @@
       return true;
     }
     window.__switchCompareIndex = switchIndex;   // 供 message handler 调用
+    /* v584：只读验收探针（不参与渲染，供自动化核对统一 Insum 轴/裁切起点） */
+    window.__sseProbe = function () {
+      var ax = S.axis || [], n = ax.length;
+      return { first: n ? ax[0] : '', last: n ? ax[n - 1] : '', n: n,
+               idxKey: S.idxKey, totalLast: (S.insum && S.insum.total) ? S.insum.total[n - 1] : null,
+               sigLast: (S.insum && S.insum.sig) ? S.insum.sig[n - 1] : null };
+    };
     var cmpSel = $('cmpIndex');
     if (cmpSel) cmpSel.addEventListener('change', function () {
       if (!switchIndex(cmpSel.value)) cmpSel.value = S.idxKey;
