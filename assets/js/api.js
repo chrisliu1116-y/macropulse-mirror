@@ -3542,6 +3542,12 @@
     /* 显式映射表（指数/外汇/美债/商品/期指） */
     const MAP = {
       SPX: '^GSPC', IXIC: '^IXIC', DJI: '^DJI', HSI: '^HSI', N225: '^N225', KOSPI: '^KS11', TWSE: '^TWII',
+      /* v580【A股指数串源修复】上证/深证等内部 key 是字母缩写（AX/SZ/CYB…），
+       * 旧代码落到「美股 ticker」兜底直接把 AX 抓成 NYSE 的 Axos Financial（86 美元），
+       * 用户实测上证指数分时显示「价 86.17 / 全天 -97.57% / Yahoo」——串了完全无关的
+       * 美股。补上正确的 Yahoo 指数代码；这组品种有东财实时源，Yahoo 仅在其它源全挂时兜底。 */
+      AX: '000001.SS', HS300: '000300.SS', SZ: '399001.SZ', CYB: '399006.SZ',
+      SZ50: '000016.SS', KC50: '000688.SS',
       USDCNH: 'CNH=X', USDJPY: 'JPY=X', EURUSD: 'EURUSD=X', DXY: 'DX-Y.NYB',
       US10Y: '^TNX', US30Y: '^TYX', US5Y: '^FVX',
       /* US2Y：^IRX 是 13 周国库券，不是 2 年期 —— 宁可不出也不冒充 */
@@ -3564,7 +3570,16 @@
       return k + '.T';
     }
     if (/^\d{6}$/.test(k) && a && a.grp === 'krstock') return k + '.KS';
-    if (/^[A-Z.]{1,6}$/.test(k)) return k;         // 美股 ticker
+    /* v580【串源硬闸】字母 key 当美股 ticker 前，必须排除非美股品种：
+     * 上证 AX/深证 SZ 这类内部缩写、港股字母 key 一旦落到 Yahoo 裸代码就会抓到
+     * 同名的美股（AX=Axos Financial）。只有美股组、或品种自身声明 src:'yahoo'/
+     * 已带 sym 的，才允许用裸 key 当 ticker。拿不准就返回 null（如实失败，绝不冒充）。 */
+    if (/^[A-Z.]{1,6}$/.test(k)) {
+      const g = (a && a.grp) || '';
+      const NON_US = /^(cn|cnstock|hkstock|apac|krstock|jpstock|twstock|fx|rate|cmdty|cffex|bondfut|glbfut|energy|metal|option)$/;
+      if (a && a.src !== 'yahoo' && NON_US.test(g)) return null;
+      return k;
+    }
     return null;
   }
 
@@ -3631,6 +3646,44 @@
       const out = pts.filter((p, i) => days[i] === latest);
       return out.length >= 5 ? out : pts;
     } catch (e) { return pts; }
+  }
+
+  /* v580【早盘短序列防误杀】按「当前交易所当地时刻距开盘的分钟数」给出分时
+   * 序列的合理最少点数。根因：A股/港股 09:30 开盘，09:34~09:45 时东财 trends2
+   * 只有 5~16 根（实测 09:45 上证/沪深300/恒生均 16 根，末点即当前分钟，是真数据），
+   * 但 intradayRaw 竞速分支固定要求 >15 / >30 根 → 判为「数据不合格」→ 所有源竞速
+   * 失败 → intraday() 落 readMinCache() 显示「缓存」（用户 09:34 两网络都看到缓存、
+   * 同时段韩日台因 08:00 开盘已有 45~106 根而正常显示东财源）。
+   * 修法：门槛随已开盘分钟数增长，上限仍是原来的固定值（不改变满场时的严格度），
+   * 只对「刚开盘、点数天然就少」的时段放宽。判定只用时段表 + 本机时钟，零网络请求。
+   * 参数 full = 该分支原有固定门槛（15 或 30），floor = 早盘最低放行点数。 */
+  function minBarsForSession(a, full, floor) {
+    full = full || 30;
+    floor = floor || 4;
+    try {
+      const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
+      const cfg = (w.Session && w.Session.SESSIONS) ? w.Session.SESSIONS[type] : null;
+      if (!cfg || !cfg.segs || !cfg.tz || cfg.always || cfg.weekly || cfg.cme || cfg.vix24) return full;
+      /* 只处理常规时段有明确开盘点的市场（cn/hk/jp/kr/tw/apac/us）；
+       * 24h 品种本来就不走这条竞速分支，保持原门槛。 */
+      const fmt = new Intl.DateTimeFormat('en-GB', {
+        timeZone: cfg.tz, hour: '2-digit', minute: '2-digit', hour12: false
+      });
+      const s = fmt.format(new Date());
+      const now = (+s.slice(0, 2)) * 60 + (+s.slice(3, 5));
+      /* 找当前所处的交易段；用交易所当地分钟 - 该段开盘分钟 + 1 作已开盘分钟数。
+       * 午休则取上一段收盘后的下一场尚未开始 → 归入满场（此时点数本应很多）。 */
+      let elapsed = -1;
+      for (let i = 0; i < cfg.segs.length; i++) {
+        const b = cfg.segs[i][0], e = cfg.segs[i][1];
+        if (now >= b && now < e) { elapsed = now - b + 1; break; }
+      }
+      if (elapsed < 0) return full;               // 休市：维持原门槛（此时读缓存是正确行为）
+      if (elapsed + 1 >= full) return full;        // 已开盘足够久：原门槛严格不变
+      /* 留 1 根余量：东财 trends2 在 09:45 实测正好回 16 根（=已开盘分钟数），
+       * 门槛取 elapsed-1 确保这种「满额短序列」不会被边界误杀；下限由 floor 兜住。 */
+      return Math.max(floor, Math.min(full, elapsed - 1));
+    } catch (e) { return full; }
   }
 
   /* v324【回滚 v322/v323】撤掉「今日K补根」整套逻辑：日K完全以原生K线源
@@ -4317,16 +4370,19 @@
        * 后台（缩略图预热）只走 东财→腾讯 串行、失败即止（占位 12s 补拉自愈）；
        * 只有用户主动点开详情页（前台）才 4 源竞速。 */
       if (isBg()) {
+        /* v580：后台缩略图同样按已开盘分钟数放宽门槛，早盘短序列不再整批落缓存 */
+        const _bgMb15 = minBarsForSession(a, 15, 4);
+        const _bgMb30 = minBarsForSession(a, 30, 5);
         try {
           const et = await Promise.race([
             emTrend(a.secid, 1),
             new Promise((_, rej) => setTimeout(() => rej(new Error('em min timeout')), 1200))
           ]);
           let ep = (et && et.points) || [];
-          if (ep.length > 15) {
+          if (ep.length >= _bgMb15) {
             ep = trimToLatestSession(ep, a);
             const uniq = new Set(ep.map(p => p.close));
-            if (ep.length > 30 && uniq.size > 3) {
+            if (ep.length >= _bgMb30 && uniq.size > 3) {
               return { points: ep, preClose: et.preClose || ep[0].close, synthetic: false, src: 'em' };
             }
           }
@@ -4335,7 +4391,7 @@
         if (tcBg) {
           try {
             const r = await txMinute(tcBg, a.sess === 'hk' || a.grp === 'hkstock' ? 'hk' : 'cn');
-            if (r && r.points.length > 30) {
+            if (r && r.points.length >= _bgMb30) {
               return { points: r.points, preClose: r.prev || (cachedQuote(key) || {}).prev || r.points[0].close,
                 synthetic: false, src: 'tencent' };
             }
@@ -4344,16 +4400,19 @@
         return failedRes('bg sources fail');
       }
       const _racers = [];
+      /* v580：动态门槛随已开盘分钟数增长，早盘短序列不再被误判为失败 */
+      const _mb15 = () => minBarsForSession(a, 15, 4);
+      const _mb30 = () => minBarsForSession(a, 30, 5);
       _racers.push((async () => {
         const et = await Promise.race([
           emTrend(a.secid, 1),
           new Promise((_, rej) => setTimeout(() => rej(new Error('em min timeout')), 1200))
         ]);
         let ep = (et && et.points) || [];
-        if (ep.length > 15) {
+        if (ep.length >= _mb15()) {
           ep = trimToLatestSession(ep, a);
           const uniq = new Set(ep.map(p => p.close));
-          if (ep.length > 30 && uniq.size > 3) {
+          if (ep.length >= _mb30() && uniq.size > 3) {
             return { points: ep, preClose: et.preClose || ep[0].close, synthetic: false, src: 'em' };
           }
         }
@@ -4365,8 +4424,8 @@
         _racers.push((async () => {
           let r = null;
           try { r = await txMinute(_txC, _sessCode); } catch (e1) { r = null; }
-          if (!r || r.points.length <= 30) { try { r = await txMkMinute(_txC, _sessCode); } catch (e2) { r = null; } }
-          if (r && r.points.length > 30) {
+          if (!r || r.points.length < _mb30()) { try { r = await txMkMinute(_txC, _sessCode); } catch (e2) { r = null; } }
+          if (r && r.points.length >= _mb30()) {
             return { points: r.points, preClose: r.prev || (cachedQuote(key) || {}).prev || r.points[0].close,
               synthetic: false, src: (r && r.srcTag) ? r.srcTag : 'tencent' };
           }
@@ -4376,14 +4435,14 @@
       if (_sessCode === 'cn') {
         _racers.push((async () => {
           const th = await thsMinute(key);
-          if (th && th.points.length >= 20) {
+          if (th && th.points.length >= minBarsForSession(a, 20, 4)) {
             return { points: th.points, preClose: th.preClose, synthetic: false, src: 'ths' };
           }
           throw new Error('ths thin');
         })().catch(() => { throw new Error('ths fail'); }));
         _racers.push((async () => {
           const r = await sinaCnMinute(_txC, 5);
-          if (r && r.points.length > 30) {
+          if (r && r.points.length >= _mb30()) {
             return { points: r.points, preClose: r.prev || (cachedQuote(key) || {}).prev || r.points[0].close,
               synthetic: false, src: (r && r.srcTag) ? r.srcTag : 'sina' };
           }
