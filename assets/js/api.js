@@ -4676,7 +4676,13 @@
         const q = await cboeQuote();
         return { points: pts, preClose: q.prev || pts[0].close, synthetic: false, src: 'cboe' };
       }
-      if (a.src === 'yahoo') {
+      /* v590【动态美股 src=yahoo 被早退，盘前分时全丢】KXIAY/LYTE(以及动态注册的
+       * SNDK)都是 src:'yahoo'，旧代码在这里直接 return yahooBars(5m/1d)——只有
+       * 常规段，永远到不了下面 L4695 的 nasdaqMinutes 盘前分支，所以三个品种
+       * 详情图例都是「Yahoo」、没有「盘前分时」按钮。美股组(usstock)且有
+       * extSym 时跳过这个早退，让它走与英伟达/阿斯麦相同的 Nasdaq 盘前链；
+       * Nasdaq 失败时该函数末尾仍有 yahoo 兜底，不会图空。 */
+      if (a.src === 'yahoo' && !(a.grp === 'usstock' && a.extSym)) {
         const y = await yahooBars(a.sym, '5m', '1d', true);
         if (!y.points.length) throw new Error('empty');
         return { points: y.points, preClose: y.prevClose || y.points[0].close, synthetic: false, src: 'yahoo' };
