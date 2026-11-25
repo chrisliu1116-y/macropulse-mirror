@@ -2549,7 +2549,10 @@
      * 已有结果的 key）。查不到/非本场 → 不显示，宁缺勿假。 */
     const nqKeys = want.filter(k => {
       const a = U.get(k);
-      if (!a || a.grp !== 'usstock' || a.kind !== 'stock' || !a.extSym) return false;
+      /* v588【美股ETF盘前】LYTE(Roundhill Photonics & Optics ETF)等美股 ETF
+       * 同样有 Nasdaq 盘前盘后交易；旧门控 kind!=='stock' 把 ETF 全挡在
+       * 盘前价/盘前分时之外。这里与详情分支一致，放行 usstock 的 stock/etf。 */
+      if (!a || a.grp !== 'usstock' || (a.kind !== 'stock' && a.kind !== 'etf') || !a.extSym) return false;
       const st = w.Session && w.Session.state ? w.Session.state(k) : null;
       return !!(st && (st.phase === 'pre' || st.phase === 'post'));
     }).slice(0, 12);
@@ -2647,7 +2650,7 @@
     const miss = want.filter(k => {
       if (out[k]) return false;
       const a = U.get(k);
-      return !!(a && a.grp === 'usstock' && a.kind === 'stock' && a.extSym);
+      return !!(a && a.grp === 'usstock' && (a.kind === 'stock' || a.kind === 'etf') && a.extSym);
     }).slice(0, 8);
     if (miss.length) {
       const got = await Promise.all(miss.map(async k => [k, await nasdaqExtOf(U.get(k).extSym)]));
@@ -4027,7 +4030,15 @@
   }
 
   async function nasdaqChart(sym) {
-    const target = `${NASDAQ_Q}${encodeURIComponent(sym)}/chart?assetclass=stocks`;
+    /* v589【ETF 盘前断链】Nasdaq chart 的 assetclass 必须匹配标的类别：
+     * 实测 LYTE(Roundhill Photonics & Optics ETF) 用 assetclass=stocks 返回 0 根，
+     * 用 assetclass=etf 返回 24 根（含 04:00 ET 盘前点）。v588 虽放开了 ETF 的
+     * 盘前门控，但链底这里写死 stocks → 详情仍落 Yahoo、无「盘前分时」按钮。
+     * 按 universe 的 kind 选 assetclass：个股=stocks（原行为不变）、ETF=etf。
+     * LYTE 已在 universe 标 kind:'etf'，这里自动走 etf，详情可拿到盘前点。 */
+    const _na = U && U.get ? U.get(sym) : null;
+    const _cls = (_na && _na.kind === 'etf') ? 'etf' : 'stocks';
+    const target = `${NASDAQ_Q}${encodeURIComponent(sym)}/chart?assetclass=${_cls}`;
     const good = d => !!(d && d.data && d.data.chart && d.data.chart.length);
     let lastErr = null;
 
@@ -4681,7 +4692,7 @@
        * 失败就静默回退下面的东财常规时段 —— 宁可少一段盘前，也不能让图空着。
        * v146：动态合成的美股（SKHY 等）没有 extSym，但从 tv 符号（NASDAQ:SKHY）也能
        * 走纳斯达克官方分时拿到盘前盘后，所以这里用 extSym 或 tv 推导纳斯达克代码。 */
-      if (a.grp === 'usstock' && a.kind === 'stock') {
+      if (a.grp === 'usstock' && (a.kind === 'stock' || a.kind === 'etf')) {
         const nsym = a.extSym || (a.tv ? a.tv.split(':')[1] : null);
         if (nsym) {
           try {
