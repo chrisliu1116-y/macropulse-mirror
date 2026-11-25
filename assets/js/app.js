@@ -4269,10 +4269,24 @@
     let box = null, cn = null, em = null, box2 = null, em2 = null, yh = null, opt = null;
     let left = (q2 ? 6 : 4) + (isOptQ ? 1 : 0);
     let fin = false;
+    /* v592：中证指数本地兜底——东财/H5 三源对 2.xx 段常返回空（APP 原生桥尤甚），
+     * 用内置的 564 只 CSI_STOCKS 名录按代码或中文名匹配，保证 H30184/半导体
+     * 这类中证指数一定能搜到。secid=2.<code>，点进详情由 universe 注册为指数。 */
+    let csi = [];
+    try {
+      const M = w.CSI_STOCKS || {};
+      const qq = String(q).trim().toLowerCase();
+      Object.keys(M).forEach(code => {
+        if (csi.length >= 8) return;
+        const nm = M[code] || '';
+        if (code.toLowerCase().indexOf(qq) >= 0 || nm.toLowerCase().indexOf(qq) >= 0)
+          csi.push({ secid: '2.' + code, code: code, name: nm, type: '中证指数' });
+      });
+    } catch (eCsi) {}
     const merge = () => {
       const seen = Object.create(null), out = [];
       /* v301：Yahoo 结果没有东财 secid（只有 yh 符号），不能按旧条件过滤掉 */
-      (opt || []).concat(yh || []).concat(box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
+      csi.concat(opt || []).concat(yh || []).concat(box2 || []).concat(em2 || []).concat(cn || []).concat(em || []).concat(box || []).forEach(x => {
         if (!x || !x.code || seen[x.code]) return;
         if (!x.yh && (!x.secid || x.secid.indexOf('.') < 0)) return;
         seen[x.code] = 1; out.push(x);
