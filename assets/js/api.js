@@ -3818,9 +3818,15 @@
         pts = shift(await bnKline(a.sym, BN_IV[mode] || '1d', m), 28800); // 币安是 UTC，统一成北京时区分量
       } else {
         const klt = mode === 'd' ? 101 : mode === 'w' ? 102 : 103;
-        pts = await klineFast(emKline(a.secid, klt, m, 1), 1200);
+        /* v594【中证指数 K线 em slow】中证指数(secid 2.H30xxx)走东财 push2his
+         * 实测拿 320 根要 4.3 秒（普通 A股 <1s），v308 的 1.2s 硬闸必然误杀 →
+         * 抛 'em kline slow' → 外层 Yahoo 兜底又只给 1 根 → 报「取数失败」。
+         * 中证指数放宽到 8s；Yahoo 对它本身就是残缺源(全历史仅1根)，
+         * 放宽比虚假兜底更诚实。其它品种维持 1.2s 不变。 */
+        const _kMs = (a && String(a.secid || '').startsWith('2.')) ? 8000 : 1200;
+        pts = await klineFast(emKline(a.secid, klt, m, 1), _kMs);
         if (!klineValid(pts)) {
-          const raw = await klineFast(emKline(a.secid, klt, m, 0), 1200);
+          const raw = await klineFast(emKline(a.secid, klt, m, 0), _kMs);
           if (raw.length && klineValid(raw)) pts = raw;
           else pts = pts.filter(p => p.close > 0 && p.low > 0);
         }
