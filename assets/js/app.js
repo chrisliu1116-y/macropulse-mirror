@@ -10333,6 +10333,22 @@
     setInterval(() => {
       if (S.tab !== 'market' || document.hidden) return;
       QuoteHub.repaintAll();
+      /* v599【缩略图颜色不跟涨跌】用户 11-26 01:50 截图：Anthropic +2.51%
+       * (数字红)但缩略图绿——缩略图只在分时数据加载时着色一次(q.pct 当时还是
+       * 昨收负值/未到)，之后报价翻红也不重画。这里随报价重绘(15s)同步颜色：
+       * 只换 SVG 的 .up/.down/.flat class，不重画折线、不发任何请求。 */
+      try {
+        document.querySelectorAll('#marketBody svg.mk-sp[data-mksp]').forEach(svg => {
+          const q = QuoteHub.get(svg.dataset.mksp);
+          if (!q || q.pct == null) return;
+          const pct = +q.pct;
+          const tone = Math.abs(pct) < 0.005 ? 'flat' : (pct > 0 ? 'up' : 'down');
+          if (svg.classList.contains(tone)) return;
+          svg.classList.remove('up', 'down', 'flat');
+          svg.classList.add(tone);
+          /* 渐变 stop 用 currentColor，换 class 即自动跟随，无需改 defs */
+        });
+      } catch (eSpColor) { /* 颜色同步失败不影响报价重绘 */ }
     }, 15000);
     /* v242：残留占位符定时补拉。任何一次网络抖动都能自愈，不必等 120 秒整页重绘。 */
     setInterval(() => {
