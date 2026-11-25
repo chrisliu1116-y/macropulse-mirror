@@ -4397,6 +4397,23 @@
             }
           } catch (eBg2) { /* 后台失败即止 */ }
         }
+        /* v586【缩略图与详情同源】美债/外汇等 rate 组：东财 trends2 是填充序列
+         * （末端与上一条报价拼出竖线），腾讯无对应代码 → 后台链失败 → 缩略图落
+         * readMinCache 显示旧线（用户 11-25 20:26 截图：详情分时正确、列表缩略图
+         * 却是一根上翘怪线）。前台竞速因为有 cnbc/同花顺而正确。后台补一次
+         * cnbcIntraday（与主链同源、45s 内存缓存、不是重复请求风暴），让缩略图
+         * 与详情用同一条数据。只在前面都失败时走，正常情况零额外请求。 */
+        if (a && a.grp === 'rate') {
+          try {
+            const cb = await cnbcIntraday(a.cnbc || key);
+            const cbPts = (cb && cb.points) || [];
+            if (cbPts.length >= 15) {
+              return { points: cbPts,
+                preClose: sanePrev(key, (cachedQuote(key) || {}).prev, cbPts[cbPts.length - 1].close) || cbPts[0].close,
+                synthetic: false, src: 'cnbc' };
+            }
+          } catch (eCnbcBg) { /* 落失败，如实显示 */ }
+        }
         return failedRes('bg sources fail');
       }
       const _racers = [];
