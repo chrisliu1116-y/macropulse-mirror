@@ -521,7 +521,18 @@
     S.own.forEach((k) => {
       const code = String(k || '');
       if (!code || U.get(code)) return;
-      if (!/^[A-Za-z][A-Za-z.\-]{0,7}$/.test(code)) return;   // 仅美股字母代码
+      /* v595【中证指数自选重载后消失】v589 的重建只认纯字母美股代码，
+       * H30184 这类中证指数(H+数字)被跳过 → U.get 为 null → 被列表
+       * `.filter(k => !!U.get(k))` 过滤：搜索时临时注册所以能看到，重载后
+       * 又消失，用户必须每次重新搜索。这里按内置 CSI_STOCKS(564只) 重建。 */
+      try {
+        const CSI = w.CSI_STOCKS || {};
+        if (CSI[code] && U.synthSecid) {
+          U.synthSecid('2.' + code, code, CSI[code]);
+          return;
+        }
+      } catch (eCsi) {}
+      if (!/^[A-Za-z][A-Za-z.\-]{0,7}$/.test(code)) return;   // 其余仅美股字母代码
       if (U.regYahooSym) U.regYahooSym(code, code, code, 'usstock', 'stock');
     });
   } catch (eReReg) { /* 重建失败不影响启动，最多该品种仍不显示 */ }
