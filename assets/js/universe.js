@@ -564,6 +564,10 @@
     if (csiIdx) {
       const a = { name: nm, short: nm, src: 'em', secid: String(secid), dec: 2,
                   grp: 'cn', kind: 'index', unit: '点',
+                  /* v593：中证指数只「可搜索」，绝不进默认列表。baseKeys() 用
+                   * U.keys() 收所有非 stock/etf 的品种，旧版 index 会被全收进
+                   * A股 默认区（用户截图 564 只铺满）。此标记让 app.js 排除。 */
+                  _searchOnly: true,
                   _synth: true };
       /* Yahoo 兜底：Hxxxxx / 9xxxxx 中证指数在 Yahoo 都是 <code>.SS
        * （实测 H30184.SS / 932086.SS 均有 5m 数据）；CE./SH. 前缀的
