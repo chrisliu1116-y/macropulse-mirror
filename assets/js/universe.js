@@ -550,7 +550,28 @@
     const mkt = String(secid).split('.')[0];
     const us = mkt === '105' || mkt === '106' || mkt === '107';
     const hk = mkt === '116';
+    /* v591【中证指数全品类】东财 suggest 对中证行业/主题指数(半导体 H30184、
+     * 白酒、医药、新能源等)给 QuoteID=2.H30xxx（市场号 2=中证指数），
+     * 旧版 synthSecid 只认 105/106/107/116/1/0，2. 段一律按 cnstock+etf
+     * 合成 → 行情/分组全错、搜到的指数点进去是空的。这里把 2. 段注册成
+     * 指数(kind:index/grp:cn)，与上证/沪深300 等指数同渲染口径；
+     * Yahoo 代码 H30xxx.SS 作兜底（实测 H30184.SS 有 5m 331 根）。 */
+    /* v592：中证指数代码不止 Hxxxxx——实测东财 m:2 共564只，格式有
+     * Hxxxxx(171) / 9xxxxx(82，如 932086 全指公用) / CE 与 SH 前缀(11) 等。
+     * 2. 段任意非空代码都按指数注册，不再用窄正则漏掉 3/4 的品种。 */
+    const csiIdx = mkt === '2' && code.length > 2;
     const nm = String(name || code);
+    if (csiIdx) {
+      const a = { name: nm, short: nm, src: 'em', secid: String(secid), dec: 2,
+                  grp: 'cn', kind: 'index', unit: '点',
+                  _synth: true };
+      /* Yahoo 兜底：Hxxxxx / 9xxxxx 中证指数在 Yahoo 都是 <code>.SS
+       * （实测 H30184.SS / 932086.SS 均有 5m 数据）；CE./SH. 前缀的
+       * 特殊代码 Yahoo 无对应，只走东财，不硬塞错误代码。 */
+      if (/^(H\d{4,6}|\d{6})$/i.test(code)) a.yh = code.toUpperCase() + '.SS';
+      ASSETS[code] = a;
+      return a;
+    }
     /* v588【动态美股ETF也要盘前】v586 用 ETF_RE 把美股 ETF 排除在 extSym 外，
      * 但 LYTE(Roundhill Photonics & Optics ETF) 等美股 ETF 在 Nasdaq 同样有
      * 盘前盘后交易（用户截图点名）。现在美股 105/106/107 一律补 extSym/tv；
