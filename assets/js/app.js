@@ -3369,7 +3369,14 @@
 
   // 基础标的：非个股（指数/商品/外汇/美债/加密）——「一开始加的那些」
   function baseKeys() {
-    return U.keys().filter(k => { const a = U.get(k); return a && a.kind !== 'stock' && a.kind !== 'etf'; });
+    /* v593：搜得到 ≠ 默认显示。中证指数(564只)注册为 kind:index 会被下面
+     * 条件全收进 A股 默认区（用户截图一屏中证指数、且删不掉/显示"加自选"
+     * ——因为它们是 baseKeys 基础标的不是 S.own）。_searchOnly 品种只保留
+     * 搜索能力，不进任何默认分类；用户要显示就自己搜索加自选。 */
+    return U.keys().filter(k => {
+      const a = U.get(k);
+      return a && a.kind !== 'stock' && a.kind !== 'etf' && !a._searchOnly;
+    });
   }
 
   function mktCatKeys() {
