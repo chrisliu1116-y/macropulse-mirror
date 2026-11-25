@@ -26,6 +26,16 @@
   // dec: 小数位 | grp: 行情分组 | kind: 资产类型 | tv: TradingView 符号
   // dex: 链上检索关键词（非交易时段展示链上价）
   const ASSETS = {
+    /* v587【铠侠美股ADR】Kioxia(285A.T) 的 OTC ADR，Yahoo=KXIAY；
+     * 东财/腾讯智能搜索对中文"铠侠"只回日股，搜索别名映射在 app.js yahooSug。 */
+    KXIAY: { name: '铠侠ADR', short: '铠侠ADR', src: 'yahoo', sym: 'KXIAY', dec: 2,
+             grp: 'usstock', kind: 'stock', unit: 'USD', extSym: 'KXIAY', tv: 'OTC:KXIAY' },
+    /* v588【LYTE 盘前】Roundhill Photonics & Optics ETF（用户截图"阿斯麦下面那个"），
+     * 美股 ETF 在 Nasdaq 同样有盘前盘后交易，v587 的 ETF_RE 把它排除导致无
+     * 盘前价/按钮。美股 ETF 与个股一视同仁给 extSym。 */
+    LYTE: { name: 'Roundhill光子学ETF', short: 'LYTE', src: 'yahoo', sym: 'LYTE', dec: 2,
+            grp: 'usstock', kind: 'etf', unit: 'USD', extSym: 'LYTE', tv: 'BTS:LYTE' },
+
     /* ---------------- A股指数 ----------------
      * ord 只在「同一分组内」决定先后，跨组顺序由时段判断负责 */
     AX:    { name: '上证指数',   short: '上证',    ord: 1, src: 'em', secid: '1.000001', dec: 2, grp: 'cn',  kind: 'index', unit: '点', tv: 'SSE:000001' },
@@ -472,6 +482,10 @@
       grp: isHK ? 'hkstock' : 'usstock', kind: 'stock',
       unit: isHK ? '港元' : 'USD',
       tv: (isHK ? 'HKEX:' : (mkt === '106' ? 'NYSE:' : 'NASDAQ:')) + key,
+      /* v587：静态名录合成的美股(LITE Lumentum 等)漏了 extSym → 盘前价/
+       * 「盘前分时」按钮门控(usstock&&stock&&extSym)不满足。与 v586 的
+       * synthSecid/regYahooSym 修复对齐，这里也补上，三条注册路径一致。 */
+      ...(!isHK ? { extSym: key } : {}),
       _synth: true
     };
     ASSETS[key] = a;
@@ -532,22 +546,23 @@
     const us = mkt === '105' || mkt === '106' || mkt === '107';
     const hk = mkt === '116';
     const nm = String(name || code);
-    /* v586【动态美股个股缺盘前】东财搜索建议里美股个股(105/106/107)与 ETF 同走这里，
-     * 旧版一律标 kind:'etf' → 盘前分时/盘前价门控(usstock&&stock&&extSym)全不满足。
-     * 用名称保守区分：明确带 ETF/Fund/杠杆(2X/3X/ bull/bear)字样的仍按 ETF，
-     * 其余按个股补 extSym/tv，让闪迪这类动态加入的美股与静态注册口径一致。 */
+    /* v588【动态美股ETF也要盘前】v586 用 ETF_RE 把美股 ETF 排除在 extSym 外，
+     * 但 LYTE(Roundhill Photonics & Optics ETF) 等美股 ETF 在 Nasdaq 同样有
+     * 盘前盘后交易（用户截图点名）。现在美股 105/106/107 一律补 extSym/tv；
+     * kind 仍按名称保守标记（ETF/Fund/2X/3X/Bull/Bear → etf），
+     * 盘前门控 v588 已放行 usstock 的 stock+etf，两种 kind 都能显示。 */
     const ETF_RE = /(ETF|Fund|基金|杠杆|[23]X|Bull|Bear|Ultra|ProShares|Direxion)/i;
-    const usStock = us && !ETF_RE.test(nm);
+    const isETF = ETF_RE.test(nm);
     const a = {
       name: nm, short: nm, src: 'em',
       secid: String(secid), dec: us || hk ? 2 : 3,
       grp: us ? 'usstock' : (hk ? 'hkstock' : 'cnstock'),
-      kind: usStock ? 'stock' : 'etf', unit: us ? 'USD' : (hk ? '港元' : '元'),
+      kind: (us && !isETF) ? 'stock' : 'etf', unit: us ? 'USD' : (hk ? '港元' : '元'),
       _synth: true
     };
-    if (usStock) {
+    if (us) {
       a.extSym = code;
-      a.tv = (mkt === '106') ? ('NASDAQ:' + code) : ('NYSE:' + code);
+      a.tv = (mkt === '106') ? ('NYSE:' + code) : ('NASDAQ:' + code);
     }
     ASSETS[code] = a;
     return a;
