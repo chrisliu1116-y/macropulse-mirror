@@ -592,11 +592,14 @@
           segs.push([q[0], { x: q[0].x + dx * k, y: q[0].y + dy * k }]);
         } else if (d.tool === 'ext' && q.length >= 3) {
           segs.push([q[0], q[1]]); segs.push([q[1], q[2]]);
-          /* 目标位横线也能点中（否则只能在 A→B 那一段上点，很难选） */
+          /* v600：目标位短刻度也能点中——命中段与绘制一致（TICK=8，左右各 8px），
+           * 不再构造延伸到 right 的长命中段（否则点右侧空白也会误选线）。 */
           var lvs = this._extLevels(d);
+          var HIT_TICK = 8;
           for (var t2 = 0; t2 < lvs.length; t2++) {
             if (lvs[t2].y == null || lvs[t2].y < 1 || lvs[t2].y > this._h - 1) continue;
-            segs.push([{ x: q[2].x, y: lvs[t2].y }, { x: this._plotRight(), y: lvs[t2].y }]);
+            var hx = (q[2].x == null) ? 2 : q[2].x;
+            segs.push([{ x: hx - HIT_TICK, y: lvs[t2].y }, { x: hx + HIT_TICK, y: lvs[t2].y }]);
           }
         }
         for (var s = 0; s < segs.length; s++) {
@@ -1210,13 +1213,16 @@
         ctx.restore();
       }
 
-      /* ④ 目标位横线 + 价签
-       * v427【用户口径】目标位价格(=100%/200%的数学价位)不在当前可视区内时，
-       * 完全不画线、不标价签 —— 标签跟着真实价格位置走，画面没到那个价就不显示，
-       * 避免屏幕外的目标位被钉在顶/底、两个标签叠在一起挡住 K 线。
-       * 只有价格真实落在可视区内才画横线+价签；两个都在区内且挨太近时才错开。 */
+      /* ④ 目标位短刻度 + 价签（v600）
+       * 用户口径（对齐专业软件 Fib 扩展画法，2026-11-26 拍板）：
+       *   · 不画贯穿到右缘的长横线 —— 只在 C 点竖线的目标价位打一个短横刻度（十字），
+       *     彻底消除「多条波段线横线全连到右侧、混在一起」以及靠右波段价签被右缘截断。
+       *   · 价签紧贴刻度左侧显示，用画线本身的颜色；不加序号、不额外区分颜色。
+       *   · 目标价不在可视区内时不画不标（沿用 v427）；左侧空间不足时价签翻到刻度右侧，
+       *     始终留在绘图区内。 */
       var x0 = Math.max(Cp.x, 2);
       var TOP = 34, BOT = this._h - 12;   // 顶部留出图例/工具条的位置，别压住按钮
+      var TICK = 8;                        // 短刻度半宽（左右各 8px）
       var lastY = null;
       for (var j = 0; j < lv.length; j++) {
         var y = lv[j].y;
@@ -1226,9 +1232,10 @@
         ctx.setLineDash(preview ? [4, 4] : []);
         ctx.lineWidth = preview ? 1.2 : 1.8;
         ctx.strokeStyle = color;
-        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(right, y); ctx.stroke();
+        /* 短横刻度：以 C 点竖线为中心，左右各 TICK px（不连右缘） */
+        ctx.beginPath(); ctx.moveTo(x0 - TICK, y); ctx.lineTo(x0 + TICK, y); ctx.stroke();
         ctx.setLineDash([]);
-        /* 起算点的短竖标：让「从 C 出发」更直观 */
+        /* 短竖标：与横刻度合成十字，强化「从 C 出发」 */
         ctx.globalAlpha = 0.5;
         ctx.beginPath(); ctx.moveTo(x0, y - 4); ctx.lineTo(x0, y + 4); ctx.stroke();
         ctx.globalAlpha = 1;
@@ -1237,10 +1244,17 @@
         cy = Math.max(TOP, Math.min(BOT, cy));
         lastY = cy;
         var label = Math.round(lv[j].pct * 100) + '%  ' + this._fmt(lv[j].price);
-        this._chip(ctx, right, cy, label, color);
+        /* 价签贴刻度左侧；测宽后若左侧放不下则翻到右侧，始终留在绘图区 */
+        ctx.save();
+        ctx.font = '9.5px -apple-system,"SF Mono",Menlo,monospace';
+        var chipW = ctx.measureText(label).width + 8;
+        ctx.restore();
+        var chipRight = x0 - TICK - 4;
+        if (chipRight - chipW >= 2) this._chip(ctx, chipRight, cy, label, color, 'right');
+        else this._chip(ctx, x0 + TICK + 4, cy, label, color, 'left');
       }
       /* v190：用户口径 —— C 点只是「回调锚点」，不用单独标价；
-       * 右侧只保留 100% / 200% 两个目标价签，画面更干净。 */
+       * 只保留 100% / 200% 两个目标价签，画面更干净。 */
     },
 
     /* v190：取点放大镜 —— 手指按住拖动时看不到落点（被手挡住），
@@ -1500,13 +1514,15 @@
       ctx.restore();
     },
 
-    _chip: function (ctx, right, y, text, color) {
+    /* v600：新增 align 参数——'right'(默认,锚点是价签右缘)/'left'(锚点是价签左缘)。
+     * 波段延伸价签贴刻度左侧时用 'left'，其余调用不传、行为与旧版完全一致。 */
+    _chip: function (ctx, anchor, y, text, color, align) {
       if (y == null) return;
       ctx.save();
       ctx.setLineDash([]);
       ctx.font = '9.5px -apple-system,"SF Mono",Menlo,monospace';
       var wpx = ctx.measureText(text).width + 8;
-      var x = right - wpx;
+      var x = (align === 'left') ? anchor : (anchor - wpx);
       var yy = Math.max(10, Math.min(this._h - 4, y));
       ctx.fillStyle = this.C.bg;
       ctx.beginPath();
