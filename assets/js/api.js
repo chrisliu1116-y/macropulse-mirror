@@ -4385,6 +4385,23 @@
     const hit = nasdaqCache.get(sym);
     if (hit && Date.now() - hit.t < 60000) return hit.d;
     const d = await nasdaqChart(sym);
+    /* v604【美股休市实时信号】Nasdaq 官方 timeAsOf 是美东当地日期（实测感恩节
+     * 11-26 回 'Nov 25, 2026' = 数据停在昨天）。nqFresh(d) 为 true 表示数据
+     * 就是今天美东日期 → 今天真有交易；false → 今天休市。注入 Session 供
+     * judge('us') 判休市（列表沉底、不标盘前、详情按钮切盘后）。信号只认今天，
+     * 过期自动失效回退节假日表；拿不到就完全不注入（不影响原逻辑）。 */
+    try {
+      const s = String((d && d.data && d.data.timeAsOf) || '');
+      const mm = s.match(/^([A-Z][a-z]{2}) (\d{1,2}), (\d{4})/);
+      if (mm) {
+        const MON = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+        const mo = MON[mm[1]];
+        if (mo) {
+          const etDate = mm[3] + '-' + String(mo).padStart(2, '0') + '-' + String(+mm[2]).padStart(2, '0');
+          if (w.Session && w.Session.setUsTradingDay) w.Session.setUsTradingDay(etDate, nqFresh(d));
+        }
+      }
+    } catch (eSig) { /* 信号注入失败不影响行情本身 */ }
     const rows = (d && d.data && d.data.chart) || [];
     /* 【时区】Nasdaq 的 x 虽然是毫秒时间戳，但它的 UTC 分量装的是**美东墙上时间**
      * （实测盘前第一点 04:00 ET 的时间戳解出来就是 04:00Z，而现在 06:35 ET 的点
