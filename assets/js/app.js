@@ -3227,6 +3227,31 @@
     renderMarket();
   }
 
+  /* v611【列表显示交易代码】取"行情软件里能搜到的代码"：
+   *   · A股/指数/外汇：secid 去掉市场号（1.000300 → 000300；133.USDCNH → USDCNH）；
+   *   · 美股/ETF/个股：extSym / sym / tv 含交易所前缀时取代码段，否则 key（MU/FXI/NDX）；
+   *   · 期货/商品：sinaSym（OIL/CL）优先，再退 secid 代码；
+   *   · 兜底 key（BTC/ETH 等加密、以及无字段品种）。
+   * 只用于展示，不参与任何取数/匹配逻辑。 */
+  function dispCode(k, a) {
+    if (!a) return k;
+    const s = String(k || '');
+    if (a.sinaSym && (a.grp === 'energy' || a.grp === 'cffex' || a.grp === 'bondfut' || a.kind === 'future')) return a.sinaSym;
+    const secid = String(a.secid || '');
+    const m = secid.match(/^\d+\.([A-Za-z0-9._]+)$/);
+    if (m) {
+      // 美股指数 secid 代码(SPX/NDX/DJIA)与通用代码一致；A股指数给 6 位代码；外汇给 USDCNH
+      return m[1];
+    }
+    if (a.extSym) return a.extSym;
+    if (a.sym) return String(a.sym).replace(/^\^/, '').replace(/\.(SS|SZ|HK|TW)$/, '');
+    if (a.tv) {
+      const t = String(a.tv).split(':').pop();
+      if (t && t !== s) return t;
+    }
+    return s;
+  }
+
   function marketRows(keys) {
     return keys.map((k, i) => {
       const a = U.get(k);
@@ -3260,6 +3285,7 @@
       return `<div class="mk-row qrow" data-k="${esc(k)}">
         <div class="mk-l">
           <b>${esc(disp)}</b>
+          <span class="mk-code" title="交易代码">${esc(dispCode(k, a))}</span>
           <span class="mk-sub">
             <i style="color:${gColor(g)}">${esc(g.label)}</i>
             <em class="mk-st ${sessCls}">${esc(sessLbl)}</em>
@@ -5750,8 +5776,6 @@
           syncMinBar();
           if (S.sheetKey && chart && S.sheetMode === 'min') {
             chart.showExt = on;
-            /* v608：把"当前该看哪段"传给图表，点开只拼那一段（恢复原行为） */
-            chart.extPhase = currentExtPhase(S.sheetKey);
             chart.render(S.sheetKey, 'min');
           }
         };
@@ -5786,28 +5810,13 @@
    *
    * 默认值：用户没手动选过时，按**当前时段**自动 —— 正处在盘前/盘后就把延展段接上，
    * 其余时候给普通分时（和富途一致）。手动点过之后就记住用户的选择。 */
-  /* v608【当前该看的延展段】严格按用户口径：
-   *   · 盘前(pre) → 'pre'：按钮写「盘前分时」、点开拼黄色盘前段；
-   *   · 盘后(post) 或休市(closed，含感恩节等，延续上一交易日盘后) → 'post'：
-   *     按钮写「盘后分时」、点开拼黄色盘后段，直到下一交易日盘前；
-   *   · 盘中(regular) → ''：不显示按钮、不拼。
-   * 休市日归为 post 回看，是按"上一场盘后延续"处理——与用户原话一致。 */
-  function currentExtPhase(key) {
-    let phase = '';
-    try {
-      const st = w.Session && w.Session.state ? w.Session.state(key) : null;
-      phase = (st && st.phase) || '';
-    } catch (e) {}
-    if (phase === 'pre') return 'pre';
-    if (phase === 'post' || phase === 'closed') return 'post';
-    return '';
-  }
-
   function effMinExt() {
     const a = S.sheetKey ? U.get(S.sheetKey) : null;
     if (!a) return false;
     const st = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
-    const phase = (st && st.phase) || '';
+    let phase = (st && st.phase) || '';
+    /* v609：与 syncMinBar 同一映射——美股休市日按 post 回看，点「盘后分时」才生效 */
+    if (phase === 'closed' && a && (a.grp === 'usstock' || a.grp === 'us')) phase = 'post';
     /* v319 用户口径：盘中（常规时段）一律只显示盘中分时，即使用户手动
      * 开过「盘前分时」偏好也不接延展段 —— 开关按钮盘中本来就不出现
      * （v296），绘制结果必须和按钮口径一致。此前 S.minExt===true 会
@@ -5818,9 +5827,6 @@
      * 但刚结束的 246 根左右真实盘后分钟仍然有效。此时尊重用户点击选择；
      * 否则按钮即使露出，点击后 syncMinBar 也会立刻把选中态打回「常规分时」。 */
     if (phase === 'closed' && a.grp === 'krstock') return S.minExt === true;
-    /* v606【美股休市日回看】与韩股同理：感恩节 phase=closed，但 Nasdaq 数据里
-     * 有昨天真实盘后分钟，用户点「盘后分时」后必须尊重选择，否则按钮点了没反应。 */
-    if (phase === 'closed' && (a.grp === 'usstock' || a.grp === 'us')) return S.minExt === true;
     if (phase === 'pre' || phase === 'post') {
       if (S.minExt === true || S.minExt === false) return S.minExt;
       /* v394【用户口径纠正】盘前/盘后不再自动接延展段。原 v296 写「没手动选过就
@@ -5858,13 +5864,7 @@
      * 重新同步一次。以前用 !== false，渲染前读到的是上一场的旧值（或 undefined），
      * 于是「这一场压根没取到盘前数据」也照样亮着一个点了没反应的「盘前分时」。 */
     const dataOk = !chart || chart.extAvailable === true;
-    /* v606【美股休市日按钮消失修复】旧版 hasExt 强制 dataOk（chart.extAvailable=true），
-     * 但 extAvailable 只在**点开延展按钮取到数据后**才为 true——默认常规视图下必为 false，
-     * 于是休市日回看按钮永远出不来（循环依赖）。v604 把 phase 变 closed 后连侥幸路径也断了。
-     * 拆成两档：hasExtNow=数据已证实有延展段（原逻辑，供 pre/post）；
-     * hasExtPotential=理论上可能有（供 closed 回看，本就是"点开才取"）。 */
-    const hasExtNow = !!(a && a.tv && (isUS || isKr) && dataOk);
-    const hasExtPotential = !!(a && a.tv && (isUS || isKr));
+    const hasExt = !!(a && a.tv && (isUS || isKr) && dataOk);
     /* v296【用户口径：延展开关只在延展时段出现】
      *   · 盘中（reg）—— 完全不出这个按钮（盘中就是普通分时）
      *   · 盘前（pre）—— 显示「盘前分时」，持续到开盘
@@ -5874,24 +5874,22 @@
     const phaseNow = (() => {
       try {
         const st0 = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
-        return (st0 && st0.phase) || '';
+        let ph = (st0 && st0.phase) || '';
+        /* v609【休市日沿用盘后逻辑·最小补丁】美股休市日(感恩节等) phase=closed，
+         * 按用户口径「上一交易日盘后延续到下一交易日盘前」处理 → 当 post 看待。
+         * 其余完全保留 v599 原逻辑：按钮文案按 phase、点开 drawExt 拼对应段。
+         * 只在本处映射，不碰 view/mainPts/extSeg 等（那些改动已整体回退）。 */
+        const _a = S.sheetKey ? U.get(S.sheetKey) : null;
+        if (ph === 'closed' && _a && (_a.grp === 'usstock' || _a.grp === 'us')) ph = 'post';
+        return ph;
       } catch (e) { return ''; }
     })();
     /* v576【用户 20:05 截图根因】韩股盘后 20:00 KST 一结束，phase 就从 post 变 closed；
      * 旧条件把按钮立刻隐藏，哪怕 Naver 已拿到完整盘后分钟、chart.extAvailable=true。
      * 韩股闭市后保留「常规分时 / 盘后分时」入口供回看；美股及其它品种门控不变。 */
     const krPostReview = isKr && phaseNow === 'closed';
-    /* v604【美股休市日回看昨天盘后】感恩节等休市日 phaseNow=closed，但 Nasdaq
-     * 数据末段是昨天盘后（extSeg='post'）——按用户口径应显示「盘后分时」按钮
-     * 供回看（与平时盘前/盘后互转同一套），不再因 closed 把按钮藏掉。
-     * 只有确实拿到延展段（extSeg 非空）才露，避免点了没反应的空按钮。 */
-    /* v606：休市日回看是"点开才去取延展段"，不能用 extAvailable 当前置（那时必为 false）。
-     * 只要该品种理论上支持延展（a.tv）+ 数据源确实有延展段能力即可露按钮。 */
-    const usPostReview = isUS && phaseNow === 'closed';
-    const show = S.sheetMode === 'min' &&
-      ((phaseNow === 'pre' || phaseNow === 'post') ? hasExtNow
-        : (krPostReview || usPostReview) ? hasExtPotential
-        : false);
+    const show = S.sheetMode === 'min' && hasExt &&
+      (phaseNow === 'pre' || phaseNow === 'post' || krPostReview);
     bar.hidden = !show;
     const note = $('#shMinNote');
     if (note) {
@@ -5916,11 +5914,8 @@
       note.hidden = !text;
     }
     if (!show) return;
-    /* v608【恢复原逻辑】按钮文案严格按"当前该看的时段"：盘前→盘前分时，
-     * 盘后/休市→盘后分时（延续上一交易日盘后，直到下一交易日盘前）。
-     * 不再按数据里有哪些段拼"盘前/盘后分时"——那是 v604 的偏离。 */
-    const extPhase = currentExtPhase(S.sheetKey);
-    const secLabel = (extPhase === 'pre') ? '盘前分时' : '盘后分时';
+    /* v296：按钮只在盘前 / 盘后出现，文案与当前时段严格一致 */
+    const secLabel = (phaseNow === 'pre') ? '盘前分时' : '盘后分时';
     const secBtn = bar.querySelector('button[data-x="1"]');
     if (secBtn) secBtn.textContent = secLabel;
     const on = effMinExt();
@@ -5973,9 +5968,6 @@
     chart.onDrawSelect = () => { syncDrawSel(); syncChartInter(); };
     /* v171：主图指标切换结果回传 → 右上角按钮文案/可用态 */
     chart.onMainInd = (m, canUse) => syncIndBtn(m, canUse);
-    /* v608：渲染前先设好"当前该看的延展段"，保证打开时若 mm_minext=true 自动展开
-     * 也只拼对应那一段（盘前拼pre、盘后/休市拼post），不是两段全拼。 */
-    chart.extPhase = currentExtPhase(key);
     /* render 是异步的：拿到数据后才知道有没有延展段，再同步一次开关显隐 */
     const _p = chart.render(key, mode);
     /* v326：渲染异常必须显示出来，不能 .catch(()=>{}) 静默吞掉 ——
