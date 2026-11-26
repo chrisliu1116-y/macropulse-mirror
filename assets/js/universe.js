@@ -281,7 +281,11 @@
     /* v307【手机矩阵 unknown asset 补齐】 */
     '07709': { name: '南方东英SK海力士2x', short: '海力士2x', src: 'em', secid: '116.07709', dec: 3, grp: 'hkstock', kind: 'stock', unit: '港元' },
     'SPY':   { name: 'SPDR标普500ETF', short: 'SPY', src: 'em', secid: '107.SPY', dec: 2, grp: 'usstock', kind: 'stock', unit: 'USD', tv: 'AMEX:SPY' },
-    'IXIC':  { name: '纳斯达克综合指数', short: '纳指', src: 'yahoo', sym: '^IXIC', dec: 2, grp: 'us', kind: 'index', unit: '点' }
+    /* v610【默认列表去重】IXIC(=纳斯达克综合)与 NDX(100.NDX，中文名"纳斯达克指数")
+     * 是同一个标的的两个 key；IXIC 是 v307 为搜索补的 Yahoo 代码，却因 kind:index
+     * 且无 _searchOnly 被 baseKeys() 自动收进美股默认区，与 NDX 重复、且删不掉。
+     * 加 _searchOnly 让它只保留搜索能力、不进默认列表（沿用 v593 中证指数同款修法）。 */
+    'IXIC':  { name: '纳斯达克综合指数', short: '纳指', src: 'yahoo', sym: '^IXIC', dec: 2, grp: 'us', kind: 'index', unit: '点', _searchOnly: true }
   };
 
   /* ---------------- 行情分组 ----------------
