@@ -5750,6 +5750,8 @@
           syncMinBar();
           if (S.sheetKey && chart && S.sheetMode === 'min') {
             chart.showExt = on;
+            /* v608：把"当前该看哪段"传给图表，点开只拼那一段（恢复原行为） */
+            chart.extPhase = currentExtPhase(S.sheetKey);
             chart.render(S.sheetKey, 'min');
           }
         };
@@ -5784,6 +5786,23 @@
    *
    * 默认值：用户没手动选过时，按**当前时段**自动 —— 正处在盘前/盘后就把延展段接上，
    * 其余时候给普通分时（和富途一致）。手动点过之后就记住用户的选择。 */
+  /* v608【当前该看的延展段】严格按用户口径：
+   *   · 盘前(pre) → 'pre'：按钮写「盘前分时」、点开拼黄色盘前段；
+   *   · 盘后(post) 或休市(closed，含感恩节等，延续上一交易日盘后) → 'post'：
+   *     按钮写「盘后分时」、点开拼黄色盘后段，直到下一交易日盘前；
+   *   · 盘中(regular) → ''：不显示按钮、不拼。
+   * 休市日归为 post 回看，是按"上一场盘后延续"处理——与用户原话一致。 */
+  function currentExtPhase(key) {
+    let phase = '';
+    try {
+      const st = w.Session && w.Session.state ? w.Session.state(key) : null;
+      phase = (st && st.phase) || '';
+    } catch (e) {}
+    if (phase === 'pre') return 'pre';
+    if (phase === 'post' || phase === 'closed') return 'post';
+    return '';
+  }
+
   function effMinExt() {
     const a = S.sheetKey ? U.get(S.sheetKey) : null;
     if (!a) return false;
@@ -5897,15 +5916,11 @@
       note.hidden = !text;
     }
     if (!show) return;
-    /* v604：按钮文案按**数据里真实存在的延展段**切换（不是时间硬判）。
-     * 感恩节休市：数据末段是昨天盘后 → extSeg='post' → 写「盘后分时」；
-     * 正常盘前：extSeg='pre' → 「盘前分时」。只在拿不到段信号时才回落 phaseNow。
-     * 这样按钮永远与实际画出来的曲线一致，不会再出现"写着盘前、画着昨天盘后"。 */
-    const segNow = (chart && chart.extSeg) || '';
-    const secLabel = (segNow === 'pre') ? '盘前分时'
-      : (segNow === 'post') ? '盘后分时'
-      : (segNow === 'both') ? '盘前/盘后分时'
-      : ((phaseNow === 'pre') ? '盘前分时' : '盘后分时');
+    /* v608【恢复原逻辑】按钮文案严格按"当前该看的时段"：盘前→盘前分时，
+     * 盘后/休市→盘后分时（延续上一交易日盘后，直到下一交易日盘前）。
+     * 不再按数据里有哪些段拼"盘前/盘后分时"——那是 v604 的偏离。 */
+    const extPhase = currentExtPhase(S.sheetKey);
+    const secLabel = (extPhase === 'pre') ? '盘前分时' : '盘后分时';
     const secBtn = bar.querySelector('button[data-x="1"]');
     if (secBtn) secBtn.textContent = secLabel;
     const on = effMinExt();
@@ -5958,6 +5973,9 @@
     chart.onDrawSelect = () => { syncDrawSel(); syncChartInter(); };
     /* v171：主图指标切换结果回传 → 右上角按钮文案/可用态 */
     chart.onMainInd = (m, canUse) => syncIndBtn(m, canUse);
+    /* v608：渲染前先设好"当前该看的延展段"，保证打开时若 mm_minext=true 自动展开
+     * 也只拼对应那一段（盘前拼pre、盘后/休市拼post），不是两段全拼。 */
+    chart.extPhase = currentExtPhase(key);
     /* render 是异步的：拿到数据后才知道有没有延展段，再同步一次开关显隐 */
     const _p = chart.render(key, mode);
     /* v326：渲染异常必须显示出来，不能 .catch(()=>{}) 静默吞掉 ——
