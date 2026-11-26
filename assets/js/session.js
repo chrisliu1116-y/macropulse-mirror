@@ -42,6 +42,27 @@
 
   const inR = (m, a, b) => m >= a && m < b;
 
+  /* v604【美股节假日表·实时信号失败兜底】NYSE 官方休市日（2026-2028，来源
+   * nyse.com/markets/hours-calendars，2026-11-26 核对）。用途：实时行情信号
+   * （Nasdaq timeAsOf / 分时末点日期，见 api.js）拉取失败时，仍能把感恩节 /
+   * 圣诞等休市日判为 closed，避免把「行情停在昨天」误当成今天盘前/盘后。
+   * 格式 `YYYY-MM-DD`（美东当地日期）。只列**全天休市**；感恩节次日/圣诞前夜
+   * 是 13:00 提前收盘、仍交易，不列入。 */
+  const US_HOLIDAYS = new Set([
+    // 2026
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+    '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+    // 2027
+    '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31',
+    '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24',
+    // 2028
+    '2028-01-17', '2028-02-21', '2028-04-14', '2028-05-29', '2028-06-19',
+    '2028-07-04', '2028-09-04', '2028-11-23', '2028-12-25'
+  ]);
+  function _usHoliday(z) {
+    return US_HOLIDAYS.has(z.y + '-' + String(z.m).padStart(2, '0') + '-' + String(z.d).padStart(2, '0'));
+  }
+
   /* session 定义
    * weekdays: [1..5]；segs: 常规时段；pre/post: 延展时段
    * 时段用交易所当地时间的分钟数表示
@@ -140,6 +161,23 @@
 
     const z = zoned(cfg.tz, now);
     const wd = z.wd, m = z.mins;
+
+    /* v604【美股休市判定：实时行情信号优先 + 节假日表兜底】
+     * ① 实时信号（Nasdaq timeAsOf，api.js 注入）：若今天美东日期有信号且 trading=false
+     *    → 行情自己证明今天没交易（如感恩节停牌、数据停在昨天）→ 直接休市。
+     *    这是「跟实时行情走、无需人工维护」的主判据。
+     * ② 节假日表：信号缺失/过期时兜底，防把休市日误标盘前。
+     * 外汇/加密/商品不在 NYSE 日历内，跳过。 */
+    const _nyseCal = (type === 'us' || type === 'vix' || type === 'rate');
+    if (_nyseCal) {
+      const live = _usLiveToday(z);
+      if (live && !live.trading) {
+        return { open: false, phase: 'closed', label: '休市', hint: '美股今日休市（实时行情确认）' };
+      }
+      if (_usHoliday(z)) {
+        return { open: false, phase: 'closed', label: '休市', hint: '美股节假日休市' };
+      }
+    }
 
     // 加密/外汇/商品的周末规则
     if (cfg.weekly) {
@@ -265,5 +303,21 @@
     return 0;
   }
 
-  w.Session = { state: state, judge: judge, sessionLive: sessionLive, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes };
+  /* v604【美股实时交易日信号】由 api.js 在拿到 Nasdaq 官方 chart 后写入：
+   * setUsTradingDay(etDateStr, trading)。etDateStr = 美东当地 'YYYY-MM-DD'，
+   * trading = 该日是否真有交易（nqFresh：timeAsOf 是否等于今天美东日期）。
+   * judge('us'/'vix') 只采纳「美东日期=今天」的信号，过期信号自动失效 →
+   * 回退到节假日表 + 时间逻辑，绝不因拿不到实时信号就误判休市。 */
+  let _usLive = null;
+  function setUsTradingDay(etDateStr, trading) {
+    if (!etDateStr) return;
+    _usLive = { day: etDateStr, trading: !!trading, at: Date.now() };
+  }
+  function _usLiveToday(z) {
+    if (!_usLive) return null;
+    const key = z.y + '-' + String(z.m).padStart(2, '0') + '-' + String(z.d).padStart(2, '0');
+    return (_usLive.day === key) ? _usLive : null;
+  }
+
+  w.Session = { state: state, judge: judge, sessionLive: sessionLive, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes, setUsTradingDay: setUsTradingDay };
 })(window);
