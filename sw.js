@@ -9,7 +9,7 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v612';
+const CACHE = 'macro-pulse-v613';
 /* VER 从 CACHE 名推导，升版只改上面一行即可；
  * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
 const VER = CACHE.replace('macro-pulse-v', '');
@@ -44,7 +44,11 @@ const CORE = [
   './assets/js/volprofile.js',
   './assets/js/verify.js',
   './assets/js/events.js',
-  './assets/js/app.js'
+  './assets/js/app.js',
+  /* v613：赚钱效应子页骨架纳入预缓存——主站挂了 iframe 相对路径 ./sse/ 也能加载。
+   * 数据(sse/data/*.json)走 GitHub 三源竞速、上节已单独绕过 SW，不受此影响。 */
+  './sse/index.html',
+  './sse/assets/app.js'
 ];
 
 /* v352【版本指纹必须生效】页面请求是 assets/js/app.js?v=352，
@@ -175,13 +179,15 @@ self.addEventListener('fetch', e => {
   /* 市场宽度页（/breadth/）：数据 JSON 每天收盘后重写，必须每次直连网络，
    * 不能被 staleWhileRevalidate 用旧缓存顶一天。 */
   if (p.indexOf('breadth/data/') === 0) return;
-  /* 上证同期对比子页（/sse/）：数据 JSON 同样每天更新，必须直连网络。 */
+  /* 赚钱效应子页（/sse/）：数据 JSON 每天更新、且走 GitHub 三源竞速，
+   * 必须直连网络（不能被旧缓存顶一天）——这条保留。 */
   if (p.indexOf('sse/data/') === 0) return;
-  /* v265【用户实测「链接没变化」的根因】matchCache 用 ignoreSearch:true，
-   * /sse/assets/app.js?v=564 / ?v=4 / ?v=5 会被当成同一个缓存键，
-   * staleWhileRevalidate 一直回吐旧脚本，升版本号也换不掉。
-   * /sse/ 整条子页（含 index / assets / data）一律绕过 SW 直连网络。 */
-  if (p.indexOf('sse/') === 0) return;
+  /* v613【修复断主站时赚钱效应打不开】v265 曾把 /sse/ 整条绕过 SW，
+   * 根因是 matchCache ignoreSearch:true 让不同 ?v= 命中同一旧脚本。
+   * 该根因在 v352 已修（staleWhileRevalidate 对带 ?v= 的资源改用精确匹配，
+   * 见 130-131 行），整条绕过已过时：iframe 用相对路径 ./sse/index.html，
+   * 主站挂了就取不到骨架 → 断网时赚钱效应空白。现在只让数据目录绕过，
+   * 骨架（index/app.js）走缓存，断主站也能加载，数据仍走 GitHub 竞速。 */
   // sw.js 自身交给浏览器更新机制，别被自己的缓存锁住
   if (p === 'sw.js' || /\/sw\.js$/.test(p)) return;
 
