@@ -993,6 +993,12 @@
          * 常规时段（只有 reg 点），此时开关点下去没有任何变化 ——
          * 用户看到的就是「盘后分时没加载出来」。 */
         this.extAvailable = !!data.ext;
+        /* v604：记下这条分时**实际含有**的延展段（pre/post/both），供 app.js
+         * 的延展按钮文案按真实数据切换——感恩节没有盘前，数据末段是昨天盘后，
+         * 按钮就该写「盘后分时」而不是按时间硬判的「盘前分时」。 */
+        const _hasPre = pts.some(p => p.seg === 'pre');
+        const _hasPost = pts.some(p => p.seg === 'post');
+        this.extSeg = (_hasPre && _hasPost) ? 'both' : (_hasPre ? 'pre' : (_hasPost ? 'post' : ''));
         const regPts = hasSeg ? pts.filter(p => p.seg === 'reg') : pts;
         /* v319：不开延展段时只要存在常规点就只画常规段（哪怕刚开盘只有
          * 1~3 根）—— 不再把盘前点混进主图装成常规分时（11-13 22:33 SK海力士）。 */
