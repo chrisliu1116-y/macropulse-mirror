@@ -5853,8 +5853,15 @@
      * 旧条件把按钮立刻隐藏，哪怕 Naver 已拿到完整盘后分钟、chart.extAvailable=true。
      * 韩股闭市后保留「常规分时 / 盘后分时」入口供回看；美股及其它品种门控不变。 */
     const krPostReview = isKr && phaseNow === 'closed';
+    /* v604【美股休市日回看昨天盘后】感恩节等休市日 phaseNow=closed，但 Nasdaq
+     * 数据末段是昨天盘后（extSeg='post'）——按用户口径应显示「盘后分时」按钮
+     * 供回看（与平时盘前/盘后互转同一套），不再因 closed 把按钮藏掉。
+     * 只有确实拿到延展段（extSeg 非空）才露，避免点了没反应的空按钮。 */
+    /* extSeg 可能为空（默认常规视图还没渲染延展段），但 extAvailable=true 已证明
+     * 这条分时确实带延展数据——休市日据此显示回看按钮，文案由下方 extSeg/phaseNow 兜底。 */
+    const usPostReview = isUS && phaseNow === 'closed' && !!(chart && (chart.extSeg || chart.extAvailable));
     const show = S.sheetMode === 'min' && hasExt &&
-      (phaseNow === 'pre' || phaseNow === 'post' || krPostReview);
+      (phaseNow === 'pre' || phaseNow === 'post' || krPostReview || usPostReview);
     bar.hidden = !show;
     const note = $('#shMinNote');
     if (note) {
@@ -5879,8 +5886,15 @@
       note.hidden = !text;
     }
     if (!show) return;
-    /* v296：按钮只在盘前 / 盘后出现，文案与当前时段严格一致 */
-    const secLabel = (phaseNow === 'pre') ? '盘前分时' : '盘后分时';
+    /* v604：按钮文案按**数据里真实存在的延展段**切换（不是时间硬判）。
+     * 感恩节休市：数据末段是昨天盘后 → extSeg='post' → 写「盘后分时」；
+     * 正常盘前：extSeg='pre' → 「盘前分时」。只在拿不到段信号时才回落 phaseNow。
+     * 这样按钮永远与实际画出来的曲线一致，不会再出现"写着盘前、画着昨天盘后"。 */
+    const segNow = (chart && chart.extSeg) || '';
+    const secLabel = (segNow === 'pre') ? '盘前分时'
+      : (segNow === 'post') ? '盘后分时'
+      : (segNow === 'both') ? '盘前/盘后分时'
+      : ((phaseNow === 'pre') ? '盘前分时' : '盘后分时');
     const secBtn = bar.querySelector('button[data-x="1"]');
     if (secBtn) secBtn.textContent = secLabel;
     const on = effMinExt();
