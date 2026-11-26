@@ -4436,8 +4436,17 @@
       const seg = etMin < 570 ? 'pre' : etMin < 960 ? 'reg' : 'post';
       byT.set(t, { v: v, seg: seg });
     }
-    const pts = Array.from(byT.entries()).sort((a, b) => a[0] - b[0])
+    let pts = Array.from(byT.entries()).sort((a, b) => a[0] - b[0])
       .map(([t, o]) => ({ time: t, open: o.v, high: o.v, low: o.v, close: o.v, volume: 0, seg: o.seg }));
+    /* v609【休市日剔除昨天的盘前段】休市日 Nasdaq 返回的是上一交易日完整
+     * pre/reg/post（实测 SKHY 11-25：pre 17:00-22:29 / reg 22:30-04:59 /
+     * post 05:00-08:59 北京）。用户口径：休市日"盘后分时"= 蓝色正常(reg) +
+     * 黄色盘后(post)，不该把昨天盘前(pre)也画进去占用时间轴、造成中间空一段。
+     * 休市日只剔除 pre 段，保留 reg+post——charts 用 v599 原逻辑画出来即
+     * 蓝色正常 + 黄色盘后，正是用户要的。正常交易日不动（pre 是当天的，要画）。 */
+    if (!nqFresh(d) && pts.some(p => p.seg === 'pre')) {
+      pts = pts.filter(p => p.seg !== 'pre');
+    }
     /* 昨收：Nasdaq 的 previousClose 在盘前给的是「前前一日」收盘（实测 795.23，
      * 而盘前相对的是昨天 656.39），不能直接用；用 lastSale - netChange 最稳。 */
     const num = s => Number(String(s == null ? '' : s).replace(/[$,+\s]/g, ''));
