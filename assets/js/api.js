@@ -399,8 +399,24 @@
   async function emKline(secid, klt, lmt, fqt) {
     const q = `${EM_KLINE_PATH}?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6`
       + `&fields2=f51,f52,f53,f54,f55,f56,f57&klt=${klt}&fqt=${fqt === 0 ? 0 : 1}&end=20500101&lmt=${lmt}`;
-    const d = await emHistJSON(q, 30000);
-    const rows = (d && d.data && d.data.klines) || [];
+    let d = await emHistJSON(q, 30000);
+    let rows = (d && d.data && d.data.klines) || [];
+    /* v603【em kline empty 真因修复】东财对部分出口 IP 的 kline 接口回
+     * `200 + data.klines=[]`（空包）——emHistJSON 视 200 为成功、直接 return，
+     * 不会再走它内部的代理兜底；空包到本函数才被发现，代理通道已没机会重试。
+     * 实测 pages 网关（macropulse-api.pages.dev/__px，出口 IP 不同）能拿到
+     * 2.H30184 完整 3251 根日K。这里空包时主动走一次 proxyFetch 重取真实数据，
+     * 仍无数据才抛错——全程不合成，守住「宁缺勿假」。 */
+    if (!rows.length && typeof location !== 'undefined' && location.protocol !== 'file:') {
+      try {
+        const r = await proxyFetch(EM_HIS_HOSTS[0] + q);
+        if (r.ok) {
+          const pd = await r.json();
+          const pr = (pd && pd.data && pd.data.klines) || [];
+          if (pr.length) { rows = pr; status.emHis = 'ok-proxy-kline'; }
+        }
+      } catch (eP) { /* 代理也失败 → 照旧抛空包错误 */ }
+    }
     /* 空包也必须当失败抛出：以前这里返回 []，上层再兜底到合成曲线，
      * 结果「接口回了 200 但没有 klines」= 一张假 K 线。 */
     if (!rows.length) throw new Error('em kline empty');
