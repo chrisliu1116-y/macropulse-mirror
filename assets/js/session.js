@@ -167,8 +167,11 @@
      *    → 行情自己证明今天没交易（如感恩节停牌、数据停在昨天）→ 直接休市。
      *    这是「跟实时行情走、无需人工维护」的主判据。
      * ② 节假日表：信号缺失/过期时兜底，防把休市日误标盘前。
-     * 外汇/加密/商品不在 NYSE 日历内，跳过。 */
-    const _nyseCal = (type === 'us' || type === 'vix' || type === 'rate');
+     * 外汇/美债/加密/商品是 24×5 或独立日历，不在 NYSE 全天休市表内，跳过。 */
+    /* v605【美债误伤修复】美债(rate)是 24×5 电子盘、感恩节照常交易，不属于
+     * NYSE 全天休市品种——v604 误把 rate 纳入节假日表致其沉底、标"休市"。
+     * 只保留 us(美股现货/盘前盘后) 与 vix(CBOE 现货指数，与 NYSE 同节假日)。 */
+    const _nyseCal = (type === 'us' || type === 'vix');
     if (_nyseCal) {
       const live = _usLiveToday(z);
       if (live && !live.trading) {
