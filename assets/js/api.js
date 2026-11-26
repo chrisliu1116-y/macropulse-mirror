@@ -4111,6 +4111,19 @@
     const _cls = (_na && _na.kind === 'etf') ? 'etf' : 'stocks';
     const target = `${NASDAQ_Q}${encodeURIComponent(sym)}/chart?assetclass=${_cls}`;
     const good = d => !!(d && d.data && d.data.chart && d.data.chart.length);
+    /* v607【休市日回看昨天盘后】nqFresh 原本拒绝 timeAsOf=昨天的数据（防隔夜快照
+     * 冒充今天）。但美股休市日（感恩节等）Nasdaq 本就该停在昨天——此时昨天的完整
+     * pre/reg/post 曲线正是用户要回看的「盘后分时」。若仍按 stale 拒绝，会落 CNBC
+     * 兜底（无 seg/ext）→ 按钮露出却只画常规分时。休市日放行昨天数据，走原有
+     * Nasdaq 分段链，盘后按钮自然可用——完全复用原逻辑，不新造功能。 */
+    let _usClosed = false;
+    try {
+      if (w.Session && w.Session.state) {
+        const st = w.Session.state(sym);
+        _usClosed = !!(st && st.phase === 'closed' && ((_na && _na.grp === 'usstock') || (_na && _na.grp === 'us')));
+      }
+    } catch (eU) {}
+    const freshEnough = d => nqFresh(d) || (_usClosed && good(d));
     let lastErr = null;
 
     /* ① 直连：Nasdaq 现已撤掉 CORS 头，正常网络下必失败（约 300ms 就报错，
@@ -4155,7 +4168,7 @@
       const run = (fn) => {
         Promise.resolve().then(fn).then((d) => {
           if (done) return;
-          if (good(d) && nqFresh(d)) return finish(d);
+          if (good(d) && freshEnough(d)) return finish(d);
           if (good(d)) lastErr = new Error('stale snapshot (timeAsOf ' + (d.data.timeAsOf || '?') + ')');
           if (--pending === 0) finish(null);
         }).catch((e) => {
@@ -4173,7 +4186,7 @@
     /* 两条中转都没成（jina 限流 / 代理池只剩隔夜快照）时，用今天最后一次成功的
      * 副本兜底 —— 盘前曲线落后几分钟可以接受，整段消失不行。 */
     const keep = nasdaqLast.get(sym);
-    if (keep && good(keep) && nqFresh(keep)) return keep;
+    if (keep && good(keep) && freshEnough(keep)) return keep;
     throw lastErr || new Error('nasdaq chart unavailable');
   }
 
