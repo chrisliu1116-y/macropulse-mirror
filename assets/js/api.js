@@ -3860,8 +3860,20 @@
          * 抛 'em kline slow' → 外层 Yahoo 兜底又只给 1 根 → 报「取数失败」。
          * 中证指数放宽到 8s；Yahoo 对它本身就是残缺源(全历史仅1根)，
          * 放宽比虚假兜底更诚实。其它品种维持 1.2s 不变。 */
-        const _kMs = (a && String(a.secid || '').startsWith('2.')) ? 8000 : 1200;
-        pts = await klineFast(emKline(a.secid, klt, m, 1), _kMs);
+        const _isCsi = !!(a && String(a.secid || '').startsWith('2.'));
+        const _kMs = _isCsi ? 8000 : 1200;
+        /* v602【中证指数 em kline empty 修复】指数没有复权概念，东财对 2. 段
+         * 偶发「fqt=1 回 200 但 klines 空」→ emKline 抛 'em kline empty'（异常，
+         * 不是超时）。旧的 fqt=0 回退只在下面 klineValid(pts) 失败分支里，异常
+         * 根本走不到 → 三路兜底（腾讯/新浪不支持、Yahoo 仅1根）全空 → 取数失败。
+         * 中证指数改为：fqt=1 抛异常即原地回退 fqt=0（真实点位，不合成），
+         * 普通品种维持原行为不变。 */
+        try {
+          pts = await klineFast(emKline(a.secid, klt, m, 1), _kMs);
+        } catch (eCsi) {
+          if (!_isCsi) throw eCsi;
+          pts = await klineFast(emKline(a.secid, klt, m, 0), _kMs);
+        }
         if (!klineValid(pts)) {
           const raw = await klineFast(emKline(a.secid, klt, m, 0), _kMs);
           if (raw.length && klineValid(raw)) pts = raw;
