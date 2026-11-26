@@ -993,12 +993,6 @@
          * 常规时段（只有 reg 点），此时开关点下去没有任何变化 ——
          * 用户看到的就是「盘后分时没加载出来」。 */
         this.extAvailable = !!data.ext;
-        /* v604：记下这条分时**实际含有**的延展段（pre/post/both），供 app.js
-         * 的延展按钮文案按真实数据切换——感恩节没有盘前，数据末段是昨天盘后，
-         * 按钮就该写「盘后分时」而不是按时间硬判的「盘前分时」。 */
-        const _hasPre = pts.some(p => p.seg === 'pre');
-        const _hasPost = pts.some(p => p.seg === 'post');
-        this.extSeg = (_hasPre && _hasPost) ? 'both' : (_hasPre ? 'pre' : (_hasPost ? 'post' : ''));
         const regPts = hasSeg ? pts.filter(p => p.seg === 'reg') : pts;
         /* v319：不开延展段时只要存在常规点就只画常规段（哪怕刚开盘只有
          * 1~3 根）—— 不再把盘前点混进主图装成常规分时（11-13 22:33 SK海力士）。 */
@@ -1091,18 +1085,8 @@
           };
           /* v293-rev【用户口径】盘前/盘后延展段统一用琥珀黄，与蓝色常规分时一眼区分；
            * 盘前原来是蓝色（rgba(122,162,255)），跟主线 #4f9dff 几乎同色根本分不清。 */
-          /* v608【恢复原逻辑：点开只拼当前时段那一段】用户口径：默认蓝色正常分时，
-           * 点「盘后分时」= 蓝色正常 + 一段黄色盘后；盘前时段点开才拼黄色盘前。
-           * v604 改成 pre+post 两段全拼+文案拼"盘前/盘后"偏离原行为。这里按
-           * app.js 传入的 extPhase（pre/post）只画对应段；extPhase 缺省时兼容旧行为
-           * （两段都画），避免其它调用点失效。 */
-          const _exc = this.extPhase;
-          if (_exc === 'pre' || _exc === 'both') {
-            drawExt(pts.filter(p => p.seg === 'pre'), isLight() ? 'rgba(210,128,26,0.95)' : 'rgba(255,196,84,0.95)', 'pre');
-          }
-          if (_exc === 'post' || _exc === 'both' || !_exc) {
-            drawExt(pts.filter(p => p.seg === 'post'), isLight() ? 'rgba(210,128,26,0.95)' : 'rgba(255,196,84,0.95)', 'post');
-          }
+          drawExt(pts.filter(p => p.seg === 'pre'), isLight() ? 'rgba(210,128,26,0.95)' : 'rgba(255,196,84,0.95)', 'pre');
+          drawExt(pts.filter(p => p.seg === 'post'), isLight() ? 'rgba(210,128,26,0.95)' : 'rgba(255,196,84,0.95)', 'post');
         }
         /* 【v187】对称振幅定轴：右轴 [昨收-amp, 昨收+amp]。
          * 原来是「把昨收拉进 min/max」，全天飘红时 0% 就被挤到画面最底下，
