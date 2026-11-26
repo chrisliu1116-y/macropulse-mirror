@@ -1151,6 +1151,8 @@ body.light .run-tag.exp{color:#b4530c;background:#fff3e6;border-color:rgba(180,8
 .mkt-note-bar[hidden]{display:none}
 .mk-l{flex:1;min-width:0}
 .mk-l b{display:block;font-size:13px;font-weight:600;letter-spacing:.2px;line-height:1.25}
+/* v611：名称下方的交易代码小字（等宽、灰色），所有品种统一显示 */
+.mk-code{display:block;font-family:var(--mono);font-size:9.5px;color:var(--tx3);line-height:1.2;margin-top:1px;opacity:.85}
 .mk-sub{display:flex;align-items:center;gap:5px;font-size:9.5px;color:var(--tx3);margin-top:2px}
 .mk-sub i{font-style:normal;opacity:.85}
 .mk-sub em{
