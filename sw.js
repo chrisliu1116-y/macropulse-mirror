@@ -9,7 +9,7 @@
  * 现在：先请求网络（最多等 2.5 秒），拿到就顺手更新缓存；
  * 网络慢/断网才回退缓存 —— 既保证「打开就是最新版」，又不丢秒开。
  * ============================================================ */
-const CACHE = 'macro-pulse-v613';
+const CACHE = 'macro-pulse-v614';
 /* VER 从 CACHE 名推导，升版只改上面一行即可；
  * 必须保留 'macro-pulse-vNNN' 字面量 —— app.js 的 syncVerPill 用正则读它做版本校验。 */
 const VER = CACHE.replace('macro-pulse-v', '');
@@ -27,6 +27,14 @@ const CORE = [
   './assets/icons/icon-512.png',
   './assets/icons/apple-touch-icon.png',
   './assets/css/app.css',
+  /* v614：主页面引用但 CORE 遗漏的资源——过去靠"用过一次后 SW 自动缓存"，
+   * 新设备/清缓存后首次断网就缺（图表库 lightweight-charts 尤其关键，缺它整页图表空白）。 */
+  './vendor/lightweight-charts.standalone.production.js',
+  './assets/js/account.js',
+  './assets/js/coverage-probe.js',
+  './assets/js/hot-events.js',
+  './assets/js/news-crypto.js',
+  './assets/js/predict.js',
   './assets/js/cn-stocks.js',
   './assets/js/universe.js',
   './assets/js/session.js',
@@ -45,10 +53,16 @@ const CORE = [
   './assets/js/verify.js',
   './assets/js/events.js',
   './assets/js/app.js',
-  /* v613：赚钱效应子页骨架纳入预缓存——主站挂了 iframe 相对路径 ./sse/ 也能加载。
-   * 数据(sse/data/*.json)走 GitHub 三源竞速、上节已单独绕过 SW，不受此影响。 */
+  /* v614：子页骨架完整纳入预缓存——主站挂了 iframe 相对路径也能加载。
+   * 数据(data 目录下的 json)走 GitHub 三源竞速、上节已单独绕过 SW，不受此影响。
+   * v613 只加了 sse 的 index+app.js，漏了 style.css（断网页面没样式）；
+   * breadth 页虽是历史入口，也一并补齐，做到「所有页面骨架都可离线」。 */
   './sse/index.html',
-  './sse/assets/app.js'
+  './sse/assets/style.css',
+  './sse/assets/app.js',
+  './breadth/index.html',
+  './breadth/assets/style.css',
+  './breadth/assets/app.js'
 ];
 
 /* v352【版本指纹必须生效】页面请求是 assets/js/app.js?v=352，
