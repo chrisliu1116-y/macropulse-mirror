@@ -9269,7 +9269,7 @@
     /* v137：灵敏度滑杆已移除 —— 阈值完全由波动率库自适应决定，
      * 不再保留人工系数入口（旧版存过的 mm_thr 也不再读取）。 */
 
-    $('#btnDemo').onclick = demoPush;
+    /* v612：右上角「演」演示按钮已移除（用户口径：没什么用），demoPush 函数保留但无入口 */
     const tb = $('#btnTheme');
     if (tb) tb.onclick = () => applyTheme(S.theme === 'light' ? 'dark' : 'light');
     d.addEventListener('keydown', (e) => {
