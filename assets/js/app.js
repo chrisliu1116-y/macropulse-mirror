@@ -5799,6 +5799,9 @@
      * 但刚结束的 246 根左右真实盘后分钟仍然有效。此时尊重用户点击选择；
      * 否则按钮即使露出，点击后 syncMinBar 也会立刻把选中态打回「常规分时」。 */
     if (phase === 'closed' && a.grp === 'krstock') return S.minExt === true;
+    /* v606【美股休市日回看】与韩股同理：感恩节 phase=closed，但 Nasdaq 数据里
+     * 有昨天真实盘后分钟，用户点「盘后分时」后必须尊重选择，否则按钮点了没反应。 */
+    if (phase === 'closed' && (a.grp === 'usstock' || a.grp === 'us')) return S.minExt === true;
     if (phase === 'pre' || phase === 'post') {
       if (S.minExt === true || S.minExt === false) return S.minExt;
       /* v394【用户口径纠正】盘前/盘后不再自动接延展段。原 v296 写「没手动选过就
@@ -5836,7 +5839,13 @@
      * 重新同步一次。以前用 !== false，渲染前读到的是上一场的旧值（或 undefined），
      * 于是「这一场压根没取到盘前数据」也照样亮着一个点了没反应的「盘前分时」。 */
     const dataOk = !chart || chart.extAvailable === true;
-    const hasExt = !!(a && a.tv && (isUS || isKr) && dataOk);
+    /* v606【美股休市日按钮消失修复】旧版 hasExt 强制 dataOk（chart.extAvailable=true），
+     * 但 extAvailable 只在**点开延展按钮取到数据后**才为 true——默认常规视图下必为 false，
+     * 于是休市日回看按钮永远出不来（循环依赖）。v604 把 phase 变 closed 后连侥幸路径也断了。
+     * 拆成两档：hasExtNow=数据已证实有延展段（原逻辑，供 pre/post）；
+     * hasExtPotential=理论上可能有（供 closed 回看，本就是"点开才取"）。 */
+    const hasExtNow = !!(a && a.tv && (isUS || isKr) && dataOk);
+    const hasExtPotential = !!(a && a.tv && (isUS || isKr));
     /* v296【用户口径：延展开关只在延展时段出现】
      *   · 盘中（reg）—— 完全不出这个按钮（盘中就是普通分时）
      *   · 盘前（pre）—— 显示「盘前分时」，持续到开盘
@@ -5857,11 +5866,13 @@
      * 数据末段是昨天盘后（extSeg='post'）——按用户口径应显示「盘后分时」按钮
      * 供回看（与平时盘前/盘后互转同一套），不再因 closed 把按钮藏掉。
      * 只有确实拿到延展段（extSeg 非空）才露，避免点了没反应的空按钮。 */
-    /* extSeg 可能为空（默认常规视图还没渲染延展段），但 extAvailable=true 已证明
-     * 这条分时确实带延展数据——休市日据此显示回看按钮，文案由下方 extSeg/phaseNow 兜底。 */
-    const usPostReview = isUS && phaseNow === 'closed' && !!(chart && (chart.extSeg || chart.extAvailable));
-    const show = S.sheetMode === 'min' && hasExt &&
-      (phaseNow === 'pre' || phaseNow === 'post' || krPostReview || usPostReview);
+    /* v606：休市日回看是"点开才去取延展段"，不能用 extAvailable 当前置（那时必为 false）。
+     * 只要该品种理论上支持延展（a.tv）+ 数据源确实有延展段能力即可露按钮。 */
+    const usPostReview = isUS && phaseNow === 'closed';
+    const show = S.sheetMode === 'min' &&
+      ((phaseNow === 'pre' || phaseNow === 'post') ? hasExtNow
+        : (krPostReview || usPostReview) ? hasExtPotential
+        : false);
     bar.hidden = !show;
     const note = $('#shMinNote');
     if (note) {
