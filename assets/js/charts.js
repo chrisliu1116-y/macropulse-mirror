@@ -747,8 +747,20 @@
      * v220：主图/副图数据末尾已补了当天剩余时段的 whitespace 点，
      * 所以这里的 fitContent 会正好铺满「开盘→收盘」整段，而不是数据首尾。
      * 只在前 150ms 的 _expandPanes 补量里调用，不覆盖用户后续的缩放/平移。 */
-    _refitMin() {
+    /* v620【切段重铺】forceFit=true 时无视 covered 判定，直接 fitContent。
+     * 常规↔盘后切换后，_minBars 的 covered 依赖 showExt/phase/coverage 多重条件，
+     * 某些组合（如韩股 post 切回常规、数据点数不足 60%）会判 false → 按 want 格
+     * 钉轴 → 常规线挤在左侧不铺满。切段是用户明确动作，此时无条件按数据首尾铺满。 */
+    _refitMin(forceFit) {
       if (this.mode !== 'min' || !this.chart) return;
+      if (forceFit) {
+        try {
+          this.chart.timeScale().fitContent();
+          if (this.volChart) this.volChart.timeScale().fitContent();
+          this._pinTo = this._minPts ? this._minPts.length - 1 : null;
+          return;
+        } catch (e) { /* 失败落回 _pinMin */ }
+      }
       this._pinMin(this._minPts, this._minKey, false);
     }
 
