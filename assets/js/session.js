@@ -362,6 +362,38 @@
     return hit;
   }
 
+  /* v616【提前收盘自适应 · 按数据判断本场是否已走完】适用所有有固定场次的品种。
+   * 不依赖任何「提前收盘日」表，只看两件事：
+   *   ① 盘中（regular）：末点距现在 ≥35 分钟且末点是当地今天 → 数据已停，按已收盘处理。
+   *      阈值取 35 是因为已知最大的源延迟是 20 分钟（亚太指数 Yahoo 5m 尾点）。
+   *   ② 非盘中（closed/post/pre）：末点的当地分钟比时段表收盘时刻早 30 分钟以上
+   *      → 这一场被提前结束了（美股 13:00 提前收盘、港股台风等）。
+   * 24 小时类（外汇/商品/美债/加密/VIX）没有固定场次，恒返回 false。
+   * 分时图轴（charts.js）、列表缩略图（app.js）、活线续尾（charts.js / api.js）共用本判断。 */
+  function overByData(key, lastTime, phase, now) {
+    try {
+      const U = w.UNIVERSE;
+      const a = (U && U.get) ? U.get(key) : null;
+      if (!a || !(lastTime > 0) || !phase) return false;
+      const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
+      const c = SESSIONS[type];
+      if (!c || !c.segs || !c.segs.length || !c.tz || c.always || c.weekly || c.cme || c.vix24) return false;
+      const tNow = now || new Date();
+      const zn = zoned(c.tz, tNow);
+      /* 时间轴约定：北京墙上时间装进 UTC 分量，真实时刻 = time*1000 - 8h */
+      const tLast = new Date(lastTime * 1000 - 8 * 3600e3);
+      const zl = zoned(c.tz, tLast);
+      if (phase === 'regular') {
+        const sameDay = zl.y === zn.y && zl.m === zn.m && zl.d === zn.d;
+        const stall = (tNow.getTime() - tLast.getTime()) / 60000;
+        return sameDay && stall >= 35;
+      }
+      const schedClose = c.segs[c.segs.length - 1][1];
+      return (schedClose - zl.mins) >= 30
+        && (phase === 'closed' || phase === 'post' || phase === 'pre');
+    } catch (e) { return false; }
+  }
+
   /* v616：该时段当前是否有任一已解锁品种处于夜盘（供排序提示用） */
   function sessionNight(type) {
     if (!type) return false;
@@ -421,5 +453,5 @@
     return (_usLive.day === key) ? _usLive : null;
   }
 
-  w.Session = { state: state, stateAt: stateAt, judge: judge, sessionLive: sessionLive, sessionNight: sessionNight, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes, setUsTradingDay: setUsTradingDay, isUsNightCap: isUsNightCap, markUsNightCap: markUsNightCap, noteUsNightData: noteUsNightData, usNightCaps: usNightCaps, usNightReset: usNightReset };
+  w.Session = { state: state, stateAt: stateAt, judge: judge, sessionLive: sessionLive, sessionNight: sessionNight, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes, setUsTradingDay: setUsTradingDay, isUsNightCap: isUsNightCap, markUsNightCap: markUsNightCap, noteUsNightData: noteUsNightData, usNightCaps: usNightCaps, usNightReset: usNightReset, overByData: overByData };
 })(window);
