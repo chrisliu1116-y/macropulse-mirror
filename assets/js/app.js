@@ -3718,11 +3718,22 @@
         const r = await w.API.intraday(k);
         /* v286 防假数据硬闸：API 出口有 trusted() 就以它为唯一判据，
          * 缺失时回退到 failed/synthetic 标记；不可信结果一律不画缩略图。 */
-        const trustOk = (w.API && w.API.trusted)
+        /* v624：daily 分时图的「缓存」在图例会诚实标注，但缩略图没有标签，
+         * 直接画昨天的缓存曲线会让用户误以为是今天（开盘后缩略图全是昨天）。
+         * 缩略图拒绝 src=cache，配合下方 stale 重试拉到今日真实数据再画。 */
+        const trustOk = r && r.src !== 'cache' && ((w.API && w.API.trusted)
           ? !!w.API.trusted(r)
-          : !(r && (r.failed || r.synthetic));
+          : !(r && (r.failed || r.synthetic)));
         if (!trustOk) {
-          if (vals === undefined) sparkFailMark(k);
+          /* v624【缩略图永久停在昨天】v596 后 intraday 遇「数据源返回昨日整场」
+           * 会判 failed 并落 readMinCache（昨天）兜底。缩略图这里拿到 failed
+           * 后原逻辑只在 vals===undefined 时标失败；若已有旧 vals（首屏快照/
+           * 上次缓存）就直接 return 且不清 stale —— 加上成功后 _mkSparkStale
+           * 被 delete，这一行从此不再重试，开盘后缩略图永久停在昨天。
+           * 修：trustOk=false 时把 key 重新标 stale + 记失败退避，让下轮继续拉，
+           * 直到数据源给出今天的真实分时。 */
+          _mkSparkStale.add(k);
+          sparkFailMark(k);
           return;
         }
         const allPts = (r && r.points) || [];
