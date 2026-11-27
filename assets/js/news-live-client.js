@@ -222,11 +222,18 @@
     return false;
   };
   const S_CB_ACTION = /(紧急|意外|突发|非常规)(降息|加息)|(降息|加息).{0,12}(?:[5-9]\d|1\d{2})\s*(?:个?基点|bp|BP)/;
+  /* v75【桶C 守门边界·误判台账 #96】S 级「单次≥50bp」只匹配了数字，
+   * 没守住「必须是既成事实/正式决议」这道边界：「12月加息50个基点呼声再起」
+   * 只是市场呼声，连正式加息都不算，不该顶格 S。
+   * 这是通用政策意向词表（任何「XX加息N个基点呼声/预期/猜测」同型都成立），
+   * 只在 sCbTopHit 既有守门函数内扩边界，不新增早退分支、不碰全局 SPECULATION
+   * （它在 S_RE/A_RE 另有降档用途，全局补词有回归风险）。 */
+  const CB_INTENT = /呼声|再起|升温|揣测|揣度|猜测|猜想|传言|传闻|风声|预期升温|料将|势将|恐将|市场预期|分析师预计|机构预计|市场预期/;
   function sCbTopHit(title, brief) {
     const h = String(title || '');
     if (!S_CB_ACTION.test(h)) return false;
     if (!CB_SUBJECT_OK(h)) return false;
-    if (SPECULATION.test(h)) return false;
+    if (SPECULATION.test(h) || CB_INTENT.test(h)) return false;
     if (isRecapOrCommentary(h, brief)) return false;
     if (/[？?]\s*$/.test(h)) return false;
     if (/(行长|主席|总裁|执委|官员|理事)[^：:]{0,10}[：:]/.test(h)) return false;
@@ -3293,7 +3300,7 @@
    *    大规模战争终结；油轮/设施/单边打击全部下放 A；其余七科目同步收紧；
    *    新增 isRecapOrCommentary 在 S_RE 入口拦“复盘综述/盘面归因”；
    *    ACT_WORD 补宣战/关闭/中断。GRADE_VER 64→65 让存量池重算。 */
-  const GRADE_VER = 74;
+  const GRADE_VER = 75;
 
   /* ---------------- 关于「C 级要不要进信息流」 ----------------
    * 11-05 曾试过把 C 级里「带硬信息」的那部分（小国数据 / 边缘板块 / 网络安全…）
