@@ -1395,6 +1395,19 @@
 
   function boot() {
     bindFullscreen();
+    /* v623【滚动守护】本页是 height:100% 全屏布局，本身不需要页面滚动；
+     * 图表缩放是 canvas 内部逻辑，不依赖 scrollTop。但停留期间因全屏退出、
+     * 系统键盘、后台重绘等触发 iframe scrollTop>0 时，顶部「对比模式/全屏」
+     * 两个按钮会被宿主横栏遮住，且不会自愈（v585 只在切 tab 时复位一次）。
+     * 这里监听 scroll，非全屏状态下一律强制归零，覆盖所有触发源，
+     * 不再依赖宿主发 mm_effect_show。 */
+    window.addEventListener('scroll', function () {
+      try {
+        if (document.fullscreenElement || document.webkitFullscreenElement) return;
+        var sy = window.scrollY || window.pageYOffset || 0;
+        if (sy > 0) window.scrollTo(0, 0);
+      } catch (eScroll) {}
+    }, { passive: true });
     if (/embed=1/.test(location.search)) document.body.classList.add('embed');
     applyTheme(readTheme());
     window.addEventListener('message', function (e) {
