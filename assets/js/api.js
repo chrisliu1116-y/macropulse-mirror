@@ -5101,6 +5101,13 @@
        * （用户实测 KOSPI 卡片 12:2x 报价 vs 图例 12:08 旧尾点）。2% 偏差校验保留。 */
       const _apacIdx = !!(_ka && _ka.grp === 'apac' && _ka.kind === 'index');
       if (last.seg && last.seg !== 'reg' && !_kr) return res;
+      /* v616：按数据本场已结束（提前收盘）→ 首屏也不补实时点 */
+      try {
+        if (w.Session && w.Session.overByData) {
+          const _ph0 = ((w.Session.state(key) || {}).phase) || '';
+          if (w.Session.overByData(key, last.time, _ph0)) return res;
+        }
+      } catch (eOd) { /* 失败按原逻辑 */ }
 
       /* 【先把时间轴对齐】各家源对「分钟」的打标签方式不一样：
        *   · 美股（Nasdaq/东财个股）按**起始**打标，最后一根 ≤ 当前分钟；
