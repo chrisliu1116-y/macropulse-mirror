@@ -5914,7 +5914,17 @@
           syncMinBar();
           if (S.sheetKey && chart && S.sheetMode === 'min') {
             chart.showExt = on;
-            chart.render(S.sheetKey, 'min');
+            /* v620【切段后轴重铺】常规↔盘后切换后，render 内 _expandPanes 的
+             * _refitMin 用的是旧 _pinTo / phase 判定，某些时段（如韩股盘后 post
+             * 切回常规）covered 判不到，轴仍停在上一段的 16:00–18:00，常规线挤在左侧。
+             * 这里在 render 完成后强制重铺一次轴（fitContent），对全部品种通用。 */
+            try {
+              const _r = chart.render(S.sheetKey, 'min');
+              if (_r && typeof _r.then === 'function') {
+                _r.then(() => { setTimeout(() => { try { if (chart._refitMin) chart._refitMin(true); } catch (e) {} }, 220); })
+                  .catch(() => {});
+              }
+            } catch (e) {}
           }
         };
       });
