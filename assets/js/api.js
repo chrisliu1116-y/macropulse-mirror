@@ -2613,7 +2613,7 @@
     if (nqKeys.length) {
       const got = await Promise.all(nqKeys.map(async k => {
         const st = w.Session.state(k);
-        return [k, await nasdaqExtOf(U.get(k).extSym, st.phase)];
+        return [k, await nasdaqExtOf(U.get(k).extSym, st.phase, k)];
       }));
       let okN = 0;
       got.forEach(([k, rec]) => {
@@ -2706,7 +2706,7 @@
       return !!(a && a.grp === 'usstock' && (a.kind === 'stock' || a.kind === 'etf') && a.extSym);
     }).slice(0, 8);
     if (miss.length) {
-      const got = await Promise.all(miss.map(async k => [k, await nasdaqExtOf(U.get(k).extSym)]));
+      const got = await Promise.all(miss.map(async k => [k, await nasdaqExtOf(U.get(k).extSym, null, k)]));
       got.forEach(([k, rec]) => {
         if (!rec) return;
         extCache.set(k, { at: now, d: rec });
@@ -2720,9 +2720,9 @@
    *  expectSeg：当前时段（pre/post）。 Nasdaq 的 chart 有时还是「上一交易日」的
    *  序列（今天盘前尚无成交时），末点 seg 是昨天 reg/post——不按本场时段过滤的话，
    *  昨晚盘后价会被当成今天的盘前价透出（与 tvExtFetch 的 v200 残留防御同款）。 */
-  async function nasdaqExtOf(sym, expectSeg) {
+  async function nasdaqExtOf(sym, expectSeg, key) {
     try {
-      const n = await nasdaqMinutes(sym);
+      const n = await nasdaqMinutes(sym, key);
       const pts = (n && n.points) || [];
       if (!pts.length) return null;
       const last = pts[pts.length - 1];
@@ -2733,6 +2733,8 @@
       const price = last.close;
       return {
         phase: last.seg,
+        /* v616：夜盘点归入次日盘前，但对外标 night 供文案写「夜盘」 */
+        night: !!(last.etMin >= 1260 || last.etMin < 240),
         price: price,
         pct: (price - base) / base * 100,
         chg: price - base,
@@ -4394,7 +4396,13 @@
 
   /** 盘前 + 常规 + 盘后 的完整分钟序列（美股正股 / ETF）。
    *  返回 ext:true 表示「这条曲线是含延展时段的」，图表会标注出来。 */
-  async function nasdaqMinutes(sym) {
+  /* v616【夜盘分段纯函数】可单测；无解锁品种时逐字节等于原规则。 */
+  function usSegOf(etMin, cap) {
+    if (cap && (etMin >= 1260 || etMin < 240)) return 'pre';
+    return etMin < 570 ? 'pre' : etMin < 960 ? 'reg' : 'post';
+  }
+
+  async function nasdaqMinutes(sym, key) {
     const hit = nasdaqCache.get(sym);
     if (hit && Date.now() - hit.t < 60000) return hit.d;
     const d = await nasdaqChart(sym);
@@ -4428,16 +4436,39 @@
      * 而不是事后拿北京时间去反推（夏令时切换会差一小时）。
      * p.x 的 UTC 分量装的正是美东墙上时间，取模 1440 直接得到当天第几分钟：
      *   04:00–09:30 ET → pre，09:30–16:00 → reg，16:00–20:00 → post。 */
+    /* v616【23/5 夜盘检测】Nasdaq chart 若含 5 个以上 21:30 ET 之后的点，
+     * 说明该品种确有夜盘成交 → 给它打标记。没有标记的品种后续分段规则逐字节不变。 */
+    let _nightHits = 0;
+    for (const p of rows) {
+      const v = Number(p.y);
+      if (!isFinite(v) || v <= 0) continue;
+      if (Math.floor((p.x / 60000) % 1440) >= 1290) _nightHits++;
+    }
+    if (key && _nightHits >= 5 && w.Session && w.Session.markUsNightCap) {
+      w.Session.markUsNightCap(key);
+    }
+    const _cap = !!(key && w.Session && w.Session.isUsNightCap && w.Session.isUsNightCap(key));
+    let _lastEt = null;
     for (const p of rows) {
       const v = Number(p.y);
       if (!isFinite(v) || v <= 0) continue;
       const t = Math.floor((p.x / 1000 + shiftMin * 60) / 60) * 60;
       const etMin = Math.floor((p.x / 60000) % 1440);
-      const seg = etMin < 570 ? 'pre' : etMin < 960 ? 'reg' : 'post';
-      byT.set(t, { v: v, seg: seg });
+      /* 夜盘点归入次日盘前，未解锁品种保持原规则 */
+      const seg = usSegOf(etMin, _cap);
+      byT.set(t, { v: v, seg: seg, etMin: etMin });
+      _lastEt = p.x;
     }
     let pts = Array.from(byT.entries()).sort((a, b) => a[0] - b[0])
-      .map(([t, o]) => ({ time: t, open: o.v, high: o.v, low: o.v, close: o.v, volume: 0, seg: o.seg }));
+      .map(([t, o]) => ({ time: t, open: o.v, high: o.v, low: o.v, close: o.v, volume: 0, seg: o.seg, etMin: o.etMin }));
+    /* v616：记录末点的美东墙上日期/分钟（p.x 的 UTC 分量就是 ET 墙上时间），
+     * 供 session.js 的夜盘第三层「数据确认」判断。只在成功取到点时记。 */
+    if (key && _lastEt != null && w.Session && w.Session.noteUsNightData) {
+      const _ld = new Date(_lastEt);
+      w.Session.noteUsNightData(key,
+        _ld.getUTCFullYear() + '-' + String(_ld.getUTCMonth() + 1).padStart(2, '0') + '-' + String(_ld.getUTCDate()).padStart(2, '0'),
+        _ld.getUTCHours() * 60 + _ld.getUTCMinutes());
+    }
     /* v609【休市日剔除昨天的盘前段】休市日 Nasdaq 返回的是上一交易日完整
      * pre/reg/post（实测 SKHY 11-25：pre 17:00-22:29 / reg 22:30-04:59 /
      * post 05:00-08:59 北京）。用户口径：休市日"盘后分时"= 蓝色正常(reg) +
@@ -4814,7 +4845,7 @@
         const nsym = a.extSym || (a.tv ? a.tv.split(':')[1] : null);
         if (nsym) {
           try {
-            const n = await nasdaqMinutes(nsym);
+            const n = await nasdaqMinutes(nsym, key);
             if (n.points.length) {
               /* v215【盘前分时形同虚设的真因】盘前时段 Nasdaq 的 chart 接口只返回
                * **今天**的点（04:00 ET → 现在），里面清一色 seg='pre'、一根 reg 都没有。
