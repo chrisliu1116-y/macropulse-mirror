@@ -241,8 +241,88 @@
     return { open: false, phase: 'closed', label: '休市', hint: '' };
   }
 
+  /* v616【纳斯达克 23/5 夜盘 · 按品种解锁】
+   * 只有 Nasdaq 官方分时里真实出现过夜盘成交点的品种才进入夜盘判定；
+   * 其它品种（含指数、VIX、期权、海外期指、纽交所挂牌股）继续走原逻辑，
+   * 保证 12-06 之前与不受新制度影响的品种逐字节不变。
+   * 三层：候选时段表 → 全天空休市表 → 数据确认（20 分钟无成交 → 无成交）。
+   * 对外 phase 仍是 'pre'（不新增第 5 个 phase），另带 night:true + label:'夜盘'。 */
+  const US235_CAP_KEY = 'mm_us235_caps';
+  const US235_OFF_KEY = 'mm_us235_off';
+  let _us235Caps = new Set();
+  const _us235Data = new Map();
+  try {
+    const _raw = localStorage.getItem(US235_CAP_KEY);
+    if (_raw) {
+      const _arr = JSON.parse(_raw);
+      if (Array.isArray(_arr)) _us235Caps = new Set(_arr.filter(x => typeof x === 'string'));
+    }
+  } catch (e) { _us235Caps = new Set(); }
+  function _us235Save() {
+    try { localStorage.setItem(US235_CAP_KEY, JSON.stringify(Array.from(_us235Caps))); } catch (e) {}
+  }
+  function isUsNightCap(key) { return !!key && _us235Caps.has(key); }
+  function markUsNightCap(key) {
+    if (!key || _us235Caps.has(key)) return false;
+    _us235Caps.add(key); _us235Save(); return true;
+  }
+  function noteUsNightData(key, etDate, etMins) {
+    if (!key || !etDate) return;
+    _us235Data.set(key, { day: String(etDate), mins: +etMins || 0, at: Date.now() });
+  }
+  function usNightCaps() { return Array.from(_us235Caps); }
+  function usNightReset() {
+    _us235Caps = new Set(); _us235Data.clear();
+    try { localStorage.removeItem(US235_CAP_KEY); } catch (e) {}
+  }
+  function _us235Off() {
+    try {
+      const v = localStorage.getItem(US235_OFF_KEY);
+      return v === 'true' || v === '1';
+    } catch (e) { return false; }
+  }
+  /* 候选夜盘时段（美东分钟）：
+   * 周日 21:00 起；周一至周四 21:00 起或次日 00:00–04:00；周五仅凌晨 00:00–04:00。
+   * 周五 21:00 以后没有夜盘（交易周周五 20:00 结束），20:00–21:00 清算窗口也不在候选内。 */
+  function _usNightCandidate(z) {
+    const m = z.mins, wd = z.wd;
+    if (wd === 0) return m >= 1260;
+    if (wd >= 1 && wd <= 4) return m >= 1260 || m < 240;
+    if (wd === 5) return m < 240;
+    return false;
+  }
+  /* 末点距现在的分钟数；只认「今天」或「昨天且末点时刻大于当前时刻（跨午夜）」，
+   * 其余（更早的日期）视为极旧，避免拿隔夜快照冒充夜盘。 */
+  function _us235Age(z, d) {
+    if (!d || !d.day) return 1e9;
+    const today = z.y + '-' + String(z.m).padStart(2, '0') + '-' + String(z.d).padStart(2, '0');
+    const yd = new Date(Date.UTC(z.y, z.m - 1, z.d) - 86400000);
+    const yest = yd.getUTCFullYear() + '-' + String(yd.getUTCMonth() + 1).padStart(2, '0') + '-' + String(yd.getUTCDate()).padStart(2, '0');
+    if (d.day === today) return z.mins - d.mins;
+    if (d.day === yest && d.mins > z.mins) return z.mins + 1440 - d.mins;
+    return 1e9;
+  }
+  function judgeUsNight(key, now) {
+    if (_us235Off()) return judge('us', now);
+    const z = zoned(TZ.us, now);
+    if (!_usNightCandidate(z)) return judge('us', now);   // 非夜间：日间完全回到原逻辑
+    if (z.mins < 240 && _usHoliday(z)) {
+      return { open: false, phase: 'closed', label: '休市', hint: '美股节假日休市' };
+    }
+    const d = _us235Data.get(key);
+    /* 只有最近 5 分钟成功取到过数据才下「无成交」结论；取不到数据时不下结论，
+     * 仍按候选夜盘显示——避免把网络故障误判成休市。 */
+    if (d && (Date.now() - d.at) <= 5 * 60000 && _us235Age(z, d) > 20) {
+      return { open: false, phase: 'closed', label: '无成交', hint: '夜盘近 20 分钟无新成交' };
+    }
+    return { open: false, phase: 'pre', night: true, label: '夜盘', hint: '纳斯达克 23/5 夜间时段 21:00–次日 04:00 ET' };
+  }
+
   // 给某个资产 key 判定
-  function state(key) {
+  function state(key) { return stateWith(key, new Date()); }
+  /* 测试入口：用指定时间判定（生产路径不用），便于 16 个时段用例 deterministic 验证。 */
+  function stateAt(key, date) { return stateWith(key, date); }
+  function stateWith(key, now) {
     const U = w.UNIVERSE;
     const a = U.get(key);
     if (!a) return { open: false, phase: 'closed', label: '--', hint: '' };
@@ -253,7 +333,9 @@
      * 行情列表的 sessionOf() 早就优先 a.sess，只有直接调 state() 的
      * 详情页 / 选股表 / 异动雷达漏了 —— 在这里统一修，所有入口一起好。 */
     const type = a.sess || (U.GROUPS[a.grp] && U.GROUPS[a.grp].session) || 'cn';
-    return judge(type, new Date());
+    /* v616：只有「美股个股/ETF + 已确认有夜盘」的品种走夜盘判定，其余完全不变 */
+    if (type === 'us' && a.grp === 'usstock' && isUsNightCap(key)) return judgeUsNight(key, now);
+    return judge(type, now);
   }
 
   /* v237【全品种修复·第二层】时段表的「并集」不能代表组内每个品种。
@@ -276,6 +358,23 @@
       if (!a || grps.indexOf(a.grp) < 0) return;
       const s = state(k);
       if (s.open || s.phase === 'pre' || s.phase === 'post') hit = true;
+    });
+    return hit;
+  }
+
+  /* v616：该时段当前是否有任一已解锁品种处于夜盘（供排序提示用） */
+  function sessionNight(type) {
+    if (!type) return false;
+    const now = new Date();
+    let hit = false;
+    _us235Caps.forEach(k => {
+      if (hit) return;
+      const a = w.UNIVERSE && w.UNIVERSE.get ? w.UNIVERSE.get(k) : null;
+      if (!a) return;
+      const sk = a.sess || (w.UNIVERSE.GROUPS[a.grp] && w.UNIVERSE.GROUPS[a.grp].session) || 'cn';
+      if (sk !== type) return;
+      const st = stateWith(k, now);
+      if (st && st.night) hit = true;
     });
     return hit;
   }
@@ -322,5 +421,5 @@
     return (_usLive.day === key) ? _usLive : null;
   }
 
-  w.Session = { state: state, judge: judge, sessionLive: sessionLive, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes, setUsTradingDay: setUsTradingDay };
+  w.Session = { state: state, stateAt: stateAt, judge: judge, sessionLive: sessionLive, sessionNight: sessionNight, localTime: localTime, SESSIONS: SESSIONS, fullMinutes: fullMinutes, setUsTradingDay: setUsTradingDay, isUsNightCap: isUsNightCap, markUsNightCap: markUsNightCap, noteUsNightData: noteUsNightData, usNightCaps: usNightCaps, usNightReset: usNightReset };
 })(window);
