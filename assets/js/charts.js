@@ -496,9 +496,19 @@
        *   · 盘前/盘后且在**看延展段**（showExt，该段还在进行）→ 不铺满，保留进度留白；
        *   · 盘中(regular) → 永不 covered（v383 口径不变）。 */
       const _extView = !!this.showExt;
-      const covered = total > 0 && spanMin >= total * 0.6 &&
+      /* v616【提前收盘自适应·按数据】末点比时段表收盘早 30 分钟以上（美股 13:00
+       * 提前收盘、港股台风等），或盘中数据已停 35 分钟 → 这一场已走完 → 铺满。
+       * 轴 = 首点到末点（真实开盘→真实收盘），时间标签是真实时刻，不再是固定收盘位。
+       * 适用所有有固定场次的品种；24 小时类恒 false。 */
+      let _over = false;
+      try {
+        if (w.Session && w.Session.overByData) {
+          _over = w.Session.overByData(key, pts[pts.length - 1].time, _phase || '');
+        }
+      } catch (e) { _over = false; }
+      const covered = _over || (total > 0 && spanMin >= total * 0.6 &&
         (!_phase || _phase === 'closed' ||
-         ((_phase === 'post' || _phase === 'pre') && !_extView));
+         ((_phase === 'post' || _phase === 'pre') && !_extView)));
       /* v386【用户口径：轴恒定「开盘→收盘」，不随轮次/进度漂移】v383 后盘中走
        * to=min(want, 2.2n)——2.2n < want 时轴右边界随时间**移动**（曲线相对轴
        * 位置恒定 45%），换一个交易日/轮次观感又变成「跑向最右」。现在所有有
@@ -581,7 +591,8 @@
 
     _liveSetup(key, o) {
       this._stopLive();
-      this._live = { key: key, arr: o.arr, series: o.series, paint: o.paint, hasPad: !!o.hasPad, seg: o.seg || null };
+      this._live = { key: key, arr: o.arr, series: o.series, paint: o.paint, hasPad: !!o.hasPad, seg: o.seg || null,
+        realLast: (o.arr && o.arr.length) ? o.arr[o.arr.length - 1].time : 0 };   // v616：首帧末点，供提前收盘判断
       this._liveTimer = setInterval(() => this._liveTick(), 8000);
     }
 
@@ -602,6 +613,14 @@
         if (this._live !== L) return;          // 期间切了品种 / 周期
       }
       if (!q || !(q.price > 0)) return;
+      /* v616：按数据判断本场已结束（提前收盘）→ 不再拿收盘价往右续平线。
+       * 以首帧末点为准：续尾补出来的点不算「新成交」。 */
+      try {
+        if (L.realLast > 0 && (!L.seg || L.seg === 'reg') && w.Session && w.Session.overByData) {
+          const _ph = ((w.Session.state(L.key) || {}).phase) || '';
+          if (w.Session.overByData(L.key, L.realLast, _ph)) return;
+        }
+      } catch (eOver) { /* 判断失败按原逻辑续尾 */ }
       /* v399【延时源禁止续实时线】与 api.js withLiveTip 同口径：TV 等官方延时源
        * （delayed>0，商品实测 600 秒）价格落后于实时分时线，续尾会拉出竖线。
        * 延时报价只对顶部展示有效，绝不写进实时分时数组。 */
