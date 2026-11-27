@@ -324,23 +324,65 @@
   }
   function startRemoteRefresh() {
     if (typeof fetch !== 'function') return;   /* jsdom/offline 静默跳过 */
+    var _pollTimer = null;
+
+    /* 数据是否已到「今天」。法定节假日无当天数据，由 shouldPoll 的 16:30 兜底停收尾。 */
+    function hasToday() {
+      var b = S.B;
+      if (!b || !b.dates || !b.dates.length) return false;
+      var bj = new Date(Date.now() + 8 * 3600 * 1000);
+      var today = bj.toISOString().slice(0, 10);
+      return b.dates[b.dates.length - 1] >= today;
+    }
+
+    /* v619【目标驱动轮询】用户口径：交易日 15:00 起轮询，有数据就停，别后台常驻。
+     * 轮询条件 = 页面可见 + 工作日 + 15:00~16:30 + 还没拿到今天数据。
+     * 页面隐藏（切走/锁屏/APP后台）立即停；拿到今天数据立即停；16:30 后停（法定节假日兜底）。 */
+    function shouldPoll() {
+      try { if (document.visibilityState === 'hidden') return false; } catch (e) {}
+      var bj = new Date(Date.now() + 8 * 3600 * 1000);
+      var wd = bj.getUTCDay();
+      var hhmm = bj.getUTCHours() * 100 + bj.getUTCMinutes();
+      if (wd === 0 || wd === 6) return false;      // 周末不轮询
+      if (hhmm < 1500) return false;               // 15:00 前不轮询
+      if (hhmm > 1630) return false;               // 16:30 后停（法定节假日/补跑兜底）
+      return !hasToday();                          // 已到今天的就不再轮询
+    }
+
     function tick() {
-      remoteBreadth().then(function (b) { if (b) applyNewBreadth(b); }).catch(function () {});
+      remoteBreadth().then(function (b) {
+        if (b) {
+          applyNewBreadth(b);
+          if (hasToday()) stopPoll();              // 拿到今天数据 → 停
+        }
+      }).catch(function () {});
       loadRemoteS().then(function (k) { applyNewSse(k); }).catch(function () {});
     }
+
+    function startPoll() {
+      if (_pollTimer) return;
+      _pollTimer = setInterval(function () {
+        if (!shouldPoll()) { stopPoll(); return; }
+        tick();
+      }, 10 * 1000);
+      try { if (_pollTimer.unref) _pollTimer.unref(); } catch (e) {}
+    }
+
+    function stopPoll() {
+      if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+    }
+
+    /* 首屏立即 tick 一次（保持 v563 首屏直落最新）；随后按需轮询 */
     tick();
-    var _tickN = 0;
-    var timer = setInterval(function () {
-      var bj = new Date(Date.now() + 8 * 3600 * 1000);
-      var wd = bj.getUTCDay(), hh = bj.getUTCHours();
-      /* v617：原逻辑只在 工作日15-18点 追新，但收盘后补跑/周末补数据也会落库，
-       * 停在页面的用户永远等不到刷新。改为：交易窗口(工作日15-18点)3分钟一轮，
-       * 其余时间10分钟一轮（低频省流量，但保证补数据能自动刷新）。 */
-      var inWindow = (wd >= 1 && wd <= 5 && hh >= 15 && hh < 18);
-      if (!inWindow && _tickN++ % 3 !== 0) return;
-      tick();
-    }, 3 * 60 * 1000);
-    try { if (timer && timer.unref) timer.unref(); } catch (e) {}
+    if (shouldPoll()) startPoll();
+
+    /* 页面可见性：可见且该轮询 → 启动；隐藏 → 停 */
+    try {
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible' && shouldPoll()) startPoll();
+        else stopPoll();
+      });
+    } catch (e) {}
   }
 
   /* v265：数据陈旧不再假装实时。交易日 15:00 后若仍停在旧交易日，标「待更新」。
