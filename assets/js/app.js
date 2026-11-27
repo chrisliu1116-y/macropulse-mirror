@@ -7383,7 +7383,23 @@
          * 但它是拿池子里的精简字段算的，判不准时会返回 null。
          * 直接丢掉的后果就是用户看到的「刷新一下 72 条变 11 条」。
          * 标红条目（平台已判为重要）宁可保留原级别，也不让它在首屏消失。 */
-        if (fresh) src = fresh;
+        if (fresh) {
+          src = fresh;
+        } else {
+          /* v626【存量假S残留】规则把某条从 S 纠到 C 后，_enrich 的 C 入池闸
+           * 返回 null → 上面的保护让它保留原 S 级 → 用户截图「这条怎么又进S」。
+           * 只对「原级 S + 当前规则明确判 C」这一种情况降级出清：
+           *   S 是最严重档，留着假 S 比少一条危害大；其它级别仍保留原级不丢条，
+           *   不破坏「72 条不缩水」保护。用已暴露的 _grade 判级，不引入新依赖。 */
+          try {
+            const _regrade = w.LiveNews._grade
+              ? w.LiveNews._grade(it.title, it.brief, it.important, it.stocks, it.src) : null;
+            if (String(it.level || '').toUpperCase() === 'S'
+              && _regrade && _regrade[0] !== 'S') {
+              return;   // 当前口径已推翻 S（判 A/B/C）→ 这条假 S 不入流
+            }
+          } catch (eGrade) {}
+        }
         /* v119：重算失败的非标红条目保留原级别，不再丢弃（回退「什么都抓」）。
          * 原 C 级已在上方被 C 跳过挡住，不会漏进流。 */
         /* 标红 → 保留原级，条数不缩。
