@@ -3661,6 +3661,15 @@
     try { snap = store.get(SPARK_SNAP_KEY, null); } catch (e) {}
     if (!snap || !snap.data) return false;
     if (Date.now() - (snap.at || 0) > 12 * 3600 * 1000) return false;
+    /* v625【铠侠ADR缩略图是昨天的怪线】缩略图首屏快照跨交易日仍被画出来：
+     * 昨晚存的旧曲线（如 KXIAY 那一大段横盘波形）在今早/开盘后被当成今天
+     * 的缩略图显示，而详情分时走 API.intraday 正常。修：快照必须是「今天
+     * 北京时间」存的才用，跨日一律丢弃，等 loadMkSpark 拉今日真实数据。 */
+    try {
+      const bjToday = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const snapDay = new Date((snap.at || 0) + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      if (snapDay !== bjToday) return false;
+    } catch (eDay) {}
     let n = 0;
     const ns = snap.n || {};
     Object.keys(snap.data).forEach(k => {
