@@ -2842,12 +2842,14 @@
      * 超时/未命中按本地alarmWords(r)弹。避免"先弹本地、AI后来又补一条"的双通知。 */
     if (aiPromise && typeof aiPromise.then === 'function') {
       var fired = false;
-      var fire = (d) => {
+      var fire = (d, png) => {
         if (fired) return; fired = true;
         var body = alarmWords(r) + ' ' + alarmTail(r);
         if (d && d.matched && d.summary) body = 'AI归因：' + d.summary + ' · ' + alarmWords(r);
-        sysNotify('异动提醒 · ' + r.name, body, 'mm-anom-' + r.key, 'anom');
+        sysNotify('异动提醒 · ' + r.name, body, 'mm-anom-' + r.key, 'anom', png);
       };
+      /* v615：缩略图与 AI 归因并行取，不额外增加等待 */
+      notifChartPng(r.key).then(png => fire(null, png)).catch(() => fire(null));
       try {
         Promise.race([
           aiPromise.then(d => fire(d)).catch(() => fire(null)),
@@ -2855,7 +2857,9 @@
         ]);
       } catch (e) { fire(null); }
     } else {
-      sysNotify('异动提醒 · ' + r.name, alarmWords(r) + ' ' + alarmTail(r), 'mm-anom-' + r.key, 'anom');
+      notifChartPng(r.key).then(png =>
+        sysNotify('异动提醒 · ' + r.name, alarmWords(r) + ' ' + alarmTail(r), 'mm-anom-' + r.key, 'anom', png)
+      ).catch(() => sysNotify('异动提醒 · ' + r.name, alarmWords(r) + ' ' + alarmTail(r), 'mm-anom-' + r.key, 'anom'));
     }
   }
 
@@ -2900,8 +2904,20 @@
   /* v197：真实提醒都要进系统通知栏（用户口径：通知栏必须保留）。
    * 网页内每种提醒只留一个弹窗：异动=粉色 alarm 横幅、S级=全屏、股价=toast。
    * 声音与震动由 beep() 走原生 USAGE_NOTIFICATION。 */
-  function sysNotify(title, body, tag, type) {
+  function sysNotify(title, body, tag, type, png) {
     if (!S.notify) return;
+    /* v615：通知内嵌分时图——只在有 PNG、开关开、原生支持、且是 anom/price 时走新桥 */
+    try {
+      const on = store.get('mm_notif_chart', true);
+      const np0 = w.NativePulse;
+      if (png && on && np0 && typeof np0.notifyChart === 'function'
+          && (type === 'anom' || type === 'price')) {
+        const pf0 = alertPrefs(type);
+        const rkey0 = String(tag || '').replace(/^mm-(anom|alert)-/, '');
+        np0.notifyChart(pf0.sound, pf0.vib, title || '', body || '', type || '', rkey0, png);
+        return;
+      }
+    } catch (e) { /* 落到下面的原路径 */ }
     const pf = alertPrefs(type);
     const np = w.NativePulse;
     if (np && typeof np.notifyRoute === 'function') {
@@ -3151,6 +3167,9 @@
     } catch (e) {}
     if (p === 'pre') return 1;
     if (p === 'post') return 2;
+    /* v616：夜盘期间 judge('us') 不带 key 会返回 closed，
+     * 靠 sessionNight 把有夜盘品种的组摆到「盘前」层 */
+    if (w.Session.sessionNight && w.Session.sessionNight(sk)) return 1;
     return 0;   // 股票类盘中
   }
   function sessPri(sk) { const i = SESS_PRIORITY.indexOf(sk); return i < 0 ? 90 : i; }
@@ -3202,6 +3221,8 @@
     const live = ['cn', 'hk', 'kr', 'jp', 'tw', 'apac', 'us'].filter(sessLive).map(sk => {
       const j = w.Session.judge(sk, now);
       const name = (w.Session.SESSIONS && w.Session.SESSIONS[sk] && w.Session.SESSIONS[sk].name) || sk;
+      /* v616：夜盘期间美股组显示「夜盘」，不是「盘中」或「盘前」 */
+      if (w.Session.sessionNight && w.Session.sessionNight(sk)) return name + '夜盘';
       if (j.phase === 'pre') return name + '盘前';
       if (j.phase === 'post') return name + '盘后';
       return name + '盘中';
@@ -3297,7 +3318,7 @@
             ? 'Hyperliquid RWA 永续（7×24）：24h涨跌=相对该合约自身24h前'
             : alt.kind === 'dex' ? 'DEX 池子（7×24）：24h涨跌=相对该池自身24h前' : '延展时段报价')
             + (alt.spread != null ? '；另：基差（相对主报价）' + (alt.spread >= 0 ? '+' : '') + alt.spread.toFixed(2) + '%' : '')}">${altTxt}</span>` : ''}
-          ${extTxt ? `<span class="mk-alt mk-ext" title="美股盘前 04:00–09:30 ET / 盘后 16:00–20:00 ET 的成交价与相对昨收的涨跌幅（CNBC 延展时段报价）。上面那个大数字仍是最近一次常规收盘价。">${extTxt}</span>` : ''}
+          ${extTxt ? `<span class="mk-alt mk-ext" title="美股延展时段（盘前 04:00–09:30 ET / 盘后 16:00–20:00 ET；23/5 夜盘 21:00–次日 04:00 ET）的成交价与相对昨收的涨跌幅。上面那个大数字仍是最近一次常规收盘价。">${extTxt}</span>` : ''}
           ${ptsTxt ? `<span class="mk-alt mk-pts" title="Japannext J-Market 夜间 PTS 成交（17:00–次日 06:00 JST），涨跌幅相对东证收盘。东证主板本身没有美股式盘前盘后。">${ptsTxt}</span>` : ''}
         </div>
         <span class="mk-sp-ph" data-mksp="${esc(k)}"></span>
@@ -3513,6 +3534,93 @@
       + `<path d="${area}" fill="url(#${gid})" stroke="none"/>`
       + `<path d="${dd}" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
   }
+
+  /* v615【通知内嵌分时缩略图】把某品种的分时画成 PNG dataURL。
+   * 只在发通知时调用（低频）；任何异常都返回 null，绝不阻断通知本身。 */
+  async function notifChartPng(key) {
+    try {
+      if (!key) return null;
+      let vals = _mkSpark.get(key);
+      let fullN = _mkSparkN.get(key);
+      const need = !vals || vals.length < 4 || _mkSparkStale.has(key);
+      if (need) {
+        if (w.API && w.API.bgBegin) w.API.bgBegin();
+        try {
+          const r = await Promise.race([
+            w.API.intraday(key),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('notif chart timeout')), 2000))
+          ]);
+          const trustOk = (w.API && w.API.trusted) ? !!w.API.trusted(r) : !(r && (r.failed || r.synthetic));
+          if (trustOk && r && r.points && r.points.length) {
+            const allPts = r.points;
+            const hasSeg = allPts.some(p => p.seg);
+            const regPts = hasSeg ? allPts.filter(p => p.seg === 'reg') : allPts;
+            const pts = (regPts.length > 3 ? regPts : allPts);
+            const nv = pts.map(p => p.close != null ? p.close : p.v).filter(v => isFinite(v));
+            if (nv.length >= 4) { vals = nv; fullN = sparkFullN(key, pts); }
+          }
+        } catch (e) { /* 超时/失败都用已有 vals 或 null */ }
+        finally { if (w.API && w.API.bgEnd) w.API.bgEnd(); }
+      }
+      if (!vals || vals.length < 4) return null;
+      const cv = d.createElement('canvas');
+      cv.width = 720; cv.height = 360;
+      const cx = cv.getContext('2d');
+      const P = 16, W = cv.width - P * 2, H = cv.height - P * 2 - 46;
+      const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      const rg = (hi - lo) || 1;
+      const N = Math.max(vals.length, fullN || vals.length);
+      const X = i => P + i / (N - 1) * W;
+      const Y = v => P + H - (v - lo) / rg * H;
+      const q = QuoteHub.get(key);
+      let up;
+      if (q && q.pct != null) {
+        const pct = +q.pct;
+        up = Math.abs(pct) < 0.005 ? 'flat' : (pct > 0);
+      } else up = vals[vals.length - 1] >= vals[0];
+      const color = up === 'flat' ? '#8a8f98' : (up ? '#e5484d' : '#2fb374');
+      /* 面积填充 */
+      cx.beginPath();
+      cx.moveTo(X(0), P + H);
+      for (let i = 0; i < vals.length; i++) cx.lineTo(X(i), Y(vals[i]));
+      cx.lineTo(X(vals.length - 1), P + H);
+      cx.closePath();
+      cx.fillStyle = color; cx.globalAlpha = 0.18; cx.fill(); cx.globalAlpha = 1;
+      /* 折线 */
+      cx.beginPath();
+      for (let i = 0; i < vals.length; i++) {
+        if (i) cx.lineTo(X(i), Y(vals[i])); else cx.moveTo(X(i), Y(vals[i]));
+      }
+      cx.strokeStyle = color; cx.lineWidth = 3; cx.lineJoin = 'round'; cx.lineCap = 'round'; cx.stroke();
+      /* 文字：左上名称+代码，右侧现价与涨跌幅 */
+      const a = U.get(key);
+      const nm = a ? (a.short || a.name) : key;
+      const code = dispCode(key, a);
+      cx.fillStyle = 'rgba(235,238,244,0.92)';
+      cx.font = '500 30px system-ui, sans-serif';
+      cx.textAlign = 'left';
+      cx.fillText(nm + '  ' + code, P, cv.height - 44);
+      if (q && q.price != null) {
+        cx.textAlign = 'right';
+        cx.font = '500 34px system-ui, sans-serif';
+        cx.fillStyle = color;
+        cx.fillText(U.fmt(key, q.price), P + W, cv.height - 44);
+        if (q.pct != null) {
+          cx.font = '400 26px system-ui, sans-serif';
+          cx.fillText(((q.pct >= 0 ? '+' : '') + q.pct.toFixed(2) + '%'), P + W, cv.height - 14);
+        }
+      }
+      return cv.toDataURL('image/png');
+    } catch (e) { return null; }
+  }
+  /* 调试入口：控制台 __testNotifChart('NVDA') 直接看效果 */
+  w.__testNotifChart = function (key) {
+    return notifChartPng(key).then(png => {
+      if (!png) { toast('没有可用的分时缩略图数据'); return false; }
+      sysNotify('🔔 缩略图测试', '通知展开后应看到分时图', 'mm-test-chart', 'price', png);
+      return true;
+    });
+  };
 
   /* 视口懒加载：滚动到哪行才取哪行的分时，避免一屏发几十个请求；
    * 有缓存直接复用，失败保留灰占位。 */
@@ -3948,7 +4056,8 @@
    */
   function extLabel(ext, k) {
     if (!ext || !ext.phase) return '';
-    const t = ext.phase === 'pre' ? '盘前' : '盘后';
+    /* v616：夜盘价对外 phase 仍是 pre，靠 night 标记写「夜盘」 */
+    const t = ext.night ? '夜盘' : (ext.phase === 'pre' ? '盘前' : '盘后');
     const px = ext.price != null ? ' ' + U.fmt(k, ext.price) : '';
     const pc = ext.pct != null ? ' · ' + (ext.pct >= 0 ? '+' : '') + ext.pct.toFixed(2) + '%' : '';
     return t + px + pc;
@@ -4672,6 +4781,8 @@
         <div class="set-card-h">通知与提醒</div>
         <div class="set-row"><div><b>预警通知</b><span>S 级快讯 / 异动 / 股价提醒的系统弹窗，可独立开关</span></div>
           <button class="sw ${S.notify ? 'on' : ''}" data-sw="notify"><i></i></button></div>
+        <div class="set-row"><div><b>通知内嵌分时图</b><span>异动 / 股价预警通知展开后显示分时缩略图；取不到图自动回落纯文字</span></div>
+          <button class="sw ${store.get('mm_notif_chart', true) ? 'on' : ''}" data-sw="notifchart"><i></i></button></div>
         <div class="set-row"><div><b>S 级快讯</b><span>黑天鹅警报的声音 / 震动</span></div>
           <div class="ap-pair">
             <span class="ap-it"><i>声音</i><button class="sw sm ${alertPrefs('s').sound ? 'on' : ''}" data-atype="s" data-ap="sound"><i></i></button></span>
@@ -4687,6 +4798,8 @@
             <span class="ap-it"><i>声音</i><button class="sw sm ${alertPrefs('price').sound ? 'on' : ''}" data-atype="price" data-ap="sound"><i></i></button></span>
             <span class="ap-it"><i>震动</i><button class="sw sm ${alertPrefs('price').vib ? 'on' : ''}" data-atype="price" data-ap="vib"><i></i></button></span>
           </div></div>
+        <div class="set-row"><div><b>纳斯达克 23/5 夜盘</b><span>已识别 ${(w.Session && w.Session.usNightCaps ? w.Session.usNightCaps().length : 0)} 个有夜盘成交的品种；无标记的品种仍按旧规则</span></div>
+          <button class="mini-btn" id="btnResetNight">重新检测</button></div>
         <div class="set-row"><div><b>发送测试通知</b><span>按「S 级快讯」的声音/震动开关发一条模拟通知，即时检验效果</span></div>
           <button class="mini-btn" id="btnTestNotify">测试</button></div>
         <div class="set-row"><div><b>5 秒后测试后台通知</b><span>点完立刻切到后台或锁屏。5 秒后应响铃 + 震动 + 通知栏；计时在 APP 原生层，不受网页定时器冻结影响。没响＝后台进程被系统冻结，去「后台防杀」设为无限制</span></div>
@@ -5915,7 +6028,13 @@
     }
     if (!show) return;
     /* v296：按钮只在盘前 / 盘后出现，文案与当前时段严格一致 */
-    const secLabel = (phaseNow === 'pre') ? '盘前分时' : '盘后分时';
+    /* v616：夜盘时段点开拼的是夜盘延展段，按钮写「夜盘分时」 */
+    let _isNight = false;
+    try {
+      const _st = w.Session && w.Session.state ? w.Session.state(S.sheetKey) : null;
+      _isNight = !!(_st && _st.night);
+    } catch (e) {}
+    const secLabel = _isNight ? '夜盘分时' : ((phaseNow === 'pre') ? '盘前分时' : '盘后分时');
     const secBtn = bar.querySelector('button[data-x="1"]');
     if (secBtn) secBtn.textContent = secLabel;
     const on = effMinExt();
@@ -6804,7 +6923,10 @@
     el.querySelector('.t-go').onclick = () => { clearTimeout(timer); kill(); openSheet(k); };
     while (box.children.length > 3) box.firstChild.remove();
 
-    sysNotify('🔔 ' + a.name + ' 预警触发', cond + ' · 现价 ' + nowTxt, 'mm-alert-' + item.id, 'price');
+    /* v615：通知内嵌分时图——取图失败照旧发纯文字通知 */
+    notifChartPng(k).then(png =>
+      sysNotify('🔔 ' + a.name + ' 预警触发', cond + ' · 现价 ' + nowTxt, 'mm-alert-' + item.id, 'price', png)
+    ).catch(() => sysNotify('🔔 ' + a.name + ' 预警触发', cond + ' · 现价 ' + nowTxt, 'mm-alert-' + item.id, 'price'));
   }
 
   function initAlertEngine() {
@@ -9149,6 +9271,28 @@
         } catch (er) { toast2('模拟失败：' + er); } }, 600);
         return;
       }
+      /* v616：夜盘重新检测（两段确认） */
+      if (e.target.id === 'btnResetNight') {
+        if (!confirm('重新检测纳斯达克 23/5 夜盘？\n\n将清空已识别的品种，下次拉到夜盘数据时自动重新标记。')) return;
+        try { if (w.Session && w.Session.usNightReset) w.Session.usNightReset(); } catch (er) {}
+        toast2('已清空夜盘识别记录');
+        renderSettings();
+        return;
+      }
+      /* v615：测试通知带分时缩略图（取不到图则走原 testNotify） */
+      if (e.target.id === 'btnTestNotify') {
+        if (store.get('mm_notif_chart', true)) {
+          const _mk = S.own && S.own.find(k => _mkSpark.get(k));
+          const _key = _mk || (S.own && S.own[0]) || 'NVDA';
+          notifChartPng(_key).then(png => {
+            if (!png) { /* 无图回落原路径 */ const np0 = w.NativePulse; if (np0 && np0.testNotify) { const pf0 = alertPrefs('s'); toast2(np0.testNotify(pf0.sound, pf0.vib) || '已发送测试通知'); } return; }
+            const pf0 = alertPrefs('s');
+            sysNotify('🔔 缩略图测试 · ' + _key, '通知展开后应看到分时图', 'mm-test-chart', 'price', png);
+            toast2('已发送带图测试通知');
+          }).catch(() => {});
+          return;
+        }
+      }
       if (e.target.id === 'btnTestNotify') {
         const np = w.NativePulse;
         if (np && typeof np.testNotify === 'function') {
@@ -9222,7 +9366,7 @@
         return;
       }
       if (e.target.id === 'resetAll') {
-        ['mm_sound', 'mm_modal', 'mm_toast', 'mm_vib', 'mm_thr', 'mm_watch2', 'mm_own', 'mm_msort',
+        ['mm_sound', 'mm_modal', 'mm_toast', 'mm_vib', 'mm_thr', 'mm_watch2', 'mm_own', 'mm_msort', 'mm_notif_chart',
           'mm_seenS', 'mm_grade', 'mm_sessfirst', 'mm_mxmode', 'mm_theme'].forEach(k => localStorage.removeItem(k));
         location.reload();
         return;
@@ -9243,11 +9387,11 @@
       }
       const sw = e.target.closest('.sw');
       if (!sw) return;
-      const map = { sound: 'sound', toast: 'toastOn', modal: 'modalOn', vib: 'vibrate', red: 'redOnly', notify: 'notify' };
+      const map = { sound: 'sound', toast: 'toastOn', modal: 'modalOn', vib: 'vibrate', red: 'redOnly', notify: 'notify', notifchart: 'notifChart' };
       const key = map[sw.dataset.sw];
       if (!key) return;
       S[key] = !S[key];
-      const SK = { vib: 'mm_vib', red: 'mm_redonly', notify: 'mm_notify' };
+      const SK = { vib: 'mm_vib', red: 'mm_redonly', notify: 'mm_notify', notifchart: 'mm_notif_chart' };
       store.set(SK[sw.dataset.sw] || ('mm_' + sw.dataset.sw), S[key]);
       sw.classList.toggle('on', S[key]);
       /* v194：声音/震动开关变化时同步原生（渠道/铃声/震动的即时开关） */
