@@ -10329,6 +10329,29 @@
       setTimeout(backfillZhPool, 8000);
       setInterval(backfillZhPool, 60000);
     } catch (e) {}
+    /* v627【运行时版本自检】终止「左上角 vN 是新的、app.js 还是旧缓存」的分裂状态：
+     * version.json(实时接口) 与 index.html 实际加载的 ?v= 指纹不一致 →
+     * 说明 SW/WebView/HTTP 某层给了旧代码，强制 reload 一次拉真版本。
+     * sessionStorage 防循环；主站与镜像部署同源，version.json 由 sync_mirror 生成。 */
+    try {
+      const _pageV = (function () {
+        const sc = document.querySelector('script[src*="app.js"]');
+        const m = sc && /[?&]v=(\d+)/.exec(sc.src || '');
+        return m ? m[1] : '';
+      })();
+      fetch('version.json?_t=' + Date.now(), { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null)
+        .then(j => {
+          const remoteV = j && String(j.ver || '').replace(/^v/i, '');
+          if (!remoteV || !_pageV) return;
+          if (remoteV === _pageV) return;
+          const K = 'mm_verguard';
+          if (sessionStorage.getItem(K) === remoteV) return;   // 已重载过仍不匹配 → 放行避免死循环
+          sessionStorage.setItem(K, remoteV);
+          location.reload();
+        })
+        .catch(() => {});
+    } catch (eVer) {}
     try { initAlertEngine(); } catch (e) {}
     try { loadLlmChannel(); setInterval(loadLlmChannel, 10 * 60 * 1000); } catch (e) {}
     /* 自动化/调试抓手：闭包读模块级 chart，任何时候调用都指向「当前真正在用的」图表 */
