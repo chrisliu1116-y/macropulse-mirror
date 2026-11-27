@@ -2914,7 +2914,9 @@
           && (type === 'anom' || type === 'price')) {
         const pf0 = alertPrefs(type);
         const rkey0 = String(tag || '').replace(/^mm-(anom|alert)-/, '');
-        np0.notifyChart(pf0.sound, pf0.vib, title || '', body || '', type || '', rkey0, png);
+        const full0 = (png && png.png) ? png.png : png;
+        const mini0 = (png && png.mini) ? png.mini : null;
+        np0.notifyChart(pf0.sound, pf0.vib, title || '', body || '', type || '', rkey0, full0, mini0);
         return;
       }
     } catch (e) { /* 落到下面的原路径 */ }
@@ -3482,6 +3484,13 @@
    * 不会再出现「新加的品种缩略图走满格」。 */
   function sparkFullN(k, pts) {
     const n = pts.length;
+    /* v616：按数据本场已提前结束 → 缩略图按实际点数铺满，右边不留空 */
+    try {
+      if (n > 0 && w.Session && w.Session.overByData) {
+        const _phS = (w.Session.state(k) || {}).phase || '';
+        if (w.Session.overByData(k, pts[n - 1].time, _phS)) return n;
+      }
+    } catch (e) { /* 失败按原逻辑 */ }
     try {
       const a = w.UNIVERSE && w.UNIVERSE.get ? w.UNIVERSE.get(k) : null;
       /* minSpan：品种自带的一天分钟数（VIX 的 GTH 时段 780 分钟，不是美股的 390） */
@@ -3537,7 +3546,7 @@
 
   /* v615【通知内嵌分时缩略图】把某品种的分时画成 PNG dataURL。
    * 只在发通知时调用（低频）；任何异常都返回 null，绝不阻断通知本身。 */
-  async function notifChartPng(key) {
+  async function notifChartData(key) {
     try {
       if (!key) return null;
       let vals = _mkSpark.get(key);
@@ -3563,55 +3572,71 @@
         finally { if (w.API && w.API.bgEnd) w.API.bgEnd(); }
       }
       if (!vals || vals.length < 4) return null;
-      const cv = d.createElement('canvas');
-      cv.width = 720; cv.height = 360;
-      const cx = cv.getContext('2d');
-      const P = 16, W = cv.width - P * 2, H = cv.height - P * 2 - 46;
-      const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-      const rg = (hi - lo) || 1;
-      const N = Math.max(vals.length, fullN || vals.length);
-      const X = i => P + i / (N - 1) * W;
-      const Y = v => P + H - (v - lo) / rg * H;
       const q = QuoteHub.get(key);
       let up;
       if (q && q.pct != null) {
         const pct = +q.pct;
         up = Math.abs(pct) < 0.005 ? 'flat' : (pct > 0);
       } else up = vals[vals.length - 1] >= vals[0];
-      const color = up === 'flat' ? '#8a8f98' : (up ? '#e5484d' : '#2fb374');
-      /* 面积填充 */
+      return { vals: vals, fullN: fullN, q: q, up: up, a: U.get(key) };
+    } catch (e) { return null; }
+  }
+
+  function notifDraw(cd, W, H, withText) {
+    try {
+      const vals = cd.vals;
+      const cv = d.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const cx = cv.getContext('2d');
+      const P = withText ? 16 : 6, top = withText ? 46 : 0;
+      const iw = W - P * 2, ih = H - P * 2 - top;
+      const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      const rg = (hi - lo) || 1;
+      const N = Math.max(vals.length, cd.fullN || vals.length);
+      const X = i => P + i / (N - 1) * iw;
+      const Y = v => P + ih - (v - lo) / rg * ih;
+      const color = cd.up === 'flat' ? '#8a8f98' : (cd.up ? '#e5484d' : '#2fb374');
+      cx.clearRect(0, 0, W, H);                       // 透明底：通知栏深浅色都适配
       cx.beginPath();
-      cx.moveTo(X(0), P + H);
+      cx.moveTo(X(0), P + ih);
       for (let i = 0; i < vals.length; i++) cx.lineTo(X(i), Y(vals[i]));
-      cx.lineTo(X(vals.length - 1), P + H);
+      cx.lineTo(X(vals.length - 1), P + ih);
       cx.closePath();
       cx.fillStyle = color; cx.globalAlpha = 0.18; cx.fill(); cx.globalAlpha = 1;
-      /* 折线 */
       cx.beginPath();
       for (let i = 0; i < vals.length; i++) {
         if (i) cx.lineTo(X(i), Y(vals[i])); else cx.moveTo(X(i), Y(vals[i]));
       }
-      cx.strokeStyle = color; cx.lineWidth = 3; cx.lineJoin = 'round'; cx.lineCap = 'round'; cx.stroke();
-      /* 文字：左上名称+代码，右侧现价与涨跌幅 */
-      const a = U.get(key);
-      const nm = a ? (a.short || a.name) : key;
-      const code = dispCode(key, a);
-      cx.fillStyle = 'rgba(235,238,244,0.92)';
+      cx.strokeStyle = color; cx.lineWidth = withText ? 3 : 2.5; cx.lineJoin = 'round'; cx.lineCap = 'round'; cx.stroke();
+      if (!withText) return cv.toDataURL('image/png');
+      const q = cd.q;
+      cx.fillStyle = '#c8ccd4';                      // 展开大图带文字；深浅色通知栏下都可读
       cx.font = '500 30px system-ui, sans-serif';
       cx.textAlign = 'left';
-      cx.fillText(nm + '  ' + code, P, cv.height - 44);
+      const code = cd.a ? dispCode(cd.key, cd.a) : '';
+      cx.fillText(((cd.a && (cd.a.short || cd.a.name)) || '') + '  ' + code, P, cv.height - 44);
       if (q && q.price != null) {
         cx.textAlign = 'right';
         cx.font = '500 34px system-ui, sans-serif';
         cx.fillStyle = color;
-        cx.fillText(U.fmt(key, q.price), P + W, cv.height - 44);
+        cx.fillText(U.fmt(cd.key, q.price), P + iw, cv.height - 44);
         if (q.pct != null) {
           cx.font = '400 26px system-ui, sans-serif';
-          cx.fillText(((q.pct >= 0 ? '+' : '') + q.pct.toFixed(2) + '%'), P + W, cv.height - 14);
+          cx.fillText(((q.pct >= 0 ? '+' : '') + q.pct.toFixed(2) + '%'), P + iw, cv.height - 14);
         }
       }
       return cv.toDataURL('image/png');
     } catch (e) { return null; }
+  }
+
+  /* 返回 { png: 展开后大图, mini: 收起态小图 }；取不到数据返回 null */
+  async function notifChartPng(key) {
+    const cd = await notifChartData(key);
+    if (!cd) return null;
+    cd.key = key;
+    const png = notifDraw(cd, 720, 360, true);
+    if (!png) return null;
+    return { png: png, mini: notifDraw(cd, 450, 132, false) };
   }
   /* 调试入口：控制台 __testNotifChart('NVDA') 直接看效果 */
   w.__testNotifChart = function (key) {
