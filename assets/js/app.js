@@ -1078,7 +1078,11 @@
     const okK = ks.filter(k => n.spike[k] && n.spike[k].ok === true);
     if (okK.length) {
       const v = n.spike[okK[0]];
-      const s = (v.actual > 0 ? '+' : '') + v.actual + '%';
+      /* v629：旧缓存里的 spike.actual 是未 round 的原始浮点（如
+       * 2.3058158615921602），直接拼接会显示 16 位小数。显示层统一
+       * toFixed(2)，无论数据新旧都只显示两位小数。 */
+      const _act = Number(v.actual);
+      const s = (_act > 0 ? '+' : '') + (isFinite(_act) ? _act.toFixed(2) : '0.00') + '%';
       const w = v.win || 30;
       const via = v.reason === 'caught-by-radar' ? '行情雷达已先捕获' : `${w} 分钟行情核对`;
       return `<span class="c-spike ok" title="${esc(via)}，实际 ${s}，与新闻描述一致">行情已验证 ${s}</span>`;
