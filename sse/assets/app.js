@@ -247,7 +247,12 @@
     if (!sseOK(k)) return false;
     /* v491：新旧比较固定用上证本体(S.SH_K)，避免选中科创后 meta 不同误判 */
     var _sh = S.SH_K || S.K;
-    if (_sh && _sh.meta && k.meta && String(_sh.meta.to) >= String(k.meta.to)) return false;
+    /* v617：同日重跑时 to 不变但 generated 更新 → 也要刷新 */
+    var _sNewGen = (k.meta && k.meta.generated) || '';
+    var _sOldGen = (_sh && _sh.meta && _sh.meta.generated) || '';
+    var _sNewTo = (k.meta && k.meta.to) || '';
+    var _sOldTo = (_sh && _sh.meta && _sh.meta.to) || '';
+    if (_sNewTo < _sOldTo || (_sNewTo === _sOldTo && (!_sNewGen || _sNewGen <= _sOldGen))) return false;
     applySse(k);
     if (S.B && $('btnCompare')) $('btnCompare').disabled = false;
     renderAll();
@@ -280,7 +285,14 @@
   function applyNewBreadth(b) {
     if (!S.B || !S.axis) return false;
     var oldLast = S.B.dates[S.B.dates.length - 1];
-    if (b.dates[b.dates.length - 1] <= oldLast) return false;
+    var newLast = b.dates[b.dates.length - 1];
+    /* v617【同日重跑自动刷新】原守门只比末日期：同一交易日补跑（15:10 vs 15:00）
+     * 日期不变 → 直接 return false，用户停在页面就永远看不到新数据，必须杀 APP 重开。
+     * 现在：日期变大 或 同日但 meta.generated 更新（重跑/补数据）→ 都刷新。 */
+    var _newGen = (b.meta && b.meta.generated) || '';
+    var _oldGen = (S.B.meta && S.B.meta.generated) || '';
+    if (newLast < oldLast) return false;
+    if (newLast === oldLast && (!_newGen || _newGen <= _oldGen)) return false;
     /* v292【右端跟随 · 用户核心诉求】此前只按日期保持视窗：
      * 数据更新（本地旧 8816 → 远端新 8818）后，视窗仍停在旧日期（11-10），
      * 用户必须手动往右拖才能看到最新（11-12）。
@@ -317,10 +329,15 @@
       loadRemoteS().then(function (k) { applyNewSse(k); }).catch(function () {});
     }
     tick();
+    var _tickN = 0;
     var timer = setInterval(function () {
       var bj = new Date(Date.now() + 8 * 3600 * 1000);
       var wd = bj.getUTCDay(), hh = bj.getUTCHours();
-      if (wd === 0 || wd === 6 || hh < 15 || hh >= 18) return;  /* 只在工作日 15-18 点追新 */
+      /* v617：原逻辑只在 工作日15-18点 追新，但收盘后补跑/周末补数据也会落库，
+       * 停在页面的用户永远等不到刷新。改为：交易窗口(工作日15-18点)3分钟一轮，
+       * 其余时间10分钟一轮（低频省流量，但保证补数据能自动刷新）。 */
+      var inWindow = (wd >= 1 && wd <= 5 && hh >= 15 && hh < 18);
+      if (!inWindow && _tickN++ % 3 !== 0) return;
       tick();
     }, 3 * 60 * 1000);
     try { if (timer && timer.unref) timer.unref(); } catch (e) {}
