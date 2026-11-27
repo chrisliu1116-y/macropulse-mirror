@@ -8751,6 +8751,9 @@
       renderRadar(radar ? Object.values(radar.state) : [], radar);
     }
     if (tab === 'effect') {
+      /* v623：本 view flex 铺满，宿主 window 不该滚动；切进来强制归零，
+       * 防全局滚动记忆把 iframe 顶部「对比模式/全屏」按钮推到横栏下。 */
+      try { window.scrollTo(0, 0); } catch (e) {}
       ensureEffectFrame();
       /* v290：切到本页时通知 iframe 重绘。隐藏容器里加载时 clientWidth=0，
        * draw() 会早退，用户首次进入看到的是空/旧帧、要拖一下才出图。
