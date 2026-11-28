@@ -3510,6 +3510,13 @@
         total = (w.Session && w.Session.fullMinutes) ? w.Session.fullMinutes(sk) : 0;
       }
       if (!total || n < 2) return n;
+      /* v631【LYTE缩略图只画一半】数据缺段多时 gran「最常见间隔」会判小
+       * （缺段里总有连续的 1 分钟对）→ fullN=total/gran 被放大 → 线只画
+       * n/fullN 宽。与详情页 _minBars 的 covered 口径（v375）对齐：
+       * 数据首尾跨度 ≥ total×60% 说明本场已走完 → 按实际点数铺满。
+       * 休市日回看昨天整场（LYTE 338 点、reg 段 170 点）由此铺满。 */
+      const _spanMin = (pts[n - 1].time - pts[0].time) / 60;
+      if (_spanMin >= total * 0.6) return n;
       const c = {};
       for (let i = 1; i < n; i++) {
         const d = Math.round((pts[i].time - pts[i - 1].time) / 60);
@@ -7404,7 +7411,15 @@
      * 重算结果用 _enrich（判 C 返回 null 表示出清）+ v626 假 S 出清逻辑就地更新
      * S.news 对应条目。首屏早已可交互，这里是纯后台校正，卡顿感归零。 */
     if (pending.length) {
-      const CHUNK = 12;   // 每片条数：12 条 × ~几百正则，单片 <16ms，不卡帧
+      /* v631【分片参数实测修正】v630 的 CHUNK=12 在移动端单片高达 ~700ms
+       * （单条 _enrich 581 正则 ~50-60ms × 12），167 片 × 700ms ≈ 117 秒
+       * 连续占轴——用户体感仍是「点啥都没反应等一两分钟」。修正：
+       * 每片 3 条 + 循环内每条后查时间（单片硬上限 25ms）+ 片间让出 40ms
+       * 给输入事件 + requestIdleCallback 优先（真空闲才跑）。总时长不变，
+       * 但每 40ms 就有响应窗口，交互不再冻结。 */
+      const CHUNK = 3;
+      const SLICE_MS = 25;
+      const GAP_MS = 40;
       let _pi = 0;
       const _byId = new Map();
       try { out.forEach(x => { if (x && x.id) _byId.set(x.id, x); }); } catch (e) {}
@@ -7439,18 +7454,23 @@
           } catch (eGrade) {}
         }
       };
+      const _idle = (fn, ms) => {
+        try { if (w.requestIdleCallback) { w.requestIdleCallback(fn, { timeout: 1000 }); return; } } catch (e) {}
+        setTimeout(fn, ms);
+      };
       const _step = () => {
         const t0 = Date.now();
         let n = 0;
-        while (_pi < pending.length && n < CHUNK && Date.now() - t0 < 14) {
+        while (_pi < pending.length && n < CHUNK && Date.now() - t0 < SLICE_MS) {
           try { _recalcOne(pending[_pi]); } catch (e) {}
           _pi++; n++;
+          if (Date.now() - t0 >= SLICE_MS) break;   // 每条后都查，单片硬上限
         }
         if (_pi < pending.length) {
-          setTimeout(_step, 0);   // 让出主线程，下一片
+          setTimeout(_step, GAP_MS);   // 片间让出 40ms 给输入/渲染
         }
       };
-      setTimeout(_step, 120);   // 首屏铺完、首次渲染后再开始
+      _idle(_step, 500);   // 首屏渲染完且真空闲后再开始
     }
     /* 【v56 存量窄合并】只走「地缘同事件」一条判据（同实体 + 同动作 + 6h + 数字不冲突），
      * 用来清掉用户截图里那几对历史重复（也门爆炸声 / 霍尔木兹油轮起火 / 胡塞空袭）。
