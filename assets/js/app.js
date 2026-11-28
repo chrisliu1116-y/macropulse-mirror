@@ -7352,6 +7352,7 @@
     if (!list.length) return 0;
     list.sort((a, b) => b.ts - a.ts);
     const out = [];
+    const pending = [];   // v630：gv 不匹配、需后台重算的条目（见尾部异步重算器）
     const GV = (w.LiveNews && w.LiveNews.GRADE_VER) || 0;
     list.forEach(it => {
       try {
@@ -7374,45 +7375,14 @@
        * 强制走本地v2.0重算并清掉 AI 角标，避免旧S级残留（统计显示S0但卡片显示S4的矛盾）。 */
       const _staleAi = it.aiGraded === true && it.gradeSrc !== 'v477';
       if (_staleAi) { it.aiGraded = false; it.level = undefined; }
+      /* v630【冷启动卡死】原逻辑 gv 不匹配就同步 _enrich 重算：云端池 2000 条
+       * 全是 gv=null，每次冷启动都对 2000 条跑完整 gradeCoreRules（581 个正则）
+       * → 主线程被同步占死一两分钟，点啥都没反应。现在首屏**不重算**、直接用
+       * 原级别铺满（保证秒开、可交互），把需要重算的条目收进 pending 队列，
+       * 由下面的 setTimeout 分片在后台空闲时重算并原地更新（见函数尾部）。 */
       if (GV && (it.gv !== GV || _staleAi)) {
-        let fresh = null;
-        try {
-          fresh = w.LiveNews._enrich({
-            id: it.id, ts: it.ts, title: it.title, brief: it.brief,
-            src: it.src, url: it.url, important: it.important,
-            stocks: it.stocks, titleEn: it.titleEn, briefEn: it.briefEn,
-          });
-        } catch (e) { fresh = null; }
-        /* 【不因重算判 C 就丢】重算是为了口径升级后更正分级，
-         * 但它是拿池子里的精简字段算的，判不准时会返回 null。
-         * 直接丢掉的后果就是用户看到的「刷新一下 72 条变 11 条」。
-         * 标红条目（平台已判为重要）宁可保留原级别，也不让它在首屏消失。 */
-        if (fresh) {
-          src = fresh;
-        } else {
-          /* v626【存量假S残留】规则把某条从 S 纠到 C 后，_enrich 的 C 入池闸
-           * 返回 null → 上面的保护让它保留原 S 级 → 用户截图「这条怎么又进S」。
-           * 只对「原级 S + 当前规则明确判 C」这一种情况降级出清：
-           *   S 是最严重档，留着假 S 比少一条危害大；其它级别仍保留原级不丢条，
-           *   不破坏「72 条不缩水」保护。用已暴露的 _grade 判级，不引入新依赖。 */
-          try {
-            const _regrade = w.LiveNews._grade
-              ? w.LiveNews._grade(it.title, it.brief, it.important, it.stocks, it.src) : null;
-            if (String(it.level || '').toUpperCase() === 'S'
-              && _regrade && _regrade[0] !== 'S') {
-              return;   // 当前口径已推翻 S（判 A/B/C）→ 这条假 S 不入流
-            }
-          } catch (eGrade) {}
-        }
-        /* v119：重算失败的非标红条目保留原级别，不再丢弃（回退「什么都抓」）。
-         * 原 C 级已在上方被 C 跳过挡住，不会漏进流。 */
-        /* 标红 → 保留原级，条数不缩。
-         * 【别再写 src = fresh】fresh 为 null 时这行会把 src 冲成 null，
-         * 紧接着 normItem(null) 抛 TypeError，整个 hydrateFromPool 中断，
-         * buildNews 的 catch 把 S.news 清空 —— 用户看到的就是
-         * 「下拉后全屏空白、等近 10 秒才靠网络把新闻拉回来」。
-         * 这条分支一旦走到（每次分级口径升级后的首次启动都会走到），
-         * 缓存等于白存。 */
+        pending.push(it);
+        src = it;                 // 首屏先用原级别，不等重算
       }
       const n = normItem(src);
       if (!n) return;              // 单条数据不全就跳过，绝不让它拖垮整个首屏
@@ -7428,6 +7398,60 @@
     /* 先把「已灌入的部分」落到 S.news —— 后面的处理即使出问题，
      * 首屏也绝不会是空的（这是「下拉后全屏空白」的最后一道兜底）。 */
     S.news = out;
+
+    /* v630【后台分片重算】pending 里的条目 gv 与当前口径不符，需要重算更正分级，
+     * 但绝不能再同步 forEach 占死主线程。用 setTimeout 每片处理 N 条后让出主线程，
+     * 重算结果用 _enrich（判 C 返回 null 表示出清）+ v626 假 S 出清逻辑就地更新
+     * S.news 对应条目。首屏早已可交互，这里是纯后台校正，卡顿感归零。 */
+    if (pending.length) {
+      const CHUNK = 12;   // 每片条数：12 条 × ~几百正则，单片 <16ms，不卡帧
+      let _pi = 0;
+      const _byId = new Map();
+      try { out.forEach(x => { if (x && x.id) _byId.set(x.id, x); }); } catch (e) {}
+      const _recalcOne = (it) => {
+        let fresh = null;
+        try {
+          fresh = w.LiveNews._enrich({
+            id: it.id, ts: it.ts, title: it.title, brief: it.brief,
+            src: it.src, url: it.url, important: it.important,
+            stocks: it.stocks, titleEn: it.titleEn, briefEn: it.briefEn,
+          });
+        } catch (e) { fresh = null; }
+        if (fresh) {
+          try {
+            const n = normItem(fresh);
+            if (n) {
+              n.fromCache = true;
+              if (GV) n.gv = GV;
+              const idx = S.news.findIndex(x => x && x.id === it.id);
+              if (idx >= 0) S.news[idx] = n;
+            }
+          } catch (e2) {}
+        } else {
+          /* v626 假 S 出清：原级 S 且当前规则不再判 S → 出清 */
+          try {
+            const _regrade = w.LiveNews._grade
+              ? w.LiveNews._grade(it.title, it.brief, it.important, it.stocks, it.src) : null;
+            if (String(it.level || '').toUpperCase() === 'S'
+              && _regrade && _regrade[0] !== 'S') {
+              S.news = S.news.filter(x => !(x && x.id === it.id));
+            }
+          } catch (eGrade) {}
+        }
+      };
+      const _step = () => {
+        const t0 = Date.now();
+        let n = 0;
+        while (_pi < pending.length && n < CHUNK && Date.now() - t0 < 14) {
+          try { _recalcOne(pending[_pi]); } catch (e) {}
+          _pi++; n++;
+        }
+        if (_pi < pending.length) {
+          setTimeout(_step, 0);   // 让出主线程，下一片
+        }
+      };
+      setTimeout(_step, 120);   // 首屏铺完、首次渲染后再开始
+    }
     /* 【v56 存量窄合并】只走「地缘同事件」一条判据（同实体 + 同动作 + 6h + 数字不冲突），
      * 用来清掉用户截图里那几对历史重复（也门爆炸声 / 霍尔木兹油轮起火 / 胡塞空袭）。
      * 不走全局 _dedupe —— 原因见下面那段（会误合真实不同的新闻、条数骤降）。 */
